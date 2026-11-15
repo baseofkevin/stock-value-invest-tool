@@ -186,7 +186,10 @@ def run_targets(targets: list[dict], end: str, *, refresh: bool = False,
                 results.append(r)
                 done += 1
                 if r["ok"]:
-                    if progress and not quiet:
+                    # 只受 progress 管：run.py 要的是这一行（画进度条），
+                    # 报告表由 quiet 关。以前写的是 `progress and not quiet`，
+                    # 结果 `--quiet --progress` 两个一起给就一行都没有。
+                    if progress:
                         print(f"[{done:2d}/{total}] {_line(r)}")
                 else:
                     # 失败的照常报：数量少、每条都要人处理，藏起来没好处。

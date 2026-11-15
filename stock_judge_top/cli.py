@@ -83,6 +83,9 @@ def main(argv=None):
                     help="打印执行过程与完整命令行报告（默认只写 results.db）")
     ap.add_argument("--quiet", action="store_true",
                     help="不输出日志与命令行报告，只写 results.db")
+    ap.add_argument("--progress", action="store_true",
+                    help="只打逐只进度行 `[ 3/38] …`（给 run.py 画进度条用；"
+                         "不打印后面的报告表格）")
     ap.add_argument("--db", help="共享库路径（默认 STOCKHUB_DB 或项目内 shared.db）")
     a = ap.parse_args(argv)
 
@@ -117,12 +120,13 @@ def main(argv=None):
         from .batch import from_select
         return from_select(a.from_select or None, end, refresh=a.refresh,
                            workers=a.workers, db=a.db, quiet=a.quiet,
-                           progress=a.verbose)
+                           progress=a.verbose or a.progress)
 
     if a.csv:
         from .batch import run as run_batch
         return run_batch(a.csv, end, refresh=a.refresh, workers=a.workers,
-                         db=a.db, quiet=a.quiet, progress=a.verbose)
+                         db=a.db, quiet=a.quiet,
+                         progress=a.verbose or a.progress)
 
     try:
         code = normalize_code(a.code)

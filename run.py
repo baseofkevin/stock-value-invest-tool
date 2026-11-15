@@ -53,6 +53,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -151,55 +152,184 @@ def pick_date(explicit: str | None, days: list[str]) -> str:
     return chosen
 
 
-#: 逐只失败的播报行。同样的信息紧接着就有聚合汇总（「145 只历史不足」、
-#: 「完成 35 只，失败 3 只」），一行一只股就会把真正的结果挤出屏幕——
-#: 2026-11-15 那次全流程里，这类行占了全部输出的一半以上。
-#: 控制台省掉，**日志文件里一行不少**；要现场看就加 `--verbose`。
+#: 逐只失败的播报行。屏幕上现在只剩一条进度条，这些行**全部只进日志**；
+#: `--verbose` 时原样打到屏幕上（排查时用）。
 _NOISE = (
     re.compile(r"^kline \S+ 失败："),        # stock_data_fetch.api 逐只 K 线失败
     re.compile(r"^\s*↻ "),                   # 「上游返回空，重试 (1/3)」
     re.compile(r"^\[FAIL\]"),
 )
 
-#: 逐只进度的形状：`[ 3/38] 宝钢股份 sh600019  观察` / `[1/38] ok 600019`。
-#: 只认"`[n/m]` 打头 + 行里有 6 位代码"，因为选股那一步的 `[2/6] 横截面粗筛…`
-#: 也是这个开头——那是阶段标题，得留着。
-_PROGRESS = re.compile(r"^\s*\[\s*\d+/\d+\]")
-_CODE6 = re.compile(r"(?<!\d)\d{6}(?!\d)")
+#: 进度行的形状：`[ 3/38] 宝钢股份 sh600019  观察`、`[1/38] ok 600019`、
+#: 选股的 `[2/6] 横截面粗筛（5 天）...`。**认 `[n/m]` 这个开头就够了**：
+#: 不管逐只还是分阶段，都是"第 n 步 / 共 m 步"，正好喂进度条。
+_PROGRESS_ANY = re.compile(r"^\s*\[\s*(\d+)\s*/\s*(\d+)\s*\]")
 
 
 def _is_noise(text: str) -> bool:
-    if any(p.match(text) for p in _NOISE):
-        return True
-    return bool(_PROGRESS.match(text) and _CODE6.search(text))
+    return any(p.match(text) for p in _NOISE)
 
 
 class Tee:
-    """同时写屏幕和日志文件。每一步的输出都留底，事后能查是哪一步慢。
+    """同时写日志文件和（很少的）屏幕输出。
 
-    屏幕走"关键信息"路线（噪声行只计数、不打印），日志文件保持全量。
+    ## 屏幕默认只有一条进度条
+
+    工具打的 `[3/38] …` 被解析成 `done/total` 画成进度条；其余输出——逐只失败、
+    `↻ 重试`、报表、聚合汇总、命令行——**全部只进日志**。跑完 `run.py` 会打印
+    日志路径，出了问题看那份文件（它就是过去的屏幕内容，一行不少）。
+
+    为什么不在屏幕上留"关键信息"：2026-11-15 的两次反馈都是"显示太多了"。
+    进度条回答的是"还要多久"，结论回答的是"这次跑成没有"，用看板看更清楚。
+
+    ## 进度条只在真终端上画
+
+    重定向到文件/管道时 `\r` 只会变成一坨乱码。那种情况下每步改成打一行
+    「标题 … 结果」，日志照样完整。
     """
 
-    def __init__(self, path: Path, verbose: bool = False):
+    BAR = 24                       # 进度条宽度（字符）
+
+    def __init__(self, path: Path, verbose: bool = False,
+                 progress: bool | None = None):
         path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path
         self.fh = path.open("w", encoding="utf-8")
         self.verbose = verbose
-        self.muted = 0          # 控制台省掉的行数（带 --verbose 恒为 0）
-        self._blank = False     # 上一条是不是空行（折叠连续空行）
+        # 显式传 progress 的只有测试（要能验进度条，不必真有 tty）；
+        # 正常情况：不是 --verbose 且 stdout 连着真终端才画条。
+        self.progress = (bool(progress) if progress is not None
+                         else (not verbose and sys.stdout.isatty()))
+        self.echo = False       # 单只模式：这一步的输出整段透传（不画条、不筛）
+        self.muted = 0          # 只进了日志、没上屏幕的行数（--verbose 恒为 0）
+        self._blank = False     # 上一条是不是空行（collapse 连续空行）
+        self._prefix = ""       # 进度条前面那段标题
+        self._seen = False      # 这一步有没有出现过进度行
+        self._done = 0
+        self._total = 0
+        self._last = 0.0        # 上次重绘时刻（节流用）
+        self._t0 = 0.0          # 这一步是什么时候开始的（算耗时用）
+        self._stop: threading.Event | None = None
+        self._lock = threading.Lock()   # 心跳线程和主线程都要写 stdout
 
+    # ------------------------------------------------------------ 写行
     def line(self, text: str) -> None:
+        """一行子进程输出：**永远进日志**，屏幕上至多变成进度条。"""
         self.fh.write(text + "\n")
         self.fh.flush()
-        if not self.verbose and _is_noise(text):
-            self.muted += 1
-            # 这些工具在两条进度之间会打空行；进度行本身被省掉后，
-            # 空行就成了一串"什么都没说的空屏"。把被省掉的行当分隔符看。
-            self._blank = True
+
+        if self.verbose or self.echo:
+            if not text and self._blank:
+                return
+            self._blank = not text
+            say(text)
             return
-        if not text and self._blank:
-            return              # 连续空行压成一行
-        self._blank = not text
+
+        m = _PROGRESS_ANY.match(text)
+        if m:
+            if self.progress:
+                self._draw(int(m.group(1)), int(m.group(2)))
+        elif text:
+            self.muted += 1          # 失败播报、报表、汇总——日志里有
+
+    def alert(self, text: str) -> None:
+        """流程级的坏消息（名单是空的、日历更新失败…）：**必须上屏幕**。
+
+        这类行意味着整条流程要停下，人得当场看见，不能让人盯着一根停住的
+        进度条猜。逐只失败不走这里——那种进日志。
+        """
+        self.fh.write(text + "\n")
+        self.fh.flush()
+        self._close_bar_line()
         say(text)
+
+    # ------------------------------------------------------------ 进度条
+    def start_bar(self, prefix: str) -> None:
+        """每步开头：先打出标题和转圈，再起一个心跳线程。
+
+        为什么要心跳：选股那一步有 15 秒一个进度行都不打（在逐条裁决 4300
+        只），只靠子进程输出推着的进度条会一动不动，看着像卡死。心跳每 0.4s
+        刷新一次"已经跑了多久"，顺便让转圈动起来。
+        """
+        self._prefix = prefix
+        self._seen = False
+        self._done = self._total = 0
+        self._t0 = time.monotonic()
+        if not self.progress:
+            return
+        self._stop = threading.Event()
+        with self._lock:
+            sys.stdout.write("\r" + self._line_text() + "\033[K")
+            sys.stdout.flush()
+        threading.Thread(target=self._tick, args=(self._stop,), daemon=True).start()
+
+    _SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def _tick(self, stop: threading.Event) -> None:
+        """心跳：只要子进程还没结束，就一直刷新耗时（顺带转圈）。"""
+        i = 0
+        while not stop.wait(0.4):
+            i += 1
+            with self._lock:
+                if self._stop is not stop:
+                    return                    # 已经换步了，别把新的一行盖掉
+                text = self._line_text(spin=i)
+                sys.stdout.write("\r" + text + "\033[K")
+                sys.stdout.flush()
+
+    def _head(self, spin: int = 0) -> str:
+        """标题那一截（不带你已经跑了多久）。"""
+        if not self._seen:
+            return f"{self._prefix}  {self._SPIN[spin % len(self._SPIN)]}"
+        width = self.BAR
+        frac = 0.0 if not self._total else max(0.0, min(1.0, self._done / self._total))
+        filled = int(round(frac * width))
+        bar = "█" * filled + "░" * (width - filled)
+        return f"{self._prefix}  [{bar}] {self._done}/{self._total}"
+
+    def _line_text(self, spin: int = 0) -> str:
+        """当前该显示的那一整行：标题 + 耗时。"""
+        return f"{self._head(spin)}  {time.monotonic() - self._t0:5.1f}s"
+
+    def _draw(self, done: int, total: int) -> None:
+        """重画进度条。节流到 50ms 一次：`
+` 写太密反而拖慢子进程。"""
+        now = time.monotonic()
+        self._done, self._total = done, total
+        self._seen = True
+        if done < total and now - self._last < 0.05:
+            return
+        self._last = now
+        sys.stdout.write("\r" + self._bar_text(done, total) + "\033[K")
+        sys.stdout.flush()
+
+    def _bar_text(self, done: int, total: int, tail: str = "") -> str:
+        width = self.BAR
+        frac = 0.0 if not total else max(0.0, min(1.0, done / total))
+        filled = int(round(frac * width))
+        bar = "█" * filled + "░" * (width - filled)
+        text = f"{self._prefix}  [{bar}] {done}/{total}"
+        return f"{text}  {tail}" if tail else text
+
+    def finish_bar(self, tail: str) -> None:
+        """一步结束：把进度条定格成一行，后面跟上"成功 35 只 · 1.2s"。"""
+        if self.progress:
+            if self._seen and self._total:
+                sys.stdout.write("\r" + self._bar_text(self._done, self._total, tail)
+                                 + "\033[K\n")
+            else:
+                sys.stdout.write(f"\r{self._prefix}  …  {tail}\033[K\n")
+            sys.stdout.flush()
+        else:
+            # 非终端（重定向/定时任务）：不画条，每步一行，别让输出变成空的
+            say(f"{self._prefix}  …  {tail}")
+        self._seen = False
+
+    def _close_bar_line(self) -> None:
+        """屏幕上还挂着一条没换行的进度时，先收尾再说话。"""
+        if self.progress:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
 
     def close(self) -> None:
         """可重复调用：`all` 起看板前要先把日志收掉（后面是长驻进程）。"""
@@ -217,34 +347,87 @@ LAST_SPENT = {"s": 0.0}
 """最近一次 `run_step` 的耗时，给汇总表用（省得每个 step_* 都返回元组）。"""
 
 
-def run_step(tee: Tee, title: str, argv: list[str], cwd: Path) -> tuple[int, float]:
-    """跑一步，实时转发输出并计时。返回 (退出码, 秒)。"""
-    hr(title)
+def _pump(tee: Tee, proc: subprocess.Popen) -> None:
+    """把子进程输出**按行**喂给 Tee，`\r` 也算换行。
+
+    cycle 用 `\r[{done}/{total}]` 原地刷新进度；只按 `\n` 切行的话，整段
+    进度会憋在缓冲区里等到进程结束——进度条就成了一条直线。
+    """
+    out = proc.stdout
+    assert out is not None
+    buf = b""
+    while True:
+        chunk = out.read(1024)
+        if not chunk:
+            break
+        buf += chunk
+        while True:
+            idx = -1
+            for sep in (b"\n", b"\r"):
+                i = buf.find(sep)
+                if i >= 0 and (idx < 0 or i < idx):
+                    idx = i
+            if idx < 0:
+                break
+            raw, buf = buf[:idx], buf[idx + 1:]
+            tee.line(raw.decode("utf-8", "replace"))
+    if buf:
+        tee.line(buf.decode("utf-8", "replace"))
+
+
+def run_step(tee: Tee, title: str, argv: list[str], cwd: Path, *,
+             short: str | None = None, tool: str | None = None,
+             day: str | None = None, echo: bool = False) -> tuple[int, float]:
+    """跑一步，画一条进度条。返回 (退出码, 秒)。
+
+    `tool`/`day` 给了就去结果库读这一步写成多少只（成功/失败），定格在进度条
+    后面——这样人一眼能看出"这步跑成没有"，不用去翻日志。
+
+    `echo=True` 是**单只模式专用**：那一次运行的全部输出就是报告本身（人跑
+    `run.py top 600519` 是为了看这只票），所以整段透传、不画条、不筛行。
+    批量模式才用进度条——批量模式的报告在库里、在看板上。
+    """
+    # 日志里留一份可复读的抬头（屏幕上看不到）
+    tee.line("")
+    tee.line("=" * 68)
+    tee.line(title)
+    tee.line("=" * 68)
     tee.line(f"$ {' '.join(argv)}    (cwd={cwd.relative_to(ROOT) if cwd != ROOT else '.'})")
     tee.line("")
+
+    tee.echo = echo
+    if echo:
+        say("")
+        say(short or title)
+    else:
+        tee.start_bar(short or title)
     t0 = time.time()
     env = dict(os.environ)
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("PYTHONUNBUFFERED", "1")
-    proc = subprocess.Popen(argv, cwd=str(cwd), env=env, text=True,
+    proc = subprocess.Popen(argv, cwd=str(cwd), env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            errors="replace", bufsize=1)
-    assert proc.stdout is not None
-    tee.muted = 0
-    for raw in proc.stdout:
-        tee.line(raw.rstrip("\n"))
-    muted, tee.muted = tee.muted, 0
+                            bufsize=0)
+    _pump(tee, proc)
     code = proc.wait()
     spent = time.time() - t0
     LAST_SPENT["s"] = spent
 
-    if muted:
-        tee.line(f"    （省掉 {muted} 行逐只进度/重试播报，日志里有；要看就加 --verbose）")
-    tee.line("")
-    if code == 0:
-        tee.line(f"✅ {title} 完成（{spent:.1f}s）")
+    tail = [f"{spent:.1f}s"]
+    if tool and day:
+        n_ok, n_fail = step_stats(tool, day)
+        if n_ok >= 0:
+            tail.insert(0, f"{n_ok} 只")
+        if n_fail > 0:
+            tail.insert(1, f"失败 {n_fail} 只")
+    mark = "✅" if code == 0 else ("⚠️" if code == 1 else "❌")
+    if code not in (0, 1):
+        tail.insert(0, f"退出码 {code}")
+    if echo:
+        say("")                       # 报告后面空一行，别和下一步粘在一起
     else:
-        tee.line(f"❌ {title} 失败（退出码 {code}，{spent:.1f}s）")
+        tee.finish_bar(f"{mark} " + " · ".join(tail))
+    tee.echo = False
     return code, spent
 
 
@@ -298,10 +481,10 @@ def judge_step(tee: Tee, title: str, tool: str, day: str, rc: int,
     n_ok, n_fail = step_stats(tool, day)
     if strict or n_ok <= 0:
         return False
-    tee.line("")
-    tee.line(f"⚠️  {title} 有 {n_fail} 只失败，但已写入 {n_ok} 只 → 继续往下跑")
-    tee.line("    失败的多是上游缺数据（利润表为空 / K 线历史不足），看板里这几只留空。")
-    tee.line("    要「有任何失败就停」，加 --strict。")
+    # 屏幕上这一行已经由进度条收尾（"⚠️ 35 只 · 失败 3 只"）说清了，
+    # 这里只把"为什么可以继续"记进日志，免得又铺三行解释。
+    tee.line(f"（{title} 有 {n_fail} 只失败，但已写入 {n_ok} 只 → 继续往下跑；"
+             "失败的多数是上游缺数据，看板里留空）")
     return True
 
 
@@ -311,15 +494,14 @@ def step_select(tee: Tee, day: str, extra: list[str]) -> int:
     # 想看终端报表就别走 all，单跑 `./run.py select`；或者所有步骤都加 --verbose。
     if not tee.verbose and "--quiet" not in argv:
         argv.append("--quiet")
-    code, _ = run_step(tee, f"① 选股 stock_kline_screen（{day}）", argv, ROOT)
+    code, _ = run_step(tee, f"① 选股 stock_kline_screen（{day}）", argv, ROOT,
+                       short=f"① 选股（{day}）", tool="select", day=day)
     if code != 0:
         return code
     n = select_count(day)
     if n <= 0:
-        tee.line(f"⚠️  {day} 没有股票通过初筛（结果库里 0 行）。")
-        tee.line("    下游（周期/质量）没有输入，流程到此为止。")
+        tee.alert(f"⚠️  {day} 没有股票通过初筛（结果库里 0 行），流程到此为止。")
         return 3
-    tee.line(f"📄 results.db  select_result  共 {n} 只")
     return 0
 
 
@@ -328,16 +510,18 @@ def step_cycle(tee: Tee, day: str, extra: list[str], stock: str | None = None) -
     if stock:
         argv = [sys.executable, "cycle_report.py", "--stock", stock] + extra
         code, _ = run_step(tee, f"② 周期弹性 stock_cycle_elastic（{stock} 单只）",
-                           argv, ROOT / "stock_cycle_elastic")
+                           argv, ROOT / "stock_cycle_elastic",
+                           short=f"② 周期弹性（{stock}）", echo=True)
         return code
     n = select_count(day)
     if n <= 0:
-        tee.line(f"❌ 结果库里没有 {day} 的选股名单")
-        tee.line(f"    先跑选股：python3 run.py select --date {day}")
+        tee.alert(f"❌ 结果库里没有 {day} 的选股名单；"
+                  f"先跑：python3 run.py select --date {day}")
         return 2
     argv = [sys.executable, "cycle_report.py", "--from-select", day] + extra
     code, _ = run_step(tee, f"② 周期弹性 stock_cycle_elastic（{day}）",
-                       argv, ROOT / "stock_cycle_elastic")
+                       argv, ROOT / "stock_cycle_elastic",
+                       short=f"② 周期弹性（{day}）", tool="cycle", day=day)
     return code
 
 
@@ -346,16 +530,18 @@ def step_quality(tee: Tee, day: str, extra: list[str], stock: str | None = None)
     if stock:
         argv = [sys.executable, "stock_report.py", "--stock-code", stock] + extra
         code, _ = run_step(tee, f"③ 质量初筛 stock_quality_screen（{stock} 单只）",
-                           argv, ROOT / "stock_quality_screen")
+                           argv, ROOT / "stock_quality_screen",
+                           short=f"③ 质量初筛（{stock}）", echo=True)
         return code
     n = select_count(day)
     if n <= 0:
-        tee.line(f"❌ 结果库里没有 {day} 的选股名单")
-        tee.line(f"    先跑选股：python3 run.py select --date {day}")
+        tee.alert(f"❌ 结果库里没有 {day} 的选股名单；"
+                  f"先跑：python3 run.py select --date {day}")
         return 2
     argv = [sys.executable, "stock_report.py", "--from-select", day] + extra
     code, _ = run_step(tee, f"③ 质量初筛 stock_quality_screen（{day}）",
-                       argv, ROOT / "stock_quality_screen")
+                       argv, ROOT / "stock_quality_screen",
+                       short=f"③ 质量初筛（{day}）", tool="quality", day=day)
     return code
 
 
@@ -386,38 +572,42 @@ def step_top(tee: Tee, day: str, codes: list[str], extra: list[str],
     if csv_path is not None:
         n = select_count(day)
         if n <= 0:
-            tee.line(f"❌ 结果库里没有 {day} 的选股名单")
+            tee.alert(f"❌ 结果库里没有 {day} 的选股名单")
             return 2
         argv = py_module("stock_judge_top") + [
             "--from-select", day, "--date", day, "--workers", str(workers)] + extra
-        if tee.verbose and "--verbose" not in argv and "-v" not in argv:
-            argv.append("--verbose")
-        elif not tee.verbose and "--quiet" not in argv:
-            # 四因子表在「顶部」页看得更清楚；终端留一行"成功 38 只"。
-            argv.append("--quiet")
+        if tee.verbose:
+            if "--verbose" not in argv and "-v" not in argv:
+                argv.append("--verbose")
+        elif "--quiet" not in argv:
+            # 四因子表在「顶部」页看得更清楚；但逐只进度行要留着——
+            # `run.py` 拿它画进度条（`--progress` 只开进度、不开报告表）。
+            argv.extend(["--quiet", "--progress"])
         rc, _ = run_step(tee, f"④ 顶部判断 stock_judge_top（批量 {n} 只 @ {day}）",
-                         argv, ROOT)
+                         argv, ROOT, short=f"④ 顶部判断（{n} 只 @ {day}）",
+                         tool="top", day=day)
         return rc
 
     if not codes:
-        tee.line("❌ 顶部判断需要至少一个股票代码（或用 --csv / --from-select 批量）。")
+        tee.alert("❌ 顶部判断需要至少一个股票代码（或用 --csv / --from-select 批量）。")
         return 2
     failed = []
     for code in codes:
         argv = py_module("stock_judge_top") + [code, "--date", day] + extra
         code_rc, _ = run_step(tee, f"④ 顶部判断 stock_judge_top（{code} @ {day}）",
-                              argv, ROOT)
+                              argv, ROOT, short=f"④ 顶部判断（{code}）", echo=True)
         if code_rc not in (0,):
             failed.append(code)
     if failed:
-        tee.line(f"❌ 失败的代码：{'、'.join(failed)}")
+        tee.alert(f"❌ 失败的代码：{'、'.join(failed)}")
         return 1
     return 0
 
 
 def step_calendar(tee: Tee) -> int:
     code, _ = run_step(tee, "⓪ 更新交易日历 build_calendar",
-                       py_module("stock_data_fetch.build_calendar"), ROOT)
+                       py_module("stock_data_fetch.build_calendar"), ROOT,
+                       short="⓪ 更新交易日历")
     return code
 
 
@@ -436,7 +626,7 @@ def ensure_calendar(tee: Tee, day_wanted: str | None, auto: bool) -> tuple[str, 
     if stale and auto and weekday:
         rc = step_calendar(tee)
         if rc != 0:
-            tee.line("❌ 日历更新失败。没有日历，下游会回落到上周五并静默产出旧报告。")
+            tee.alert("❌ 日历更新失败。没有日历，下游会回落到上周五并静默产出旧报告。")
             return "", rc
         days = load_calendar()
     elif stale and days and weekday:
@@ -452,6 +642,26 @@ def ensure_calendar(tee: Tee, day_wanted: str | None, auto: bool) -> tuple[str, 
 
 
 def summary(tee: Tee, day: str, steps: list[tuple[str, int, float]]) -> None:
+    """流程收尾：屏幕上两行（成没成 + 日志在哪），`--verbose` 才打整张表。"""
+    if not tee.verbose:
+        bad = [(name, rc) for name, rc, _ in steps if rc != 0]
+        spent = sum(t for _, _, t in steps)
+        if not bad:
+            head = f"✅ 全部完成 · {len(steps)} 步 · {spent:.1f}s"
+        elif all(rc in (1, 3) for _, rc in bad):
+            # 1/3 是"有票失败但已写入一部分"：流程继续，别当成整步失败
+            head = ("⚠️ {0} 有失败，其余步骤完成 · {1:.1f}s".format(
+                "、".join(n for n, _ in bad), spent))
+        else:
+            head = "❌ {0} 失败，流程停止 · {1:.1f}s".format(
+                "、".join(n for n, _ in bad), spent)
+        say("")
+        say(head)
+        say(f"日志 {tee.path}")
+        if bad:
+            say("失败原因只写进日志（逐只失败、上游缺数据的明细都在里面）")
+        return
+
     hr(f"汇总（{day}）")
     for name, rc, spent in steps:
         # 3 = 选股 0 只（交接处拦下），1 = 有失败但可能已部分写入
@@ -459,7 +669,7 @@ def summary(tee: Tee, day: str, steps: list[tuple[str, int, float]]) -> None:
         tee.line(f"  {mark} {name:<28s} {spent:6.1f}s   退出码 {rc}")
     tee.line("")
     tee.line(f"  结果库      {DB_PATH}（看板：./run.py web）")
-    tee.line(f"  本次日志    {tee.fh.name}")
+    tee.line(f"  本次日志    {tee.path}")
 
 
 # ---------------------------------------------------------------------------
@@ -704,10 +914,12 @@ def step_web(args, tee: Tee) -> int:
     为什么要放在流程里：跑完六步之后人想看的正是"这一批结果"，而看板的
     默认页就是最新批次。省掉"再敲一条命令、再记一次端口"。
     """
-    hr("⑥ 看板 ./run.py web（Ctrl-C 退出，退出后本次流程结束）")
     host = getattr(args, "host", "127.0.0.1")
     port = getattr(args, "port", 5000)
-    tee.line(f"打开 http://{host}:{port} 看这一批（{db_hint()}）")
+    # 这一步不受"只画进度条"约束：URL 是唯一要人抄下来的东西。
+    say("")
+    say(f"⑥ 看板 http://{host}:{port}（Ctrl-C 退出，退出后本次流程结束）")
+    tee.line(f"⑥ 看板 http://{host}:{port}（{db_hint()}）")
     # 先把日志收掉：后面是长驻进程，它的访问日志写进本文件只会把有用的几行冲散。
     tee.close()
     say("")
@@ -827,7 +1039,8 @@ def build_parser() -> argparse.ArgumentParser:
 所以它们的 --date 必须和那天的选股一致；不给就按「今天（过了 15:05）」算。
 四个工具都不再产出 CSV/HTML：结果只进 results.db，人看结果用 ./run.py web。""")
     p.add_argument("-v", "--verbose", action="store_true",
-                   help="把逐只失败播报也打到屏幕上（日志文件本来就是全量）")
+                   help="不画进度条，把子进程的原始输出全部打到屏幕上"
+                        "（默认只有进度条，明细都在日志里）")
     sub = p.add_subparsers(dest="cmd")
 
     def add_verbose(sp):

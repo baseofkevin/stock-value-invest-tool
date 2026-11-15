@@ -249,17 +249,19 @@ class PassthroughTest(unittest.TestCase):
 
 
 class TeeFilterTest(unittest.TestCase):
-    """控制台只留关键信息，日志文件保持全量。
+    """屏幕：只有一条进度条。日志：一行不少。
 
-    2026-11-15 的全流程里 145 行「kline shXXXXXX 失败：…」把 38 只的名单
-    挤出了屏幕，而每只失败的原因紧接着就有聚合汇总。
+    2026-11-15 两次反馈都是"显示太多了"：先是逐只失败刷屏，后来是"关键信息"
+    也还是太多。现在屏幕上只留进度条 + 收尾两行，其余全进日志。
     """
 
-    def _tee(self, verbose=False):
+    def _tee(self, verbose=False, progress=None):
         self.tmp = tempfile.mkdtemp(prefix="tee-")
-        return run.Tee(Path(self.tmp) / "t.log", verbose=verbose)
+        return run.Tee(Path(self.tmp) / "t.log", verbose=verbose,
+                       progress=progress)
 
-    def test_per_symbol_failures_are_muted(self):
+    def test_console_is_silent_when_not_a_tty(self):
+        """重定向/管道里什么也不打（每步一行由 finish_bar 负责，不在这里）。"""
         import io
         from contextlib import redirect_stdout
         tee = self._tee()
@@ -268,14 +270,45 @@ class TeeFilterTest(unittest.TestCase):
             tee.line("kline sh600185 失败：末端不足")
             tee.line("[1/3] FAIL 300375 利润表为空")
             tee.line("⚠️  145 只历史不足（次新/长期停牌），按「K线不足」剔除")
+            tee.line("")
+        tee.close()
+        self.assertEqual(buf.getvalue(), "")
+        log = Path(self.tmp, "t.log").read_text()
+        for text in ("kline sh600185 失败", "FAIL 300375", "145 只历史不足"):
+            self.assertIn(text, log, "日志必须是全量")
+
+    def test_progress_line_becomes_bar(self):
+        """`[3/38] …` 不上屏幕，而是变成进度条上的 3/38。"""
+        import io
+        from contextlib import redirect_stdout
+        tee = self._tee(progress=True)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            tee.start_bar("② 周期弹性（2026-11-13）")
+            tee.line("[ 1/38] 宝钢股份 sh600019  观察")
+            tee.line("[ 2/38] 洪都航空 sh600316  观察")
+            tee.line("[38/38] 中国海诚 sz002116  观察")
+            tee.finish_bar("✅ 38 只 · 1.2s")
         tee.close()
         console = buf.getvalue()
-        self.assertNotIn("kline sh600185", console)
-        self.assertNotIn("FAIL 300375", console)
-        self.assertIn("145 只历史不足", console, "聚合汇总要留着")
-        self.assertEqual(tee.muted, 2)
-        self.assertIn("kline sh600185 失败", Path(self.tmp, "t.log").read_text())
-        self.assertIn("FAIL 300375", Path(self.tmp, "t.log").read_text())
+        self.assertNotIn("宝钢股份", console, "逐只明细不该上屏幕")
+        self.assertIn("38/38", console)
+        self.assertIn("② 周期弹性", console)
+        self.assertIn("✅ 38 只", console)
+        self.assertIn("[ 2/38] 洪都航空", Path(self.tmp, "t.log").read_text())
+
+    def test_stage_progress_also_drives_bar(self):
+        """选股的 `[2/6] 横截面粗筛…` 同样是 n/m，也要推着进度条走。"""
+        import io
+        from contextlib import redirect_stdout
+        tee = self._tee(progress=True)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            tee.start_bar("① 选股")
+            tee.line("[2/6] 横截面粗筛（5 天）...")
+            tee.finish_bar("✅ 38 只 · 23.4s")
+        tee.close()
+        self.assertIn("2/6", buf.getvalue())
 
     def test_verbose_shows_everything(self):
         import io
@@ -288,10 +321,10 @@ class TeeFilterTest(unittest.TestCase):
         self.assertIn("kline sh600185", buf.getvalue())
         self.assertEqual(tee.muted, 0)
 
-    def test_blank_lines_collapse(self):
+    def test_verbose_keeps_blank_lines_collapsed(self):
         import io
         from contextlib import redirect_stdout
-        tee = self._tee()
+        tee = self._tee(verbose=True)
         buf = io.StringIO()
         with redirect_stdout(buf):
             tee.line("a")
@@ -300,6 +333,19 @@ class TeeFilterTest(unittest.TestCase):
             tee.line("b")
         tee.close()
         self.assertEqual(buf.getvalue().splitlines(), ["a", "", "b"])
+
+    def test_alert_always_reaches_the_screen(self):
+        """名单是空的这种"流程要停"的消息，必须绕过进度条直接说。"""
+        import io
+        from contextlib import redirect_stdout
+        tee = self._tee()
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            tee.alert("❌ 结果库里没有 2026-11-13 的选股名单")
+        tee.close()
+        self.assertIn("没有 2026-11-13 的选股名单", buf.getvalue())
+        self.assertIn("没有 2026-11-13 的选股名单",
+                      Path(self.tmp, "t.log").read_text())
 
 
 class ParserTest(unittest.TestCase):
