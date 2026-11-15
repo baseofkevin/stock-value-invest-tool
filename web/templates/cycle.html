@@ -46,7 +46,7 @@
         {% for r in rows %}
         <tr>
           <td class="code">{{ r.symbol }}</td>
-          <td class="name"><a href="/stock/{{ r.symbol }}">{{ r.name or '—' }}</a></td>
+          <td class="name"><a href="/stock/{{ r.symbol }}?focus=cycle">{{ r.name or '—' }}</a></td>
           <td>{% if r.is_cycle %}<span class="chip warn">周期股</span>{% else %}<span class="chip muted">非周期</span>{% endif %}</td>
           <td class="n">{{ r.gm_std_pp|num(2) }}</td>
           <td class="n">{{ r.gm_cv_pct|num(1) }}</td>

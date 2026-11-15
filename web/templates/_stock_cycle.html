@@ -1,0 +1,15 @@
+{# 周期弹性三判断。 #}
+{% if cyc %}
+<section class="panel">
+  <h2>周期弹性三判断</h2>
+  <p class="sub">三个判断分开看，程序不合并成一个"周期总分"。</p>
+  <table class="kv"><tbody>
+    <tr><th>判断① 是不是周期股</th><td>{% if cyc.is_cycle %}<span class="chip warn">是周期股</span>{% else %}<span class="chip muted">不是</span>{% endif %}
+      　毛利率 σ {{ cyc.gm_std_pp|num(2) }}pp，CV {% if cyc.gm_cv_pct is none %}—{% else %}{{ cyc.gm_cv_pct|num(1) }}%{% endif %}，中位 {{ cyc.gm_median_pct|num(1) }}%</td></tr>
+    <tr><th>判断② 弹性</th><td>{{ {'strong':'强（利润对收入敏感）','weak':'弱','unstable':'不稳定'}.get(cyc.elastic_label, cyc.elastic_label or '—') }}
+      　比值 {{ cyc.elasticity|ratio }}</td></tr>
+    <tr><th>判断③ 周期位置</th><td>{{ cyc.position_label|poslabel }}
+      　产能周转率分位 {{ cyc.position_pct|num(1) }}</td></tr>
+  </tbody></table>
+</section>
+{% endif %}

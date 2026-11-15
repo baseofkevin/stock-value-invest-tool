@@ -40,7 +40,7 @@
         {% for r in rows %}
         <tr>
           <td class="code">{{ r.symbol }}</td>
-          <td class="name"><a href="/stock/{{ r.symbol }}">{{ r.name or '—' }}</a></td>
+          <td class="name"><a href="/stock/{{ r.symbol }}?focus=top">{{ r.name or '—' }}</a></td>
           <td class="n">{{ r.pos250|pct }}</td>
           <td class="n">{{ r.days_since_high }}</td>
           <td><span class="chip {{ r.momentum_state|tone }}">{{ r.momentum_state or '—' }}</span></td>

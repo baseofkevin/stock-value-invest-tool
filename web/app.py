@@ -8,15 +8,15 @@
 
 页面分工
 --------
-    /            概览：**某个批次**的四工具状态 + 合并表（谁入选了、四边并排）
-    /review      综合评估：四边结论拼成优先级排序，标出「可以开始研究」的票
+    /            跳转到 /review（原来的「概览」页已删，合并表就是综合评估的全表）
     /batches     批次：每周五盘后那一批票，四步齐不齐一目了然
-    /select      选股：池内换手分位（排序依据）+ 行业分布
+    /select      选股：池内换手分位（排序依据）+ 行业分布（名称不可点）
     /cycle       周期：三个判断的分布 + 毛利率波动 × 弹性散点
     /quality     质量：Q × V 散点（结论用颜色区分）+ 结论分布
     /top         顶部：距 250 日高点的横条（谁在高位）+ 四因子状态矩阵
+    /review      综合评估：四边结论拼成优先级排序，标出「可以开始研究」的票
     /stock/<code> 个股：四边结论并排 + 旁证/周期 + **历次结果（按时间）**
-    /runs        运行台账：每次运行的时间、基准日、批量/单只、成功失败数
+                 `?focus=cycle|quality|top` 决定哪一块排最上面（从哪个工具页点进来的）
 
 两种"时间"要分开看
 ------------------
@@ -35,7 +35,7 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 
-from flask import Flask, abort, render_template, request
+from flask import Flask, abort, redirect, render_template, request, url_for
 
 from . import db, review
 
@@ -160,11 +160,13 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
     @app.context_processor
     def inject_globals():
+        # 顺序就是看板的取用顺序：先挑批次，再看四个工具，最后看汇总排序。
+        # 「概览」和「运行记录」删掉了——概览那张合并表就是综合评估的全表，
+        # 运行台账在个股页的「历次结果」里按票看更直观。
         return {"nav": [
-            ("/", "概览"), ("/review", "综合评估"), ("/batches", "批次"),
-            ("/select", "选股"),
+            ("/batches", "批次"), ("/select", "选股"),
             ("/cycle", "周期"), ("/quality", "质量"), ("/top", "顶部"),
-            ("/runs", "运行记录"),
+            ("/review", "综合评估"),
         ]}
 
     def _pick(conn):
@@ -208,14 +210,9 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
     @app.route("/")
     def index():
-        with conn() as c:
-            date, _run_id = _pick(c)
-            date = date or db.batch_date(c)
-            return render_template("index.html", cur_date=date,
-                                   batches=db.batches(c),
-                                   summary=db.summary(c, date),
-                                   merged=db.merged(c, date),
-                                   counts=db.counts(c, date))
+        """根路径直接进综合评估（页签里不再有「概览」）。保留 `/` 是为了
+        旧书签、`./run.py web` 打印的那个地址都还能用。"""
+        return redirect(url_for("review_page"))
 
     @app.route("/review")
     def review_page():
@@ -268,8 +265,22 @@ def create_app(db_path: str | Path | None = None) -> Flask:
                                    summary=db.summary(c, date),
                                    counts=db.counts(c, date))
 
+    #: 从哪个工具页点进来，就把那一块排最上面。四因子原来永远第一，于是
+    #: 从周期/质量页点进来的人看到的也先是顶部判断——2026-11-15 提的那个"都
+    #: 跳到同一个页面"其实就是这个错觉。
+    FOCUS_ORDER = {
+        "cycle": ["cycle", "top", "quality"],
+        "quality": ["quality", "top", "cycle"],
+        "top": ["top", "quality", "cycle"],
+    }
+    FOCUS_LABEL = {"cycle": "周期", "quality": "质量", "top": "顶部"}
+    DEFAULT_ORDER = ["top", "quality", "cycle"]
+
     @app.route("/stock/<symbol>")
     def stock(symbol):
+        focus = (request.args.get("focus") or "").strip()
+        if focus not in FOCUS_ORDER:
+            focus = None
         with conn() as c:
             rows = {t: db.symbol_row(c, t, symbol) for t in db.ORDER}
             if not any(rows.values()):
@@ -288,16 +299,10 @@ def create_app(db_path: str | Path | None = None) -> Flask:
                 extras=top_data.get("extras") or {},
                 gaps=top_data.get("gaps") or [],
                 cyc=(rows.get("cycle") or {}).get("data") or {},
-                qua=(rows.get("quality") or {}).get("data") or {})
+                qua=(rows.get("quality") or {}).get("data") or {},
+                focus=focus, order=FOCUS_ORDER.get(focus, DEFAULT_ORDER),
+                focus_label=FOCUS_LABEL.get(focus, ""))
 
-    @app.route("/runs")
-    def runs():
-        with conn() as c:
-            return render_template("runs.html", rows=db.runs(c), meta=None,
-                                   batches=db.batches(c),
-                                   cur_date=db.batch_date(c),
-                                   summary=db.summary(c),
-                                   counts=db.counts(c))
 
     return app
 

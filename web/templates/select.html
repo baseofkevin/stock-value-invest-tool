@@ -42,7 +42,7 @@
         {% for r in rows %}
         <tr>
           <td class="code">{{ r.symbol }}</td>
-          <td class="name"><a href="/stock/{{ r.symbol }}">{{ r.name or '—' }}</a></td>
+          <td class="name">{{ r.name or '—' }}</td>
           <td>{{ r.industry or '—' }}</td>
           <td class="n">{{ r.pool_turnover_rank|num(1) }}</td>
           <td class="n">{{ r.stars or '—' }}</td>

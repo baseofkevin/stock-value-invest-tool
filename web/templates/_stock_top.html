@@ -1,0 +1,22 @@
+{# 顶部/动量那一段。单独成文件是为了让「从哪个工具页点进来」决定它排第几：
+   四因子块原来永远在最上面，于是从周期/质量页点进来的人也先看到它。 #}
+{% if views %}
+<section class="panel">
+  <h2>四因子独立观察</h2>
+  <p class="sub">四个维度各说各的，程序不做加权、不合计、不替你下结论。</p>
+  <div class="two">
+    {% for v in views %}
+    <div class="tile">
+      <h3>{{ v.title or v[0] }}<span class="chip {{ (v.state or v[1])|tone }}" style="margin-left:8px">{{ (v.state or v[1])|cycle_state }}</span></h3>
+      {% if v.subtitle %}<p class="sub">{{ v.subtitle }}</p>{% endif %}
+      {% if v.headline %}<div style="font-size:13px;margin-top:4px">{{ v.headline }}</div>{% endif %}
+      {% if v.metrics %}
+      <table class="kv" style="margin-top:8px"><tbody>
+        {% for m in v.metrics %}<tr><th>{{ m[0] }}</th><td>{{ m[1] }}</td></tr>{% endfor %}
+      </tbody></table>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}

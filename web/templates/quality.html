@@ -42,7 +42,7 @@
         {% for r in rows %}
         <tr>
           <td class="code">{{ r.symbol }}</td>
-          <td class="name"><a href="/stock/{{ r.symbol }}">{{ r.name or '—' }}</a></td>
+          <td class="name"><a href="/stock/{{ r.symbol }}?focus=quality">{{ r.name or '—' }}</a></td>
           <td class="n"><b>{{ r.q|num(1) }}</b></td>
           <td>{{ r.q_grade or '—' }}</td>
           <td class="n">{{ r.v|num(1) }}</td>

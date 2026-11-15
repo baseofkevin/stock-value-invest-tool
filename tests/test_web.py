@@ -82,10 +82,19 @@ class WebCase(unittest.TestCase):
 class TestPages(WebCase):
     def test_all_pages_render(self):
         client = self.client()
-        for url in ("/", "/select", "/cycle", "/quality", "/top", "/runs",
-                    "/stock/sh600019"):
+        for url in ("/select", "/cycle", "/quality", "/top", "/review",
+                    "/batches", "/stock/sh600019"):
             with self.subTest(url=url):
                 self.assertEqual(client.get(url).status_code, 200)
+
+    def test_root_goes_to_review(self):
+        """/ 是旧书签和 ./run.py web 打印的地址：转到综合评估，不是 404。
+
+        原来的「概览」页删了——它那张合并表就是综合评估下面的全表。
+        """
+        resp = self.client().get("/")
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(resp.headers["Location"].endswith("/review"))
 
     def test_unknown_page_is_404_with_nav(self):
         resp = self.client().get("/nope")
@@ -94,18 +103,18 @@ class TestPages(WebCase):
 
     def test_missing_db_explains_what_to_run(self):
         """还没有 results.db：给一句"先跑 ./run.py all"，不是堆栈。"""
-        resp = self.client(with_data=False).get("/")
+        resp = self.client(with_data=False).get("/review")
         self.assertEqual(resp.status_code, 500)
         self.assertIn("./run.py all", resp.get_data(as_text=True))
 
     def test_merged_table_shows_partial_rows(self):
-        """只跑过选股的票也要在合并表里出现（缺的格子是 —）。"""
+        """只跑过选股的票也要在全表里出现（缺的格子是 —）。"""
         client = self.client()
         results_db.save("select", [{"symbol": "sz000001", "name": "平安银行"}],
                         "2026-11-13", argv="test", db=self.db_path)
-        html = client.get("/").get_data(as_text=True)
+        html = client.get("/review").get_data(as_text=True)
         # 选股最新一次是"平安银行"，质量/顶部最新一次仍是"宝钢股份"：
-        # 合并表按 symbol 并排，两边都得在，缺的格子留 —。
+        # 合并按 symbol 并排，两边都得在，缺的格子留 —。
         self.assertIn("平安银行", html)
         self.assertIn("宝钢股份", html)
 
@@ -150,11 +159,11 @@ class TestBatches(WebCase):
         self.assertIn(f"#{run_id}", html)
 
     def test_batch_merged_only_that_batch(self):
-        """概览的合并表按批次对齐：上周那批的票不出现在本周的表里。"""
+        """综合评估的全表按批次对齐：上周那批的票不出现在本周的表里。"""
         client = self.client()
         results_db.save("select", [{"symbol": "sz000001", "name": "平安银行"}],
                         "2026-11-06", argv="test", db=self.db_path)
-        html = client.get("/?date=2026-11-06").get_data(as_text=True)
+        html = client.get("/review?date=2026-11-06").get_data(as_text=True)
         self.assertIn("平安银行", html)
         self.assertNotIn("宝钢股份", html)
 
@@ -189,7 +198,7 @@ class TestLabels(WebCase):
     """枚举 → 中文。库里存英文，页面上必须写中文。"""
 
     def test_position_label_is_chinese(self):
-        html = self.client().get("/").get_data(as_text=True)
+        html = self.client().get("/review").get_data(as_text=True)
         self.assertNotIn(">high<", html)
         self.assertIn("高位", html)
 
@@ -354,12 +363,50 @@ class TestReviewPage(WebCase):
         self.assertIn("宝钢股份", html)
 
 
+class TestNavAndLinks(WebCase):
+    """导航只有 6 项，且都指向真页面；名称的链接行为按页区分（2026-11-15 反馈）。"""
+
+    def nav_labels(self, html):
+        import re
+        seg = html.split('<nav class="nav">', 1)[1].split("</nav>", 1)[0]
+        return re.findall(r">([^<]+)</a>", seg)
+
+    def test_nav_order_and_removed_pages(self):
+        html = self.client().get("/review").get_data(as_text=True)
+        self.assertEqual(self.nav_labels(html),
+                         ["批次", "选股", "周期", "质量", "顶部", "综合评估"])
+        self.assertNotIn("运行记录", html)
+
+    def test_select_names_are_not_links(self):
+        """选股页的名称不点：那一页看的是"名单和排序依据"，不需要跳走。"""
+        html = self.client().get("/select").get_data(as_text=True)
+        self.assertNotIn("/stock/sh600019", html)
+        self.assertIn("宝钢股份", html)
+
+    def test_tool_pages_link_into_their_own_section(self):
+        """周期/质量/顶部点名称都要带 focus，否则落地页永远先显示四因子。"""
+        for tool in ("cycle", "quality", "top"):
+            with self.subTest(tool=tool):
+                html = self.client().get(f"/{tool}").get_data(as_text=True)
+                self.assertIn(f"/stock/sh600019?focus={tool}", html)
+
+    def test_stock_page_puts_the_clicked_block_first(self):
+        import re
+        want = {"": "四因子独立观察", "?focus=cycle": "周期弹性三判断",
+                "?focus=quality": "质量初筛", "?focus=top": "四因子独立观察"}
+        for query, first in want.items():
+            with self.subTest(query=query or "(默认)"):
+                html = self.client().get("/stock/sh600019" + query).get_data(as_text=True)
+                heads = re.findall(r"<h2>(.*?)<", html)
+                self.assertEqual(heads[0], first, heads)
+
+
 class TestReadOnly(WebCase):
     def test_queries_do_not_write(self):
         """看板只读：打开几个页面后，库文件的 mtime 与大小都不变。"""
         client = self.client()
         before = Path(self.db_path).stat()
-        for url in ("/", "/top", "/runs", "/stock/sh600019"):
+        for url in ("/review", "/top", "/stock/sh600019", "/stock/sh600019?focus=cycle"):
             client.get(url)
         after = Path(self.db_path).stat()
         self.assertEqual(before.st_size, after.st_size)
