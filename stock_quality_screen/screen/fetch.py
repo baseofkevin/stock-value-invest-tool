@@ -356,7 +356,17 @@ def _valuation_call(h: Hub, c: str) -> dict[str, Any]:
     让下游适配库的列名，比改下游 100 多行渲染代码安全得多。
     """
     cal = h.cal
-    need = N.want.valuation(cal, h.target)
+    # 上市日决定"这家公司到底能有多少周估值"：430 周是老股的理想深度，对 2021 年
+    # 上市的公司是永远达不成的门槛，结果是报告里长期挂一条「取数缺口」、估值分位
+    # 整节空白，而且每次运行都重取一遍。分位本身按全部可用历史算、渲染层按实际
+    # 起始年份写"2019 年以来周频"，所以短历史不算错误（见 `want.valuation`）。
+    listed = None
+    try:
+        row = h.conn.execute("select list_date from stock where symbol=?", (c,)).fetchone()
+        listed = row[0] if row else None
+    except Exception:                            # noqa: BLE001 - 取不到就按原门槛
+        listed = None
+    need = N.want.valuation(cal, h.target, listed=listed)
     try:
         _ensure_retrying(h, "valuation", c, need)
     except Exception as exc:                # noqa: BLE001

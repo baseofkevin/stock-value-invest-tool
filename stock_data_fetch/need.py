@@ -42,6 +42,14 @@ _REPORT_DEADLINES = (("03-31", "04-30"), ("06-30", "08-31"),
                      ("09-30", "10-31"), ("12-31", "04-30"))
 
 MIN_VALUATION_WEEKS = 430
+"""老股的**理想**深度：8.3 年（东财 `RPT_VALUEANALYSIS_DET` 的实际上限约 8.9 年）。"""
+
+VALUATION_WEEKS_FLOOR = 100
+"""不管上市多久，**至少**要这么多周（≈2 年）才谈得上分位。少于此仍判缺口。"""
+
+VALUATION_WEEKS_SLACK = 10
+"""东财估值序列比上市日晚 2~8 周（实测 12 只新股：差价 2/2/2/3/4/5/5/5/6/8 周），
+所以按上市日算出来的上限要再让 10 周，否则永远差那么几周、永远判缺口。"""
 """估值深度门槛（周）。430 周 ≈ 8.3 年。
 
 **这是被上游卡出来的数，不是拍的**：东财 `RPT_VALUEANALYSIS_DET` 最早只到
@@ -105,7 +113,8 @@ class _Want:
 
     @staticmethod
     def valuation(cal: TradingCalendar | None, target: str, years: int = 10,
-                  min_weeks: int = MIN_VALUATION_WEEKS) -> Need:
+                  min_weeks: int = MIN_VALUATION_WEEKS,
+                  listed: str | None = None) -> Need:
         """估值序列，周频。
 
         `min_weeks` 默认 430（8.3 年），**不是 520**：东财 `RPT_VALUEANALYSIS_DET`
@@ -118,7 +127,25 @@ class _Want:
         插入点 0），于是 `need.start` 被静默改成 4 年前，取回来 205 周、门槛 480——
         错误信息把"日历太短"伪装成"这份数据只有 4 年"。估值是**取数范围**，不是
         交易日集合，日历够长才用它把起点对齐到交易日，不够长就直接用自然日。
+
+        **`listed`（上市日）**：给了就按"公司实际存在的周数"夹住 `min_weeks`。
+        430 周是**老股**的理想深度，对 2021 年上市的公司是个永远达不成的门槛——
+        库里 254 周其实已经是它的全部历史，却被判成"点数不足（库 254 / 需 430）"，
+        于是每次运行都重取一遍、报告里永远挂一条「取数缺口」，估值分位整节空白。
+        分位本身是按**全部可用历史**算的（`compute._valuation`），渲染层也按实际
+        起始年份写"2019 年以来周频"，所以短历史不是错误，只是样本少——只有
+        少到 `VALUATION_WEEKS_FLOOR` 以下才该判缺口。
         """
+        if listed and min_weeks > VALUATION_WEEKS_FLOOR:
+            try:
+                span = (dt.date.fromisoformat(target)
+                        - dt.date.fromisoformat(listed)).days // 7
+            except ValueError:                      # 上市日脏了就按原门槛
+                span = None
+            if span is not None:
+                min_weeks = max(VALUATION_WEEKS_FLOOR,
+                                min(min_weeks, span - VALUATION_WEEKS_SLACK))
+
         day = (dt.date.fromisoformat(target) - dt.timedelta(days=365 * years + 3)).isoformat()
         start = day
         if cal is not None and cal.days and cal.days[0] <= day:
