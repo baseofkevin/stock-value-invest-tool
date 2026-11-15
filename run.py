@@ -5,8 +5,10 @@
     python3 run.py                 # 交互菜单（推荐，每周五盘后选「1」走全流程）
     python3 run.py weekly          # 全流程：日历 → 选股 → 周期 → 质量
     python3 run.py select          # 只跑选股（stock_kline_screen）
-    python3 run.py cycle           # 只跑周期弹性（依赖当天的选股 CSV）
-    python3 run.py quality         # 只跑质量初筛（依赖当天的选股 CSV）
+    python3 run.py cycle           # 周期弹性批量（依赖当天的选股 CSV）
+    python3 run.py cycle --stock 600519     # 周期弹性单只
+    python3 run.py quality         # 质量初筛批量（依赖当天的选股 CSV）
+    python3 run.py quality --stock 600519   # 质量初筛单只
     python3 run.py top sh600519    # 顶部判断（stock_judge_top，单只，随时可跑）
 
 ## 为什么要有这个脚本
@@ -222,7 +224,13 @@ def step_select(tee: Tee, day: str, extra: list[str]) -> int:
     return 0
 
 
-def step_cycle(tee: Tee, day: str, extra: list[str]) -> int:
+def step_cycle(tee: Tee, day: str, extra: list[str], stock: str | None = None) -> int:
+    """周期弹性。`stock` 给了就是单只模式（不依赖当天 CSV）。"""
+    if stock:
+        argv = [sys.executable, "cycle_report.py", "--stock", stock] + extra
+        code, _ = run_step(tee, f"② 周期弹性 stock_cycle_elastic（{stock} 单只）",
+                           argv, ROOT / "stock_cycle_elastic")
+        return code
     csv = csv_for(day)
     if csv_rows(csv) <= 0:
         tee.line(f"❌ 找不到可用的选股结果：{csv}")
@@ -234,7 +242,13 @@ def step_cycle(tee: Tee, day: str, extra: list[str]) -> int:
     return code
 
 
-def step_quality(tee: Tee, day: str, extra: list[str]) -> int:
+def step_quality(tee: Tee, day: str, extra: list[str], stock: str | None = None) -> int:
+    """质量初筛。`stock` 给了就是单只模式（不依赖当天 CSV）。"""
+    if stock:
+        argv = [sys.executable, "stock_report.py", "--stock-code", stock] + extra
+        code, _ = run_step(tee, f"③ 质量初筛 stock_quality_screen（{stock} 单只）",
+                           argv, ROOT / "stock_quality_screen")
+        return code
     csv = csv_for(day)
     if csv_rows(csv) <= 0:
         tee.line(f"❌ 找不到可用的选股结果：{csv}")
@@ -244,6 +258,23 @@ def step_quality(tee: Tee, day: str, extra: list[str]) -> int:
     code, _ = run_step(tee, f"③ 质量初筛 stock_quality_screen（{day}）",
                        argv, ROOT / "stock_quality_screen")
     return code
+
+
+def note_single_date(tee: Tee, day: str, wanted: str | None) -> int:
+    """单只模式的基准日由程序自己算，`--date` 传不进去。
+
+    `cycle_report.py --stock` 与 `stock_report.py --stock-code` 都没有日期参数，
+    它们内部走 `hub.target`（与 `pick_date` 同一套规则：今天是交易日且过了 15:05
+    就用今天，否则上一个交易日）。所以这里只做一致性检查：如果用户显式要的日期
+    和程序会用的那一天不一样，直接说清楚，别让他以为跑的是那一天。
+    """
+    if wanted and wanted not in ("today", "latest") and wanted != day:
+        tee.line(f"❌ 单只模式的基准日由程序自己决定（本次为 {day}），"
+                 f"不接受 --date {wanted}。")
+        tee.line("    要按历史某天出报告，只能走批量模式（--csv）。")
+        return 2
+    tee.line(f"ℹ️  单只模式按 {day} 出报告（程序内部取「今天或上一个交易日」）。")
+    return 0
 
 
 def step_top(tee: Tee, day: str, codes: list[str], extra: list[str]) -> int:
@@ -358,10 +389,16 @@ def cmd_single(action: str):
             return rc or 1
         if action == "select":
             return step_select(tee, day, args.extra)
-        if action == "cycle":
-            return step_cycle(tee, day, args.extra)
-        if action == "quality":
-            return step_quality(tee, day, args.extra)
+        if action in ("cycle", "quality"):
+            stock = getattr(args, "stock", None)
+            if stock:
+                rc = note_single_date(tee, day, args.date)
+                if rc:
+                    return rc
+                return (step_cycle if action == "cycle" else step_quality)(
+                    tee, day, args.extra, stock)
+            return (step_cycle if action == "cycle" else step_quality)(
+                tee, day, args.extra)
         if action == "top":
             return step_top(tee, day, args.codes, args.extra)
         raise AssertionError(action)
@@ -383,9 +420,9 @@ def cmd_calendar(args, tee: Tee) -> int:
 MENU = """
   1) 全流程：日历 → 选股 → 周期弹性 → 质量初筛     ← 每周五盘后
   2) 只跑选股            stock_kline_screen
-  3) 只跑周期弹性        stock_cycle_elastic（用当天选股 CSV）
-  4) 只跑质量初筛        stock_quality_screen（用当天选股 CSV）
-  5) 顶部判断            stock_judge_top（单只，随时）
+  3) 周期弹性            stock_cycle_elastic     （回车=批量，或填单只代码）
+  4) 质量初筛            stock_quality_screen    （回车=批量，或填单只代码）
+  5) 顶部判断            stock_judge_top         （单只，随时）
   6) 只更新交易日历      build_calendar
   0) 退出
 """
@@ -424,14 +461,13 @@ def interactive() -> int:
             elif choice == "2":
                 args = argparse.Namespace(date=day_hint, no_calendar=False, extra=[])
                 rc = cmd_single("select")(args, tee)
-            elif choice == "3":
+            elif choice in ("3", "4"):
+                who = "周期弹性" if choice == "3" else "质量初筛"
+                code = input(f"{who}——股票代码（回车=批量跑当天选股 CSV）: ").strip()
                 args = argparse.Namespace(date=day_hint, no_calendar=False,
-                                          extra=["--workers", "2"])
-                rc = cmd_single("cycle")(args, tee)
-            elif choice == "4":
-                args = argparse.Namespace(date=day_hint, no_calendar=False,
-                                          extra=["--workers", "2"])
-                rc = cmd_single("quality")(args, tee)
+                                          stock=code or None,
+                                          extra=[] if code else ["--workers", "2"])
+                rc = cmd_single("cycle" if choice == "3" else "quality")(args, tee)
             elif choice == "5":
                 codes = input("股票代码（可多个，空格分隔，如 sh600519 sz000001）: ").split()
                 args = argparse.Namespace(date=day_hint, no_calendar=False,
@@ -490,11 +526,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--cycle-args", default="--workers 2", help="透传给 cycle_report.py")
     sp.add_argument("--quality-args", default="--workers 2", help="透传给 stock_report.py")
 
-    for name, helptext in (("select", "只跑选股 stock_kline_screen"),
-                           ("cycle", "只跑周期弹性 stock_cycle_elastic"),
-                           ("quality", "只跑质量初筛 stock_quality_screen")):
-        sp = sub.add_parser(name, help=helptext)
+    sp = sub.add_parser("select", help="只跑选股 stock_kline_screen（只能批量）")
+    add_date(sp)
+    sp.add_argument("extra", nargs="*", default=[], help="透传给 stock_kline_screen 的参数")
+
+    for name, helptext, flag in (
+            ("cycle", "只跑周期弹性 stock_cycle_elastic", "--stock"),
+            ("quality", "只跑质量初筛 stock_quality_screen", "--stock-code")):
+        sp = sub.add_parser(name, help=helptext + "（批量或单只）")
         add_date(sp)
+        sp.add_argument("--stock", metavar="代码", default=None,
+                        help=f"单只模式：只跑这一只（转成 {flag}），不需要当天的选股 CSV")
         sp.add_argument("extra", nargs="*", default=[], help="透传给该程序的参数")
 
     sp = sub.add_parser("top", help="顶部判断 stock_judge_top（单只/多只）")
@@ -518,10 +560,20 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return interactive()
 
-    args = build_parser().parse_args(argv)
+    # `parse_known_args`：单只/单模块模式下要能透传未知参数（--force、--workers…）。
+    # 用 `nargs="*"` 接不住以 `-` 开头的参数，argparse 会直接报 unrecognized。
+    parser = build_parser()
+    args, unknown = parser.parse_known_args(argv)
     if not args.cmd:
-        build_parser().print_help()
+        parser.print_help()
         return 2
+    if args.cmd == "weekly":
+        if unknown:
+            say(f"❌ weekly 不认识这些参数：{' '.join(unknown)}")
+            say("   透传请用 --select-args / --cycle-args / --quality-args。")
+            return 2
+    else:
+        args.extra = list(getattr(args, "extra", []) or []) + list(unknown)
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")

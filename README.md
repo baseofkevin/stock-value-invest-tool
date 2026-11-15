@@ -8,8 +8,8 @@
 | 模块 | 干什么 | 入口 |
 |---|---|---|
 | `stock_kline_screen` | 选股：5 日涨幅池 → K 线形态 → 板块/财务过滤 | `run.py select` |
-| `stock_cycle_elastic` | 周期弹性：是不是周期股 / 弹性强弱 / 周期位置 | `run.py cycle` |
-| `stock_quality_screen` | 质量初筛：质量分 Q + 估值分 V + 14 项风险检查 | `run.py quality` |
+| `stock_cycle_elastic` | 周期弹性：是不是周期股 / 弹性强弱 / 周期位置 | `run.py cycle [--stock 代码]` |
+| `stock_quality_screen` | 质量初筛：质量分 Q + 估值分 V + 14 项风险检查 | `run.py quality [--stock 代码]` |
 | `stock_judge_top` | 顶部判断：四因子观察单只股票是否到顶部 | `run.py top <代码>` |
 
 ## 每周五收盘后（15:10 之后）
@@ -46,11 +46,28 @@ python3 run.py top sh600519 sz000001       # 一次多只
 ## 单独跑某一步
 
 ```bash
-python3 run.py select  --date 2026-11-20   # 只选股
-python3 run.py cycle                       # 只跑周期（用当天的选股 CSV）
-python3 run.py quality                     # 只跑质量
+python3 run.py select  --date 2026-11-20   # 只选股（只能批量）
+python3 run.py cycle                       # 周期弹性批量（用当天的选股 CSV）
+python3 run.py quality                     # 质量初筛批量（用当天的选股 CSV）
 python3 run.py calendar                    # 只更新日历
 ```
+
+### 单只也能跑
+
+周期弹性和质量初筛都支持单只，不需要当天的选股 CSV：
+
+```bash
+python3 run.py cycle   --stock 600519      # 周期弹性：这一只是不是周期股、位置在哪
+python3 run.py quality --stock 600519      # 质量初筛：Q/V 分数与风险检查
+python3 run.py top     600519              # 顶部判断
+```
+
+菜单里也是同样的：选 3 或 4，股票代码处**直接回车 = 批量跑当天 CSV**，填代码 = 只跑那一只。
+
+注意单只模式的基准日由程序自己决定（今天过了 15:05 就用今天，否则上一个交易日），
+**不接受 `--date`**——那两个程序没有日期参数。要按历史某天出报告只能走批量模式。
+
+子进程参数可以透传：`python3 run.py quality --stock 600519 --force`。
 
 下游（cycle/quality）认的是 `output/kline-screen/选股_<基准日>.csv`，所以它们的
 基准日必须和那天的选股一致；不给 `--date` 就按「今天（过了 15:05）」算，

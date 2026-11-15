@@ -118,6 +118,38 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(a.cycle_args, "--workers 2")
         self.assertFalse(a.keep_going)
 
+    def test_cycle_and_quality_single_stock(self) -> None:
+        """3/4 两项也支持单只：`--stock` 转成各自的参数，不再需要 CSV。"""
+        p = run.build_parser()
+        self.assertEqual(p.parse_args(["cycle", "--stock", "600519"]).stock, "600519")
+        self.assertEqual(p.parse_args(["quality", "--stock", "600519"]).stock, "600519")
+        self.assertIsNone(p.parse_args(["cycle"]).stock)
+
+    def test_single_mode_rejects_other_date(self) -> None:
+        """单只模式的基准日由程序自己算，显式给个别的日期要拒绝，别让人以为跑的是那天。"""
+        import io
+        import tempfile
+        from contextlib import redirect_stdout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tee = run.Tee(Path(tmp) / "t.log")
+            try:
+                with redirect_stdout(io.StringIO()):
+                    self.assertEqual(run.note_single_date(tee, "2026-11-13", "2026-10-01"), 2)
+                    self.assertEqual(run.note_single_date(tee, "2026-11-13", None), 0)
+                    self.assertEqual(run.note_single_date(tee, "2026-11-13", "2026-11-13"), 0)
+            finally:
+                tee.close()
+
+
+class PassthroughUnknownTest(unittest.TestCase):
+    def test_unknown_flags_go_to_extra(self) -> None:
+        """`--force` 这类子进程参数必须能透传，不能被 argparse 判成 unrecognized。"""
+        p = run.build_parser()
+        args, unknown = p.parse_known_args(["cycle", "--stock", "600519", "--force"])
+        self.assertEqual(args.stock, "600519")
+        self.assertEqual(unknown, ["--force"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
