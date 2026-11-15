@@ -104,6 +104,7 @@ def turnover_view(r):
     av20, av250 = km.get("av20"), km.get("av250")
     ratio = km.get("ratio")
     pct_av20 = (km.get("pct") or {}).get("AVG20")
+    apct = km.get("amt_pct")
 
     # 换手：只描述交易拥挤度，不判断顶部
     if bars < 60 or av20 is None or av250 is None or pct_av20 is None:
@@ -117,21 +118,29 @@ def turnover_view(r):
         state, tone = "中性", "info"
     else:
         state, tone = "偏低", "muted"
+    metrics = [
+        ("20日均换手", f"{av20:.2f}%"),
+        ("自身分位", f"P{pct_av20:.0f}"),
+        ("1月/1年换手比", f"{ratio:.2f}" if ratio is not None else "—"),
+        ("250日均换手", f"{av250:.2f}%"),
+    ]
+    note = ("换手只描述交易是否拥挤。高换手可能是顶部派发，也可能是突破放量；"
+            "不能单独当作顶部信号。")
+    if apct is not None:
+        # 成交额分位也一并给出，但**不当主判据**：成交额随股价水平一起涨，
+        # 一只票翻倍后同样的成交量会多出一倍成交额，分位会被"涨过了"本身推高。
+        # 换手率 = 成交额÷流通市值，已经把这层价格效应除掉，所以拥挤度以它为准。
+        metrics.append(("参考·成交额分位", f"P{apct:.0f}"))
+        note += ("参考的成交额分位只作对照：它含价格水平效应（涨了一倍，"
+                 "同样的成交量成交额就多一倍），在「已经涨了很多」的票上会"
+                 "系统性偏高，所以主判据仍用换手率。")
     return {
         "key": "turnover", "title": "换手",
         "subtitle": "顶部区域换手通常偏高",
         "state": state, "tone": tone,
         "headline": f"20日均换手 {av20:.2f}%，自身 {pct_av20:.0f} 分位",
-        "metrics": [
-            ("20日均换手", f"{av20:.2f}%"),
-            ("自身分位", f"P{pct_av20:.0f}"),
-            ("1月/1年换手比", f"{ratio:.2f}" if ratio is not None else "—"),
-            ("250日均换手", f"{av250:.2f}%"),
-        ],
+        "metrics": metrics,
         "calc": turn_calc,
-        "note": (
-            "换手只描述交易是否拥挤。高换手可能是顶部派发，也可能是突破放量；"
-            "不能单独当作顶部信号。"
-        ),
+        "note": note,
         "wide": False,
     }
