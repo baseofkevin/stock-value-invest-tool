@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+{% block title %}综合评估{% endblock %}
+{% block body %}
+
+<section class="hero">
+  <div class="eyebrow">Cross-tool review</div>
+  <h1>这一批，先看这几只</h1>
+  <p>
+    选股 × 周期 × 质量 × 顶部，四个工具的话拼在一起看：<b style="color:#fff">先过风险硬门槛</b>，
+    再比质量与估值，最后看周期位置和离一年高点还有多少空间。
+    {% if cur_date %}当前批次 <strong style="color:#fff">{{ cur_date }}</strong>。{% endif %}
+  </p>
+</section>
+
+{% include "_bar.html" %}
+
+{% if review.rows %}
+<div class="cards">
+  {% for t in review.tiers %}
+  <div class="card">
+    <div class="k">{{ t.label }}</div>
+    <div class="v">{{ t.count }} 只</div>
+    <div class="s">{{ t.hint }}</div>
+  </div>
+  {% endfor %}
+</div>
+
+<section class="panel">
+  <h2>优先研究 <span class="tag">{{ review.counts.buy }} 只</span></h2>
+  <p class="sub">
+    下面是<b>四条全过</b>的票：质量站得住（Q≥55 且过了 45 硬线）、估值够便宜（按 Q 高低要求 V）、
+    周期不在高位、离 250 日高点还有 10% 以上空间。点名称进个股页看原始结论，再自己深入研究。
+  </p>
+  {% if review.buy %}
+  <div class="scroll">
+    <table class="grid">
+      <thead><tr>
+        <th class="n">#</th><th>代码</th><th>名称</th>
+        <th class="n">Q</th><th class="n">V</th><th>质量结论</th>
+        <th>周期</th><th class="n">距250日高点</th><th>动量</th><th>为什么值得看</th>
+      </tr></thead>
+      <tbody>
+        {% for r in review.buy %}
+        <tr>
+          <td class="n">{{ r.rank }}</td>
+          <td class="code">{{ r.symbol }}</td>
+          <td class="name"><a href="/stock/{{ r.symbol }}">{{ r.name or '—' }}</a></td>
+          <td class="n"><b>{{ r.q|num(1) }}</b></td>
+          <td class="n"><b>{{ r.v|num(1) }}</b></td>
+          <td><span class="chip {{ r.conclusion|tone }}">{{ r.conclusion or '—' }}</span></td>
+          <td>{% if r.cycle.is_cycle %}<span class="chip {{ r.cycle.position|tone }}">{{ r.position_cn }}</span>
+              <span class="chip muted" style="margin-left:4px">周期股</span>
+              {% else %}<span class="chip muted">非周期</span>{% endif %}</td>
+          <td class="n">{{ r.top.pos250|pct if r.top.pos250 is not none else '—' }}</td>
+          <td>{{ r.top.momentum or '—' }}</td>
+          <td>{% for h in r.highlights %}<span class="chip {{ h.tone }}" style="margin:0 4px 3px 0">{{ h.text }}</span>{% endfor %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty">这一批没有四条全过的票——看下面「观察」档里差一条的那些。</div>
+  {% endif %}
+</section>
+
+<div class="charts">
+  <div class="chart-box tall">
+    <h3>质量 × 估值 × 评级</h3>
+    <p class="sub">竖线是 Q=45 硬地板；颜色是这一页的评级。左上（好公司、便宜）右上角才是候选区。</p>
+    <div class="canvas-wrap"><canvas id="qvTier"></canvas></div>
+  </div>
+  <div class="chart-box tall">
+    <h3>评级分布</h3>
+    <p class="sub">排除占了多数是正常的：Q&lt;45 一律出局，剩下的才谈便宜和位置。</p>
+    <div class="canvas-wrap"><canvas id="tierPie"></canvas></div>
+  </div>
+</div>
+
+<section class="panel">
+  <h2>全表（{{ review.rows|length }} 只，按优先级排序）</h2>
+  <p class="sub">
+    「差距」列写的是它离「优先研究」还差哪几条——差一条的票往往只需要等一个条件
+    （比如等一个季报让 Q 上 55、或者等价格回到更便宜的位置）。
+  </p>
+  <div class="scroll">
+    <table class="grid">
+      <thead><tr>
+        <th class="n">#</th><th>代码</th><th>名称</th><th>评级</th>
+        <th class="n">Q</th><th class="n">V</th><th>质量结论</th>
+        <th>周期</th><th class="n">距高点</th><th>动量</th>
+        <th class="n">换手分位</th><th>差距</th>
+      </tr></thead>
+      <tbody>
+        {% for r in review.rows %}
+        <tr class="{{ 'dim' if r.tier in ('out', 'nodata') }}">
+          <td class="n">{{ r.rank }}</td>
+          <td class="code">{{ r.symbol }}</td>
+          <td class="name"><a href="/stock/{{ r.symbol }}">{{ r.name or '—' }}</a></td>
+          <td><span class="chip {{ r.tier_tone }}">{{ r.tier_label }}</span></td>
+          <td class="n">{{ r.q|num(1) }}</td>
+          <td class="n">{{ r.v|num(1) }}</td>
+          <td><span class="chip {{ r.conclusion|tone }}">{{ r.conclusion or '—' }}</span></td>
+          <td>{% if r.cycle.is_cycle %}<span class="chip {{ r.cycle.position|tone }}">{{ r.position_cn }}</span>{% else %}—{% endif %}</td>
+          <td class="n">{{ r.top.pos250|pct if r.top.pos250 is not none else '—' }}</td>
+          <td>{{ r.top.momentum or '—' }}</td>
+          <td class="n">{{ r.select.turn_rank|num(1) }}</td>
+          <td class="gap-cell">
+            {% for g in r.gaps %}<span class="gap">
+              <span class="chip {{ 'warn' if r.tier == 'out' else 'muted' }}"
+                    title="{{ g.text }}">{{ g.label }}</span>
+              {% if g.detail %}<span class="gap-detail" title="{{ g.text }}">{{ g.detail }}</span>{% endif %}
+            </span>{% else %}—{% endfor %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <details>
+    <summary style="cursor:pointer;font-weight:600;font-size:14px">这一页的分档规则（点开看）</summary>
+    <p class="sub" style="margin-top:10px">
+      规则是<b>硬门槛 + 逐条差距</b>，不是加权总分——风险命中不能和别的优点互相抵消。
+    </p>
+    <table class="kv" style="max-width:900px">
+      <tr><th>排除</th><td>质量结论是「回避」，或 Q &lt; 45，或命中致命风险（利息保障 &lt; 1、商誉/净资产 &gt; 50% 等）。<b>这一条不放宽</b>。</td></tr>
+      <tr><th>待补数据</th><td>质量没给结论（V 分取不到、数据缺口太大）。先补数据，不猜。</td></tr>
+      <tr><th>优先研究</th><td>下面四条全过：① Q ≥ 55 且过 45 硬线；② V 达标（Q≥70 要 50、Q≥60 要 60、其余要 65）；③ 周期股不在高位；④ 离 250 日高点 ≥ 10% 且动量不在高位、业绩不是亏损、PE 分位 &lt; 90%。</td></tr>
+      <tr><th>观察</th><td>过了质量硬门槛，但「差距」列里还有 1 条以上没满足。</td></tr>
+      <tr><th>档内排序</th><td>按 <code>min(Q, V)</code> 从高到低（木桶原则：两项都高才靠前），同分再看 Q，最后按代码。</td></tr>
+    </table>
+    <p class="sub" style="margin-top:10px">
+      阈值都在 <code>web/review.py</code> 顶部（<code>Q_HARD / Q_GOOD / V_LADDER / NEAR_HIGH / PE_PCT_HIGH</code>），
+      改一个数刷新页面就生效——没有藏在别处的魔法权重。
+    </p>
+  </details>
+</section>
+
+{% else %}
+<div class="empty">
+  {% if cur_date %}这一批（{{ cur_date }}）还没有可评估的结果{% else %}结果库还是空的{% endif %}：
+  先跑 <code>./run.py all</code>，四个工具把结论写进来后这里会自动出现排序。
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+{% if review.rows %}
+<script>
+const rows = {{ review.rows|map(attribute='symbol')|list|tojson }};
+const names = {{ review.rows|map(attribute='name')|list|tojson }};
+const qs = {{ review.rows|map(attribute='q')|list|tojson }};
+const vs = {{ review.rows|map(attribute='v')|list|tojson }};
+const tiers = {{ review.rows|map(attribute='tier')|list|tojson }};
+
+// 颜色逐档写死：同一批数据换个批次不能换颜色，否则图例白给。
+const TIER_COLOR = {
+  buy: 'rgba(13,148,136,.85)', watch: 'rgba(37,99,235,.7)',
+  out: 'rgba(180,83,9,.55)', nodata: 'rgba(148,163,184,.6)',
+};
+const TIER_LABEL = {buy: '优先研究', watch: '观察', out: '排除', nodata: '待补数据'};
+
+const groups = {};
+tiers.forEach((t, i) => {
+  if (qs[i] == null || vs[i] == null) return;     // 缺 V 的票画不出来，别占图例
+  (groups[t] = groups[t] || []).push({x: qs[i], y: vs[i], code: rows[i], name: names[i]});
+});
+const order = ['buy', 'watch', 'out', 'nodata'];
+const datasets = order.filter(t => groups[t]).map(t => ({
+  label: TIER_LABEL[t], data: groups[t], pointRadius: t === 'buy' ? 7 : 5,
+  backgroundColor: TIER_COLOR[t], borderColor: t === 'buy' ? '#0f766e' : 'transparent',
+  borderWidth: t === 'buy' ? 1.5 : 0,
+}));
+// Q=45 硬地板：两点连线画一条竖线（不引 annotation 插件）
+datasets.push({label: 'Q=45', data: [{x: 45, y: 0}, {x: 45, y: 100}], showLine: true,
+  pointRadius: 0, borderColor: 'rgba(180,83,9,.45)', borderDash: [5, 4], borderWidth: 1.5,
+  fill: false});
+
+new Chart(document.getElementById('qvTier'), {
+  type: 'scatter',
+  data: {datasets},
+  options: {
+    maintainAspectRatio: false,
+    plugins: {tooltip: {callbacks: {label: c => c.dataset.showLine ? 'Q=45 硬地板'
+      : `${c.raw.name} ${c.raw.code}｜Q ${c.raw.x} V ${c.raw.y}`}}},
+    scales: {
+      x: {title: {display: true, text: '质量分 Q'}, grid: {color: '#eef2f7'}, min: 0, max: 100},
+      y: {title: {display: true, text: '估值分 V'}, grid: {color: '#eef2f7'}, min: 0, max: 100}
+    }
+  }
+});
+
+const tally = {};
+tiers.forEach(t => { tally[t] = (tally[t] || 0) + 1; });
+const pieKeys = order.filter(t => tally[t]);
+new Chart(document.getElementById('tierPie'), {
+  type: 'doughnut',
+  data: {
+    labels: pieKeys.map(t => TIER_LABEL[t]),
+    datasets: [{data: pieKeys.map(t => tally[t]),
+      backgroundColor: pieKeys.map(t => TIER_COLOR[t]),
+      borderColor: '#fff', borderWidth: 2}]
+  },
+  options: {maintainAspectRatio: false, cutout: '58%',
+    plugins: {legend: {position: 'bottom', labels: {boxWidth: 10, font: {size: 11}}}}}
+});
+</script>
+{% endif %}
+{% endblock %}

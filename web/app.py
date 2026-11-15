@@ -9,6 +9,7 @@
 页面分工
 --------
     /            概览：**某个批次**的四工具状态 + 合并表（谁入选了、四边并排）
+    /review      综合评估：四边结论拼成优先级排序，标出「可以开始研究」的票
     /batches     批次：每周五盘后那一批票，四步齐不齐一目了然
     /select      选股：池内换手分位（排序依据）+ 行业分布
     /cycle       周期：三个判断的分布 + 毛利率波动 × 弹性散点
@@ -31,11 +32,12 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+from contextlib import contextmanager
 from pathlib import Path
 
 from flask import Flask, abort, render_template, request
 
-from . import db
+from . import db, review
 
 #: 状态词 → 色调（与四工具报告的 CSS 变量同一套语言）
 TONE_MAP = (
@@ -145,13 +147,22 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     app.jinja_env.globals.update(TOOLS=db.TOOLS, ORDER=db.ORDER, TODAY=dt.date.today,
                                  KIND_LABEL=db.KIND_LABEL)
 
+    @contextmanager
     def conn():
-        return db.connect(app.config["DB_PATH"])
+        """请求级连接：`with sqlite3.Connection` 只提交事务、**不关闭**，
+        拿它当上下文管理器会让每个请求漏一个连接（跑久了报
+        `ResourceWarning: unclosed database`）。这里显式关。"""
+        c = db.connect(app.config["DB_PATH"])
+        try:
+            yield c
+        finally:
+            c.close()
 
     @app.context_processor
     def inject_globals():
         return {"nav": [
-            ("/", "概览"), ("/batches", "批次"), ("/select", "选股"),
+            ("/", "概览"), ("/review", "综合评估"), ("/batches", "批次"),
+            ("/select", "选股"),
             ("/cycle", "周期"), ("/quality", "质量"), ("/top", "顶部"),
             ("/runs", "运行记录"),
         ]}
@@ -204,6 +215,23 @@ def create_app(db_path: str | Path | None = None) -> Flask:
                                    batches=db.batches(c),
                                    summary=db.summary(c, date),
                                    merged=db.merged(c, date),
+                                   counts=db.counts(c, date))
+
+    @app.route("/review")
+    def review_page():
+        """综合评估：不查库里的新表，全在 `review.build()` 里现算。
+
+        四个工具的结论本来就各存一份（`merged()` 已经把它们并到一只票一行），
+        这一页要的是**规则**，不是新数据——所以规则放 `web/review.py`，
+        这里只负责挑批次、把结果交给模板。
+        """
+        with conn() as c:
+            date, _run_id = _pick(c)
+            date = date or db.batch_date(c)
+            report = review.build(db.merged(c, date))
+            return render_template("review.html", meta=None, cur_date=date,
+                                   batches=db.batches(c), review=report,
+                                   summary=db.summary(c, date),
                                    counts=db.counts(c, date))
 
     @app.route("/batches")

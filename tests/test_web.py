@@ -212,6 +212,148 @@ class TestLabels(WebCase):
         self.assertEqual(tone("不认识的词"), "info")
 
 
+class TestReviewRules(unittest.TestCase):
+    """综合评估的规则（`web/review.py`）：纯函数，不碰库、不起服务。
+
+    这一层最容易悄悄松掉的是**风险门槛**：一个"总分高"的票如果命中了致命
+    风险，必须还是排除。这几条钉的就是这件事。
+    """
+
+    def _row(self, q=None, v=None, conclusion="观察", reason="", fatal=None,
+             is_cycle=False, position="", pos250=-0.20, momentum="低位·走平",
+             earnings="加速", pe_pct=30.0, in_select=True):
+        quality = {}
+        if conclusion is not None:
+            quality = {"symbol": "sh600000", "name": "测试", "q": q, "v": v,
+                       "q_grade": "", "v_grade": "", "conclusion": conclusion,
+                       "reason": reason, "risks_hit": 0, "risks_known": 14,
+                       "data": {"payload": {"fatal": fatal or []}}}
+        top = {}
+        if pos250 is not None or momentum or earnings:
+            top = {"symbol": "sh600000", "pos250": pos250, "momentum_state": momentum,
+                   "turnover_state": "中性", "earnings_state": earnings,
+                   "volume_state": "未触发", "cycle_state": "", "pe_pct": pe_pct,
+                   "target_upside": 0.2, "data": {}}
+        return {"symbol": "sh600000", "name": "测试", "select": {"symbol": "sh600000"} if in_select else {},
+                "cycle": {"symbol": "sh600000", "is_cycle": is_cycle,
+                          "position_label": position, "position_pct": 10.0},
+                "quality": quality, "top": top}
+
+    def test_all_gates_pass_is_buy(self):
+        from web import review
+        item = review.evaluate(self._row(q=73.8, v=83.2))
+        self.assertEqual(item["tier"], "buy")
+        self.assertEqual(item["gaps"], [])
+
+    def test_hard_floor_is_not_negotiable(self):
+        """Q < 45 就是排除，V 再高也不抵——照抄工具的硬线。"""
+        from web import review
+        item = review.evaluate(self._row(q=42.0, v=96.5, conclusion="回避",
+                                        reason="质量分 42.0 低于 45，禁止买入"))
+        self.assertEqual(item["tier"], "out")
+        self.assertEqual(item["gaps"][0]["label"], "Q 不足")
+
+    def test_fatal_risk_vetoes_even_with_high_scores(self):
+        from web import review
+        item = review.evaluate(self._row(q=88.0, v=88.0, conclusion="回避",
+                                        reason="出现致命风险：利息保障 < 1",
+                                        fatal=["利息保障 < 1"]))
+        self.assertEqual(item["tier"], "out")
+        self.assertEqual(item["gaps"][0]["label"], "致命风险")
+
+    def test_fatal_written_in_reason_is_recognised(self):
+        """老记录没有 `fatal` 列表，致命项只写在 reason 里，也要认出来。"""
+        from web import review
+        item = review.evaluate(self._row(q=52.0, v=90.0, conclusion="回避",
+                                        reason="出现致命风险：商誉/净资产超过 50%"))
+        self.assertEqual(item["gaps"][0]["label"], "致命风险")
+        self.assertIn("商誉", item["gaps"][0]["detail"])
+
+    def test_cycle_high_downgrades_to_watch(self):
+        from web import review
+        item = review.evaluate(self._row(q=73.8, v=83.2, is_cycle=True,
+                                        position="high"))
+        self.assertEqual(item["tier"], "watch")
+        self.assertEqual([g["label"] for g in item["gaps"]], ["周期高位"])
+
+    def test_missing_v_is_watch_not_buy(self):
+        from web import review
+        item = review.evaluate(self._row(q=70.0, v=None))
+        self.assertEqual(item["tier"], "watch")
+        self.assertEqual(item["gaps"][0]["label"], "缺 V 分")
+        self.assertEqual(item["bucket"], 0.0)      # 缺数据不许排到前头
+
+    def test_v_ladder_requires_more_when_q_low(self):
+        from web import review
+        # Q 56 需要 V≥65：V 60 不够
+        self.assertEqual(review.evaluate(self._row(q=56.0, v=60.0))["tier"], "watch")
+        # Q 72 只需要 V≥50
+        self.assertEqual(review.evaluate(self._row(q=72.0, v=55.0))["tier"], "buy")
+
+    def test_near_high_blocks(self):
+        from web import review
+        self.assertEqual(review.evaluate(self._row(q=73.8, v=83.2,
+                                                   pos250=-0.02))["tier"], "watch")
+
+    def test_quality_conclusion_missing_is_nodata(self):
+        from web import review
+        item = review.evaluate(self._row(conclusion=None))
+        self.assertEqual(item["tier"], "nodata")
+
+    def test_sort_uses_min_of_q_and_v(self):
+        """档内排序按 min(Q, V)：Q 90/V 60 要排在 Q 66/V 80 后面（木桶原则）。"""
+        from web import review
+        a = review.evaluate(self._row(q=90.0, v=60.0))
+        b = review.evaluate(self._row(q=66.0, v=80.0))
+        a["symbol"], b["symbol"] = "sh600001", "sh600002"
+        out = review.build([{"symbol": a["symbol"], "name": "A",
+                             "quality": {"q": 90.0, "v": 60.0, "conclusion": "观察"},
+                             "select": {}, "cycle": {}, "top": {"pos250": -0.3}},
+                            {"symbol": b["symbol"], "name": "B",
+                             "quality": {"q": 66.0, "v": 80.0, "conclusion": "观察"},
+                             "select": {}, "cycle": {}, "top": {"pos250": -0.3}}])
+        self.assertEqual([it["symbol"] for it in out["rows"]], ["sh600002", "sh600001"])
+
+    def test_out_comes_before_watch_in_ranking(self):
+        from web import review
+        out = review.build([
+            {"symbol": "sz000001", "name": "差", "select": {},
+             "quality": {"q": 30.0, "v": 80.0, "conclusion": "回避", "reason": "x"},
+             "cycle": {}, "top": {"pos250": -0.3}},
+            {"symbol": "sh600002", "name": "好", "select": {"symbol": "sh600002"},
+             "quality": {"q": 70.0, "v": 80.0, "conclusion": "观察"},
+             "cycle": {}, "top": {"pos250": -0.3}},
+        ])
+        self.assertEqual([it["symbol"] for it in out["rows"]], ["sh600002", "sz000001"])
+        self.assertEqual(out["counts"]["buy"], 1)
+        self.assertEqual(out["counts"]["out"], 1)
+
+
+class TestReviewPage(WebCase):
+    def test_review_page_renders_with_nav(self):
+        client = self.client()
+        resp = client.get("/review")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn("综合评估", html)
+        self.assertIn("优先研究", html)
+
+    def test_empty_db_does_not_crash(self):
+        """库存在但一条结果都没有：给「先跑 ./run.py all」，不是 500。"""
+        results_db.connect(self.db_path).close()     # 建库建表，但不写行
+        client = self.client(with_data=False)
+        resp = client.get("/review")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("./run.py all", resp.get_data(as_text=True))
+
+    def test_demo_row_is_not_buy(self):
+        """演示数据 Q54.4/V67 + 周期高位：只能进「观察」，不能进「优先研究」。"""
+        client = self.client()
+        html = client.get("/review").get_data(as_text=True)
+        self.assertIn("周期高位", html)
+        self.assertIn("宝钢股份", html)
+
+
 class TestReadOnly(WebCase):
     def test_queries_do_not_write(self):
         """看板只读：打开几个页面后，库文件的 mtime 与大小都不变。"""
