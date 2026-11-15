@@ -1,17 +1,13 @@
 {% extends "base.html" %}
 {% block title %}{{ name }}{% endblock %}
+{# 嵌着原版报告时整页换成报告自己的底色与版式：白卡片 + 墨绿主色 + 1040 内容宽。
+   看板的深蓝渐变 hero 和四张摘要卡在报告页里全部让位，否则一份报告被三层壳包着。 #}
+{% block bodyclass %}{% if active_row and active_row|hasreport %}stock-report{% endif %}{% endblock %}
 {% block body %}
 {% set r_sel = rows.select %}{% set r_cyc = rows.cycle %}{% set r_qua = rows.quality %}{% set r_top = rows.top %}
+{% set has_report = active_row and active_row|hasreport %}
 
-{% if active_row and active_row|hasreport %}
-{# 报告自己就带一个大表头（名称/价格/市值/日期），页面这边只留一条压扁的标题条：
-   两套表头叠在一起等于同一个信息印两遍。旧行没有报告时才用下面的大 hero。 #}
-<section class="hero slim">
-  <div class="eyebrow">STOCK</div>
-  <h1>{{ name }}<span class="code">{{ symbol }}</span></h1>
-  <p>个股研究看板 · 下面一次只显示一份工具报告，用标签切换{% if came_from %}；这一份是你点进来的{% endif %}。</p>
-</section>
-{% else %}
+{% if not has_report %}
 <section class="hero">
   <div class="eyebrow">STOCK</div>
   <h1>{{ name }}<span class="code">{{ symbol }}</span></h1>
@@ -21,11 +17,10 @@
       最近一次 {{ r_top.started_at|clock }}（{{ r_top.kind_label }}，基准日 {{ r_top.target_date }}）　
       收盘 {{ r_top.close|num(2) }}　距 250 日高点 {{ r_top.pos250|pct }}。
     {% else %}这只票还没有跑过顶部判断。{% endif %}
-    <br><small style="color:#94a3b8">每张卡片都是该工具<b>最近一次</b>的结果；下面「历次结果」列出全部时间点。</small>
+    <br><small style="color:#94a3b8">每张卡片都是该工具<b>最近一次</b>的结果。</small>
     <br><small style="color:#0f766e">下面一次只显示一份工具报告，用标签切换。</small>
   </p>
 </section>
-{% endif %}
 
 <div class="cards">
   <a class="card" href="/select{% if r_sel %}?run={{ r_sel.run_id }}{% endif %}">
@@ -49,13 +44,14 @@
     <div class="s">{% if r_top %}换手 {{ r_top.turnover_state }} · 业绩 {{ r_top.earnings_state }} · 量价 {{ r_top.volume_state }}<br>{{ r_top.kind_label }} {{ r_top.started_at|clock }}{% endif %}</div>
   </a>
 </div>
+{% endif %}
 
 {# 三份报告不堆在一页：上面一条标签栏，下面只摆当前那一份（?focus= 决定打开时停在哪）。
    报告是工具**算完就渲染好**存在 payload.report_html 里的，看板只解压、不重画：
    五节质量初筛 / 三个判断 + 含义说明 / 四因子卡片，看板复刻必然走形。
    用 iframe 是为了两边 CSS 互不干扰（报告自带一整套全局样式），高度由下面脚本撑开。
    旧行没有 report_html 时退回看板自己的明细视图（_stock_*.html）。 #}
-<nav class="tabs">
+<nav class="tabs{% if has_report %} report-tabs{% endif %}">
   {% for key in tabs %}
   <a class="tab {{ 'on' if key == active }}" href="/stock/{{ symbol }}?focus={{ key }}">{{ tab_label[key] }}</a>
   {% endfor %}
@@ -72,8 +68,8 @@
   {% endif %}
 </nav>
 
-{% if active_row and active_row|hasreport %}
-<section class="panel report-panel">
+{% if has_report %}
+<section class="report-panel">
   <iframe class="report-frame" title="{{ active_label }}"
           src="/stock/{{ symbol }}/report/{{ active }}?run={{ active_row.run_id }}"></iframe>
 </section>
@@ -92,46 +88,6 @@
     <tr><th>{{ g.domain }}</th><td>{{ g.why }}</td></tr>
     {% endfor %}
   </tbody></table>
-</section>
-{% endif %}
-
-{% if timeline %}
-<section class="panel">
-  <h2>历次结果 <span class="tag">共 {{ timeline|length }} 条</span></h2>
-  <p class="sub">
-    按<b>跑的时刻</b>倒序。同一只票可能被周五批量算过、又被单独重算过——
-    每条都留着，并标明它属于哪一批、是批量还是单只。
-  </p>
-  <div class="scroll">
-    <table class="grid">
-      <thead><tr>
-        <th>跑于</th><th>基准日</th><th>来源</th><th>工具</th><th>结论</th><th>报告</th><th class="n">#</th>
-      </tr></thead>
-      <tbody>
-        {% for e in timeline %}
-        <tr>
-          <td class="date">{{ e.started_at|clock }}</td>
-          <td class="date">{{ e.target_date }}</td>
-          <td><span class="chip {{ 'good' if e.kind == 'batch' else 'info' }}">{{ e.kind_label }}</span></td>
-          <td>{{ e.tool_label }}</td>
-          <td>{{ e.brief }}</td>
-          <td>{% if e.report %}<a href="{{ e.report }}" target="_blank" rel="noopener">原版</a>{% else %}<span style="color:#cbd5e1">—</span>{% endif %}</td>
-          <td class="n"><a href="{{ e.href }}?run={{ e.run_id }}">{{ e.run_id }}</a></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
-{% endif %}
-
-{% if hist and (hist.top|length > 1 or hist.quality|length > 1) %}
-<section class="panel">
-  <h2>结论怎么变的</h2>
-  <p class="sub">横轴是跑的时刻（旧→新）。只画有值的点，断点表示那次没跑这只票。</p>
-  <div class="chart-box tall" style="border:0;padding:0">
-    <div class="canvas-wrap"><canvas id="hist"></canvas></div>
-  </div>
 </section>
 {% endif %}
 
@@ -154,34 +110,4 @@ document.querySelectorAll('iframe.report-frame').forEach(function (f) {
   window.addEventListener('resize', fit);
 });
 </script>
-{% if hist %}
-<script>
-// 两条序列各自有各自的时间点（顶部和质量不一定同时跑过），
-// 所以先取"时间点并集"当横轴，再按时间把值放进去，缺的留 null。
-const posSeries = {{ hist.top|map(attribute='run_id')|list|tojson }}.map((id, i) => ({
-  t: {{ hist.top|map(attribute='started_at')|list|tojson }}[i],
-  v: {{ hist.top|map(attribute='pos250')|list|tojson }}[i]}));
-const qSeries = {{ hist.quality|map(attribute='run_id')|list|tojson }}.map((id, i) => ({
-  t: {{ hist.quality|map(attribute='started_at')|list|tojson }}[i],
-  v: {{ hist.quality|map(attribute='q')|list|tojson }}[i]}));
-const clock = t => (t || '').slice(5, 16).replace('T', ' ');
-const labels = [...new Set([...posSeries, ...qSeries].map(p => p.t))].sort();
-const align = (series, conv) => labels.map(l => {
-  const hit = series.find(p => p.t === l);
-  return hit && hit.v != null ? conv(hit.v) : null;
-});
-const datasets = [];
-if (posSeries.length) datasets.push({label: '距250日高点 %', data: align(posSeries, v => +(v * 100).toFixed(2)),
-  borderColor: '#0f766e', backgroundColor: 'rgba(15,118,110,.12)', tension: .25, spanGaps: true});
-if (qSeries.length) datasets.push({label: '质量分 Q', data: align(qSeries, v => v), yAxisID: 'y2',
-  borderColor: '#1d4ed8', backgroundColor: 'rgba(29,78,216,.1)', tension: .25, spanGaps: true});
-new Chart(document.getElementById('hist'), {
-  type: 'line',
-  data: {labels: labels.map(clock), datasets},
-  options: {maintainAspectRatio: false, interaction: {mode: 'index', intersect: false},
-    scales: {y: {title: {display: true, text: '距高点 %'}, grid: {color: '#eef2f7'}},
-             y2: {position: 'right', title: {display: true, text: 'Q'}, grid: {display: false}}}}
-});
-</script>
-{% endif %}
 {% endblock %}

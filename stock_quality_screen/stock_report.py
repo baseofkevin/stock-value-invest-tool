@@ -148,8 +148,15 @@ def _score_line(data: dict) -> str:
             return f"{score:.1f} / 100"
         return "不适用" if block.get("not_applicable") else "—"
 
-    return (f"  质量分 Q {cell(data.get('quality') or {})}"
+    line = (f"  质量分 Q {cell(data.get('quality') or {})}"
             f"   估值分 V {cell(data.get('valuation_score') or {})}")
+    v = data.get("valuation_score") or {}
+    hist = v.get("historical") or {}
+    if v.get("score") is None and hist.get("available") and hist.get("score") is not None:
+        line += (f"\n  历史分位参考 {hist['score']:.1f} / 100"
+                 f"（{hist.get('grade') or '—'}，{hist.get('verdict') or ''}；"
+                 f"样本 {hist.get('sample_weeks') or 0} 周）· 只展示，不参与结论")
+    return line
 
 
 # ---------------------------------------------------------------------------
@@ -320,7 +327,9 @@ def _run_batch(args: argparse.Namespace) -> int:
         items = _items_from_results(target_date)
         source = f"结果库 选股 {target_date or '最近一次'}"
     else:
-        target_date = None
+        # CSV 模式也必须有一个基准日做续跑键：interrupt 后结果按今天落库，
+        # 再跑同一份 CSV 才能 `_existing()` 命中并跳过已算完的票。
+        target_date = datetime.now().date().isoformat()
         try:
             items = _items_from_csv(args.csv_input)
         except CsvError as exc:

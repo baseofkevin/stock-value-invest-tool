@@ -924,6 +924,23 @@ def _section_score(data: dict[str, Any]) -> str:
             f"<td>{pct(g.get('coverage'))}</td>"
             "</tr>"
         )
+    hist = v.get("historical") or {}
+    hist_score = (hist.get("score")
+                  if vs is None and hist.get("available") else None)
+    hist_note = ""
+    if hist_score is not None:
+        metric_text = "、".join(
+            f"{esc(m.get('label'))} {pct(m.get('percentile'))}"
+            for m in (hist.get("metrics") or [])
+        )
+        hist_note = (
+            f'  <p class="small"><b>历史分位参考</b>：{metric_text}，'
+            f'中位 {pct(hist.get("median_percentile"))} → '
+            f'<b>{n(hist_score, 1)} / 100</b>'
+            f'（{esc(hist.get("grade"))}，{esc(hist.get("verdict"))}；'
+            f'样本 {esc(hist.get("sample_weeks"))} 周）。'
+            '只展示，不进入 V 与结论。</p>\n'
+        )
     vrows = []
     for part in v.get("parts") or []:
         vrows.append(
@@ -969,8 +986,9 @@ def _section_score(data: dict[str, Any]) -> str:
     <div class="metric"><div class="k">质量分 Q</div><div class="v" data-metric="q" data-risks-hit="{risk_hits}" data-risks-watch="{risk_watches}">{n(qs, 1)}</div><div class="note">{esc(q.get('grade'))} · 风险检查 {risk_known}/{risk_applicable} 已知</div>
       {f'<div class="note">{esc(consist_note)}</div>' if consist_note else ''}
       {_bar(qs, _score_class(qs))}</div>
-    <div class="metric"><div class="k">估值分 V</div><div class="v" data-metric="v">{n(vs, 1)}</div><div class="note">{esc(v.get('grade'))}</div>
-      {_bar(vs, _score_class(vs))}</div>
+    <div class="metric"><div class="k">{'估值分 V（历史分位参考）' if hist_score is not None else '估值分 V'}</div><div class="v" data-metric="{'v-hist' if hist_score is not None else 'v'}">{n(hist_score if hist_score is not None else vs, 1)}</div><div class="note">{esc(hist.get('grade')) + ' · ' + esc(hist.get('verdict')) if hist_score is not None else esc(v.get('grade'))}</div>
+      {f'<div class="note">机构 V 无覆盖；只展示，不参与结论</div>' if hist_score is not None else ''}
+      {_bar(hist_score if hist_score is not None else vs, _score_class(hist_score if hist_score is not None else vs))}</div>
     <div class="metric"><div class="k">结论</div><div class="v" data-metric="conclusion" style="font-size:19px">{esc(decision.get('label'))}</div>
       <div class="note">{esc(decision.get('reason'))}</div></div>
   </div>
@@ -987,7 +1005,7 @@ def _section_score(data: dict[str, Any]) -> str:
   <table><thead><tr><th>维度</th><th>得分 / 100</th><th>原始值</th></tr></thead><tbody>{''.join(vrows)}</tbody></table>
   <p class="small">V 分 = {_v_formula_text()}；缺失项按可用权重归一。
      无机构覆盖时 V 不计算，但 Q 分正常展示。</p>
-{tail_html}
+{hist_note}{tail_html}
   <p class="small">机构预期直接决定 V 分；评级分布只展示，不参与打分。</p>
 </section>"""
 

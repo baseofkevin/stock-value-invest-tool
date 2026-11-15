@@ -127,6 +127,26 @@ def _forecast(fc: dict[str, Any] | None) -> dict[str, Any]:
             "rows": rows}
 
 
+def _historical(h: dict[str, Any] | None) -> dict[str, Any]:
+    """历史分位参考分只给页面展示，不进 score/decision。"""
+    h = h or {}
+    return {
+        "available": bool(h.get("available")),
+        "score": _num(h.get("score")),
+        "grade": h.get("grade") or "",
+        "verdict": h.get("verdict") or "",
+        "median_percentile": _num(h.get("median_percentile")),
+        "sample_weeks": h.get("sample_weeks") or 0,
+        "spread": _num(h.get("spread")),
+        "metrics": [{
+            "key": m.get("key") or "",
+            "label": m.get("label") or "",
+            "percentile": _num(m.get("percentile")),
+        } for m in (h.get("metrics") or [])],
+        "reason": h.get("reason") or "",
+    }
+
+
 def build_detail(data: dict[str, Any] | None) -> dict[str, Any]:
     """`data`（compute_scores 的输出）→ 页面用的明细 dict。"""
     if not data:
@@ -160,6 +180,7 @@ def build_detail(data: dict[str, Any] | None) -> dict[str, Any]:
             "grade": v.get("grade") or "",
             "coverage": _num(v.get("coverage"), 0),
             "parts": _v_parts(v.get("parts")),
+            "historical": _historical(v.get("historical")),
         },
         "risks": _risks(risks),
         "risk_counts": counts,

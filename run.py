@@ -50,6 +50,7 @@ import datetime as dt
 import json
 import os
 import re
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -408,13 +409,25 @@ def run_step(tee: Tee, title: str, argv: list[str], cwd: Path, *,
     proc = subprocess.Popen(argv, cwd=str(cwd), env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             bufsize=0)
-    _pump(tee, proc)
-    code = proc.wait()
+    try:
+        _pump(tee, proc)
+        code = proc.wait()
+    except BaseException:
+        # Ctrl-C 只杀到 wrapper 的话，子进程会被 init 收养、继续取数写库，
+        # 下次再跑就像"怎么又慢又有旧数据"。先礼后兵，确保它一起停。
+        if proc.poll() is None:
+            try:
+                proc.send_signal(signal.SIGINT)
+                proc.wait(timeout=10)
+            except (OSError, subprocess.TimeoutExpired):
+                proc.kill()
+                proc.wait()
+        raise
     spent = time.time() - t0
     LAST_SPENT["s"] = spent
 
     tail = [f"{spent:.1f}s"]
-    if tool and day:
+    if tool and day and code in (0, 1):
         n_ok, n_fail = step_stats(tool, day)
         if n_ok >= 0:
             tail.insert(0, f"{n_ok} 只")
@@ -505,40 +518,58 @@ def step_select(tee: Tee, day: str, extra: list[str]) -> int:
     return 0
 
 
-def step_cycle(tee: Tee, day: str, extra: list[str], stock: str | None = None) -> int:
-    """周期弹性。`stock` 给了就是单只模式（不依赖当天名单）。"""
+def step_cycle(tee: Tee, day: str, extra: list[str], stock: str | None = None,
+               csv_path: Path | None = None, tool_args: list[str] | None = None) -> int:
+    """周期弹性。`stock` 单只、`csv_path` 走 CSV，都不依赖当天名单。"""
+    tool_args = tool_args or []
     if stock:
-        argv = [sys.executable, "cycle_report.py", "--stock", stock] + extra
+        argv = [sys.executable, "cycle_report.py", "--stock", stock] + tool_args + extra
         code, _ = run_step(tee, f"② 周期弹性 stock_cycle_elastic（{stock} 单只）",
                            argv, ROOT / "stock_cycle_elastic",
                            short=f"② 周期弹性（{stock}）", echo=True)
+        return code
+    if csv_path:
+        argv = ([sys.executable, "cycle_report.py", "--csv", str(csv_path)]
+                + tool_args + extra)
+        code, _ = run_step(tee, f"② 周期弹性 stock_cycle_elastic（CSV {csv_path.name}）",
+                           argv, ROOT / "stock_cycle_elastic",
+                           short=f"② 周期弹性（CSV {csv_path.name}）")
         return code
     n = select_count(day)
     if n <= 0:
         tee.alert(f"❌ 结果库里没有 {day} 的选股名单；"
                   f"先跑：python3 run.py select --date {day}")
         return 2
-    argv = [sys.executable, "cycle_report.py", "--from-select", day] + extra
+    argv = [sys.executable, "cycle_report.py", "--from-select", day] + tool_args + extra
     code, _ = run_step(tee, f"② 周期弹性 stock_cycle_elastic（{day}）",
                        argv, ROOT / "stock_cycle_elastic",
                        short=f"② 周期弹性（{day}）", tool="cycle", day=day)
     return code
 
 
-def step_quality(tee: Tee, day: str, extra: list[str], stock: str | None = None) -> int:
-    """质量初筛。`stock` 给了就是单只模式（不依赖当天名单）。"""
+def step_quality(tee: Tee, day: str, extra: list[str], stock: str | None = None,
+                 csv_path: Path | None = None, tool_args: list[str] | None = None) -> int:
+    """质量初筛。`stock` 单只、`csv_path` 走 CSV，都不依赖当天名单。"""
+    tool_args = tool_args or []
     if stock:
-        argv = [sys.executable, "stock_report.py", "--stock-code", stock] + extra
+        argv = [sys.executable, "stock_report.py", "--stock-code", stock] + tool_args + extra
         code, _ = run_step(tee, f"③ 质量初筛 stock_quality_screen（{stock} 单只）",
                            argv, ROOT / "stock_quality_screen",
                            short=f"③ 质量初筛（{stock}）", echo=True)
+        return code
+    if csv_path:
+        argv = ([sys.executable, "stock_report.py", "--csv", str(csv_path)]
+                + tool_args + extra)
+        code, _ = run_step(tee, f"③ 质量初筛 stock_quality_screen（CSV {csv_path.name}）",
+                           argv, ROOT / "stock_quality_screen",
+                           short=f"③ 质量初筛（CSV {csv_path.name}）")
         return code
     n = select_count(day)
     if n <= 0:
         tee.alert(f"❌ 结果库里没有 {day} 的选股名单；"
                   f"先跑：python3 run.py select --date {day}")
         return 2
-    argv = [sys.executable, "stock_report.py", "--from-select", day] + extra
+    argv = [sys.executable, "stock_report.py", "--from-select", day] + tool_args + extra
     code, _ = run_step(tee, f"③ 质量初筛 stock_quality_screen（{day}）",
                        argv, ROOT / "stock_quality_screen",
                        short=f"③ 质量初筛（{day}）", tool="quality", day=day)
@@ -570,12 +601,23 @@ def step_top(tee: Tee, day: str, codes: list[str], extra: list[str],
     比在这里一只只 fork 快得多，失败也不会中断其余的。
     """
     if csv_path is not None:
-        n = select_count(day)
-        if n <= 0:
-            tee.alert(f"❌ 结果库里没有 {day} 的选股名单")
-            return 2
-        argv = py_module("stock_judge_top") + [
-            "--from-select", day, "--date", day, "--workers", str(workers)] + extra
+        if str(csv_path) == "results":
+            n = select_count(day)
+            if n <= 0:
+                tee.alert(f"❌ 结果库里没有 {day} 的选股名单")
+                return 2
+            argv = py_module("stock_judge_top") + [
+                "--from-select", day, "--date", day, "--workers", str(workers)] + extra
+            label = f"批量 {n} 只 @ {day}"
+        else:
+            csv_path = Path(csv_path)
+            if not csv_path.is_file():
+                tee.alert(f"❌ CSV 不是文件：{csv_path}")
+                return 2
+            argv = py_module("stock_judge_top") + [
+                "--csv", str(csv_path), "--date", day,
+                "--workers", str(workers)] + extra
+            label = f"CSV {csv_path.name} @ {day}"
         if tee.verbose:
             if "--verbose" not in argv and "-v" not in argv:
                 argv.append("--verbose")
@@ -583,8 +625,8 @@ def step_top(tee: Tee, day: str, codes: list[str], extra: list[str],
             # 四因子表在「顶部」页看得更清楚；但逐只进度行要留着——
             # `run.py` 拿它画进度条（`--progress` 只开进度、不开报告表）。
             argv.extend(["--quiet", "--progress"])
-        rc, _ = run_step(tee, f"④ 顶部判断 stock_judge_top（批量 {n} 只 @ {day}）",
-                         argv, ROOT, short=f"④ 顶部判断（{n} 只 @ {day}）",
+        rc, _ = run_step(tee, f"④ 顶部判断 stock_judge_top（{label}）",
+                         argv, ROOT, short=f"④ 顶部判断（{label}）",
                          tool="top", day=day)
         return rc
 
@@ -735,19 +777,43 @@ def cmd_single(action: str):
         day, rc = ensure_calendar(tee, args.date, auto=not args.no_calendar)
         if not day:
             return rc or 1
+        if action in ("cycle", "quality") and getattr(args, "csv", None):
+            say("ℹ️  CSV 模式：股票名单全部来自该文件；"
+                "上面的日期只作运行标记，不会改变名单。")
         if action == "select":
             return step_select(tee, day, args.extra)
         if action in ("cycle", "quality"):
             stock = getattr(args, "stock", None)
+            csv_path = None
+            tool_args = []
+            for attr, flag in (("workers", "--workers"), ("retries", "--retries"),
+                               ("retry_wait", "--retry-wait"), ("timeout", "--timeout")):
+                val = getattr(args, attr, None)
+                if val is not None:
+                    tool_args += [flag, str(val)]
+            if getattr(args, "force", False):
+                tool_args.append("--force")
+            if getattr(args, "csv", None):
+                csv_path = Path(args.csv).expanduser()
+                if not csv_path.is_absolute():
+                    csv_path = ROOT / csv_path
+                if stock:
+                    tee.alert("❌ --stock 和 --csv 二选一。")
+                    return 2
+                if not csv_path.is_file():
+                    tee.alert(f"❌ CSV 不是文件：{csv_path}")
+                    return 2
             if stock:
                 rc = note_single_date(tee, day, args.date)
                 if rc:
                     return rc
                 return (step_cycle if action == "cycle" else step_quality)(
-                    tee, day, args.extra, stock)
+                    tee, day, args.extra, stock, tool_args=tool_args)
             return (step_cycle if action == "cycle" else step_quality)(
-                tee, day, args.extra)
+                tee, day, args.extra, csv_path=csv_path, tool_args=tool_args)
         if action == "top":
+            if getattr(args, "refresh", False) and "--refresh" not in args.extra:
+                args.extra.append("--refresh")
             csv_path = None
             if getattr(args, "from_select", False):
                 csv_path = "results"          # 只是一个"走批量"的开关
@@ -755,6 +821,9 @@ def cmd_single(action: str):
                 csv_path = Path(args.csv).expanduser()
                 if not csv_path.is_absolute():
                     csv_path = ROOT / csv_path
+                if not csv_path.is_file():
+                    tee.alert(f"❌ CSV 不是文件：{csv_path}")
+                    return 2
             return step_top(tee, day, args.codes or [], args.extra,
                             csv_path=csv_path, workers=getattr(args, "workers", 4))
         raise AssertionError(action)
@@ -1033,10 +1102,18 @@ def build_parser() -> argparse.ArgumentParser:
   ./run.py backup                         # 备份数据库（VACUUM INTO + 保留 7 份）
   ./run.py all --no-web                   # 跑完不起看板（放进定时任务时用）
 
+  # 自己给名单：--csv 直接读 CSV 的代码列，不依赖 results.db 里的选股记录
+  ./run.py cycle   --csv ~/MyData/选股_2026-11-06.csv
+  ./run.py quality --csv ~/MyData/选股_2026-11-06.csv --workers 2
+  ./run.py quality --csv ~/MyData/选股_2026-11-06.csv --workers 2 --retries 0
+  ./run.py top     --csv ~/MyData/选股_2026-11-06.csv
+
 不带参数只打印本帮助，不跑任何程序（全流程要三十多分钟，免得误敲回车就开跑）。
 
-下游（cycle/quality/top）认的是 results.db 里「基准日 = 那一天」的选股运行记录，
-所以它们的 --date 必须和那天的选股一致；不给就按「今天（过了 15:05）」算。
+cycle/quality/top 默认从 results.db 取「基准日 = --date 那一天」的选股名单，
+所以 --date 必须和那天的选股一致；不给就按「今天（过了 15:05）」算。
+用 --csv 时名单来自 CSV，不再依赖 results.db 的选股记录：
+quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 二选一。
 四个工具都不再产出 CSV/HTML：结果只进 results.db，人看结果用 ./run.py web。""")
     p.add_argument("-v", "--verbose", action="store_true",
                    help="不画进度条，把子进程的原始输出全部打到屏幕上"
@@ -1082,23 +1159,62 @@ def build_parser() -> argparse.ArgumentParser:
     for name, helptext, flag in (
             ("cycle", "只跑周期弹性 stock_cycle_elastic", "--stock"),
             ("quality", "只跑质量初筛 stock_quality_screen", "--stock-code")):
-        sp = sub.add_parser(name, help=helptext + "（批量或单只）")
+        if name == "quality":
+            examples = """示例：
+  ./run.py quality --stock 600519
+  ./run.py quality --csv ~/MyData/选股_2026-11-06.csv --workers 2
+  ./run.py quality --csv ~/MyData/选股_2026-11-06.csv --workers 2 --retries 0
+  ./run.py quality --csv ~/MyData/选股_2026-11-06.csv --force
+"""
+        else:
+            examples = """示例：
+  ./run.py cycle --stock 600519
+  ./run.py cycle --csv ~/MyData/选股_2026-11-06.csv
+  ./run.py cycle --csv ~/MyData/选股_2026-11-06.csv --workers 4
+"""
+        sp = sub.add_parser(name, help=helptext + "（批量或单只）",
+                            formatter_class=argparse.RawDescriptionHelpFormatter,
+                            epilog=examples)
         add_date(sp)
         add_verbose(sp)
         sp.add_argument("--stock", metavar="代码", default=None,
                         help=f"单只模式：只跑这一只（转成 {flag}），不需要当天的选股名单")
+        sp.add_argument("--csv", metavar="CSV", default=None,
+                        help="批量：从该 CSV 读代码列（与 --stock 二选一；"
+                             "不依赖 results.db 的名单，--date 仅作运行标记）")
+        sp.add_argument("--workers", type=int, default=None,
+                        help="批量并发数（默认用工具自己的 4）")
+        sp.add_argument("--force", action="store_true",
+                        help="批量模式忽略库里已有结论，全部重算")
+        if name == "quality":
+            sp.add_argument("--retries", type=int, default=None,
+                            help="取数失败重试次数（默认 2；0 = 失败即跳过）")
+            sp.add_argument("--retry-wait", type=float, default=None,
+                            help="重试等待秒数（默认 60）")
+            sp.add_argument("--timeout", type=float, default=None,
+                            help="单次取数超时秒数（默认 90）")
         sp.add_argument("extra", nargs="*", default=[], help="透传给该程序的参数")
 
-    sp = sub.add_parser("top", help="顶部判断 stock_judge_top（单只/多只/名单批量）")
+    sp = sub.add_parser("top", help="顶部判断 stock_judge_top（单只/多只/名单批量）",
+                        formatter_class=argparse.RawDescriptionHelpFormatter,
+                        epilog="""示例：
+  ./run.py top 600519
+  ./run.py top sh600519 sz000001
+  ./run.py top --csv ~/MyData/持仓.csv
+  ./run.py top --from-select --date 2026-11-13
+""")
     add_date(sp)
     add_verbose(sp)
     sp.add_argument("codes", nargs="*", default=[],
                     help="股票代码，如 sh600519 600519 600519.SH（与 --csv 二选一）")
     sp.add_argument("--csv", metavar="CSV", default=None,
-                    help="批量：从该 CSV 读代码列（代码/股票代码/证券代码/code）")
+                    help="批量：从该 CSV 读代码列（代码/股票代码/证券代码/code；"
+                         "不依赖 results.db 的名单）")
     sp.add_argument("--from-select", action="store_true",
                     help="批量：直接用结果库里当天的选股名单（基准日 = --date）")
     sp.add_argument("--workers", type=int, default=4, help="批量并发线程数，默认 4")
+    sp.add_argument("--refresh", action="store_true",
+                    help="忽略缓存重新取数，并把库里已有结果也重算")
     sp.add_argument("extra", nargs="*", default=[], help="透传给 stock_judge_top 的参数")
 
     sp = sub.add_parser("backup", help="备份 shared.db / results.db 到 backup/（VACUUM INTO）")

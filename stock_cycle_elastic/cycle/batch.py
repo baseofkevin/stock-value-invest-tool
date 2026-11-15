@@ -216,11 +216,16 @@ def run_batch(items, workers=4, force=False, progress=None, target_date=None):
             if progress:
                 progress(done, total, item.code, item.ok, item.error)
 
-    if workers <= 1:
-        for item in pending:
-            work(item)
-    else:
-        _run_threaded(pending, work, workers)
+    try:
+        if workers <= 1:
+            for item in pending:
+                work(item)
+        else:
+            _run_threaded(pending, work, workers)
+    except KeyboardInterrupt:
+        # 中断前已算完的先入库，重跑才能跳过；不然调用方那句"已写进库"是假的。
+        _save_results(results, target_date)
+        raise
 
     _save_results(results, target_date)
     return results

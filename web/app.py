@@ -300,21 +300,18 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             rows = {t: db.symbol_row(c, t, symbol) for t in db.ORDER}
             if not any(rows.values()):
                 abort(404)
-            hist = db.symbol_histories(c, symbol)
-            timeline = db.symbol_timeline(c, symbol)
             name = next((r.get("name") for r in rows.values() if r and r.get("name")), symbol)
             top_row = rows.get("top") or {}
             top_data = top_row.get("data") or {}
             return render_template(
-                "stock.html", symbol=symbol, name=name, rows=rows, hist=hist,
-                timeline=timeline,
+                "stock.html", symbol=symbol, name=name, rows=rows,
                 # views_full 比 views 多出 headline / metrics：单只页那张卡要能
                 # 说清楚"为什么是这个结论"，只有状态词是不够的。
                 views=top_data.get("views_full") or top_data.get("views") or [],
                 extras=top_data.get("extras") or {},
                 gaps=top_data.get("gaps") or [],
                 active=active, tabs=TAB_TOOLS, tab_label=TAB_LABEL,
-                came_from=focus, active_row=rows.get(active),
+                active_row=rows.get(active),
                 active_label=TAB_LABEL.get(active, ""))
 
 

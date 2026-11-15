@@ -95,6 +95,50 @@ class ReadTargetsTest(unittest.TestCase):
         self.assertEqual([t["code"] for t in targets], ["sh688016", "bj920002"])
 
 
+class ReuseTest(unittest.TestCase):
+    def test_keyboard_interrupt_saves_completed_rows(self) -> None:
+        """Ctrl-C 时已完成的行要先入库，重跑才能跳过。"""
+        from stock_data_fetch import results as results_db
+        calls = []
+
+        def fake(target, *a, **k):
+            calls.append(target)
+            if len(calls) == 1:
+                return {"code": target["code"], "name": target["name"],
+                        "ok": True, "views": []}
+            raise KeyboardInterrupt
+
+        orig = batch._one
+        batch._one = fake
+        try:
+            rc = batch.run_targets(
+                [{"code": "sh600519", "name": "贵州茅台"},
+                 {"code": "sz000001", "name": "平安银行"}],
+                "2026-11-20", workers=1, quiet=True)
+        finally:
+            batch._one = orig
+        self.assertEqual(rc, 130)
+        rows = results_db.latest_for("top", "2026-11-20")
+        self.assertEqual([r["symbol"] for r in rows], ["sh600519"])
+
+    def test_existing_rows_are_reused(self) -> None:
+        """同一基准日已算过的票不再重跑；--refresh 才强制重算。"""
+        from stock_data_fetch import results as results_db
+        results_db.save("top", [{"code": "sh600519", "name": "贵州茅台",
+                                 "close": 1500.0, "views": []}],
+                        "2026-11-13", argv="test")
+        calls = []
+        orig = batch._one
+        batch._one = lambda *a, **k: calls.append(a) or {"ok": False}
+        try:
+            rc = batch.run_targets([{"code": "sh600519", "name": "贵州茅台"}],
+                                   "2026-11-13", quiet=True)
+        finally:
+            batch._one = orig
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, [])
+
+
 class CliGuardTest(unittest.TestCase):
     """参数校验必须发生在取数之前，否则错用会先打一遍上游再报错。"""
 

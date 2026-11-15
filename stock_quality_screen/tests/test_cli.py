@@ -214,6 +214,16 @@ class TestScoreLine(unittest.TestCase):
     def test_unknown_is_dash(self):
         self.assertIn("—", self.line({"quality": {}, "valuation_score": {}}))
 
+    def test_historical_reference_is_extra_line(self):
+        text = self.line({"quality": {"score": 55.0},
+                          "valuation_score": {"score": None, "historical": {
+                              "available": True, "score": 45.0,
+                              "grade": "中偏高", "verdict": "略偏贵",
+                              "sample_weeks": 252}}})
+        self.assertIn("估值分 V —", text)
+        self.assertIn("历史分位参考 45.0 / 100", text)
+        self.assertIn("不参与结论", text)
+
     def test_mixed(self):
         text = self.line({"quality": {"score": 50.0},
                           "valuation_score": {"not_applicable": True}})

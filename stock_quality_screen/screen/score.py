@@ -1098,6 +1098,87 @@ def _forecast_metrics(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _historical_valuation(data: dict[str, Any]) -> dict[str, Any]:
+    """历史分位参考分：只回答“当前估值在自身历史里贵不贵”。
+
+    它与机构口径的 V **不是一回事**：V 含目标价、预测 PE 与未来增速，衡量预期回报；
+    这里只有 PE/PB/PS 的历史分位，衡量当前位置。因此只展示，不写回 `v["score"]`，
+    也不参与 `_decision()`。口径与报告第三节的“估值位置”完全一致：取可用分位的
+    中位数，>=2 个口径、>=52 周才给分；PE 为负时该口径的 percentile 本来就是 None。
+    """
+    val = data.get("valuation") or {}
+    metrics = val.get("metrics") or {}
+    sample = val.get("sample") or {}
+    try:
+        points = int(sample.get("points") or 0)
+    except (TypeError, ValueError):
+        points = 0
+    items: list[dict[str, Any]] = []
+    for key in ("pe", "pb", "ps"):
+        m = metrics.get(key) or {}
+        p = num(m.get("percentile"))
+        if p is None:
+            continue
+        items.append({
+            "key": key,
+            "label": m.get("label") or key.upper(),
+            "percentile": round(p, 1),
+            "current": num(m.get("current")),
+            "points": int(m.get("points") or 0),
+        })
+
+    base: dict[str, Any] = {
+        "available": False,
+        "method": "historical_percentile",
+        "score": None,
+        "grade": "",
+        "verdict": "",
+        "median_percentile": None,
+        "sample_weeks": points,
+        "spread": round(max(x["percentile"] for x in items)
+                        - min(x["percentile"] for x in items), 1) if items else None,
+        "metrics": items,
+        "reason": "",
+    }
+    if not items:
+        base["reason"] = "没有可用的 PE/PB/PS 历史分位"
+        return base
+    if points < config.VAL_MIN_SAMPLE_WEEKS:
+        base["reason"] = (f"历史分位样本仅 {points} 周（不足 "
+                          f"{config.VAL_MIN_SAMPLE_WEEKS} 周），不给分")
+        return base
+    if len(items) < config.HIST_VAL_MIN_METRICS:
+        base["reason"] = (f"可用历史分位只有 {len(items)} 个口径"
+                          f"（少于 {config.HIST_VAL_MIN_METRICS} 个），不给分")
+        return base
+
+    spread = max(x["percentile"] for x in items) - min(x["percentile"] for x in items)
+    if spread > config.VAL_SPREAD_STRONG:
+        # 三个口径自己打架时，中位数会把“一个极低值 + 一个极高值”压成一个看似明确的位置。
+        # 例如 PE 13%、PB 5%、PS 69%，中位 13.5% 会被读成“偏便宜”，但 PS 已经在高位。
+        # 与第三节那句话同一原则：位置本身给不出统一结论时，不给分。
+        base["reason"] = (f"分位跨度 {spread:.0f}pp（超过 "
+                          f"{config.VAL_SPREAD_STRONG:.0f}pp），口径分歧过大，不给分")
+        return base
+    mid = median([x["percentile"] for x in items])
+    if mid is None:
+        base["reason"] = "历史分位中位数无法计算"
+        return base
+    band, verdict = "—", ""
+    for low, high, name, word in config.VAL_BANDS:
+        if low <= mid < high:
+            band, verdict = name, word
+            break
+    base.update({
+        "available": True,
+        "score": round(max(0.0, min(100.0, 100.0 - mid)), 1),
+        "grade": band,
+        "verdict": verdict,
+        "median_percentile": round(mid, 1),
+    })
+    return base
+
+
 def _valuation_score(data: dict[str, Any]) -> dict[str, Any]:
     """机构口径 V 分：机构估值 60% + 未来净利增速 40%。
 
@@ -1161,7 +1242,8 @@ def _valuation_score(data: dict[str, Any]) -> dict[str, Any]:
     else:
         grade = "明显高估"
     return {"score": round(total, 1) if total is not None else None, "grade": grade,
-            "parts": parts, "coverage": round(max_available, 1)}
+            "parts": parts, "coverage": round(max_available, 1),
+            "historical": _historical_valuation(data)}
 
 
 def _data_quality(data: dict[str, Any], q: dict[str, Any], checks: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1450,7 +1532,11 @@ def compute_scores(data: dict[str, Any]) -> dict[str, Any]:
         q = {"score": None, "grade": "金融股不适用", "groups": [], "coverage": 0.0,
              "not_applicable": True}
         v = {"score": None, "grade": "金融股不适用", "parts": [], "coverage": 0.0,
-             "not_applicable": True}
+             "not_applicable": True,
+             "historical": {"available": False, "method": "historical_percentile",
+                            "score": None, "grade": "", "verdict": "",
+                            "median_percentile": None, "sample_weeks": 0,
+                            "metrics": [], "reason": "金融股不适用"}}
     checks = _risk_checks(data)
     fatal = _fatal(data, checks)
     hits = [c for c in checks if c["status"] == "hit"]

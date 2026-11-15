@@ -586,5 +586,97 @@ class TestComputeScoresShape(unittest.TestCase):
                          dq["risk_total"])
 
 
+class TestHistoricalV(unittest.TestCase):
+    """历史分位参考分：只展示，绝不改写机构 V 或决策。"""
+
+    @staticmethod
+    def _data(metrics, points=252, **extra):
+        return helpers.data_with_annual(
+            helpers.annual_series(5),
+            valuation={"metrics": metrics, "sample": {"points": points}},
+            **extra,
+        )
+
+    @staticmethod
+    def _metric(label, pct, points=252):
+        return {"label": label, "percentile": pct, "current": 1.0,
+                "points": points}
+
+    def test_uses_median_of_two_metrics(self):
+        data = self._data({
+            "pb": self._metric("PB", 44.0),
+            "ps": self._metric("PS(TTM)", 66.0),
+        })
+        v = score._valuation_score(data)
+        self.assertIsNone(v["score"])
+        h = v["historical"]
+        self.assertTrue(h["available"])
+        self.assertEqual(h["score"], 45.0)
+        self.assertEqual(h["median_percentile"], 55.0)
+        self.assertEqual(h["grade"], "中偏高")
+        self.assertEqual(h["verdict"], "略偏贵")
+
+    def test_short_sample_does_not_score(self):
+        data = self._data({
+            "pb": self._metric("PB", 20.0, points=30),
+            "ps": self._metric("PS(TTM)", 30.0, points=30),
+        }, points=30)
+        h = score._valuation_score(data)["historical"]
+        self.assertFalse(h["available"])
+        self.assertIsNone(h["score"])
+        self.assertIn("样本仅 30 周", h["reason"])
+
+    def test_one_metric_does_not_score(self):
+        data = self._data({"pb": self._metric("PB", 20.0)})
+        h = score._valuation_score(data)["historical"]
+        self.assertFalse(h["available"])
+        self.assertIsNone(h["score"])
+        self.assertIn("只有 1 个口径", h["reason"])
+
+    def test_negative_pe_metric_is_ignored(self):
+        data = self._data({
+            "pe": {"label": "PE(TTM)", "percentile": None, "current": None,
+                   "points": 252},
+            "pb": self._metric("PB", 40.0),
+            "ps": self._metric("PS(TTM)", 60.0),
+        })
+        h = score._valuation_score(data)["historical"]
+        self.assertTrue(h["available"])
+        self.assertEqual([m["key"] for m in h["metrics"]], ["pb", "ps"])
+        self.assertEqual(h["score"], 50.0)
+
+    def test_wide_spread_does_not_score(self):
+        data = self._data({
+            "pe": self._metric("PE(TTM)", 5.0),
+            "pb": self._metric("PB", 10.0),
+            "ps": self._metric("PS(TTM)", 80.0),
+        })
+        h = score._valuation_score(data)["historical"]
+        self.assertFalse(h["available"])
+        self.assertIsNone(h["score"])
+        self.assertIn("分歧过大", h["reason"])
+
+    def test_compute_scores_keeps_v_and_decision_unknown(self):
+        data = self._data({
+            "pb": self._metric("PB", 44.0),
+            "ps": self._metric("PS(TTM)", 66.0),
+        })
+        r = score.compute_scores(data)
+        self.assertIsNone(r["valuation_score"]["score"])
+        self.assertEqual(r["valuation_score"]["historical"]["score"], 45.0)
+        # 历史分位不是机构 V：结论仍是“数据不足”，不能被它改成可买/回避。
+        self.assertEqual(r["decision"]["key"], "unknown")
+        self.assertIn("数据不足", r["decision"]["label"])
+
+    def test_financial_stock_has_no_historical_fallback(self):
+        data = self._data(
+            {"pb": self._metric("PB", 20.0), "ps": self._metric("PS(TTM)", 30.0)},
+            meta={"code": "sh600036", "industry": "银行"},
+        )
+        v = score.compute_scores(data)["valuation_score"]
+        self.assertTrue(v.get("not_applicable"))
+        self.assertFalse(v["historical"]["available"])
+
+
 if __name__ == "__main__":
     unittest.main()

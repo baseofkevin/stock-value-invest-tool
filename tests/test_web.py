@@ -218,18 +218,18 @@ class TestBatches(WebCase):
         self.assertNotIn("宝钢股份", html)
 
 
-class TestTimeline(WebCase):
-    """个股页要把"同一只票的不同时间"逐条摆出来。"""
+class TestStockHistorySections(WebCase):
+    """个股页只摆工具报告，不再列历次结果、不再画结论变化图。"""
 
-    def test_each_run_is_listed(self):
+    def test_history_sections_are_gone(self):
         client = self.client()
         results_db.save("quality", [{"symbol": "sh600019", "name": "宝钢股份",
                                      "q": 61.2, "v": 70.0, "conclusion": "观察"}],
                         "2026-11-13", argv="test", db=self.db_path, kind="single")
         html = client.get("/stock/sh600019").get_data(as_text=True)
-        self.assertIn("历次结果", html)
-        self.assertIn("单只", html)                 # 来源列
-        self.assertIn("61.2", html)                 # 单只那次的 Q
+        self.assertNotIn("历次结果", html)
+        self.assertNotIn("结论怎么变的", html)
+        self.assertNotIn('id="hist"', html)
 
     def test_brief_formats_percent(self):
         """距 250 日高点在库里是小数（-0.21），时间线上要显示成 -21.0%。"""
@@ -474,6 +474,45 @@ class TestStockDetail(WebCase):
             with self.subTest(text=text):
                 self.assertIn(text, html)
 
+    def test_quality_historical_fallback_is_display_only(self):
+        """机构 V 为空但历史分位可用时，页面显示参考分并明确“不参与结论”。"""
+        client = self.client()
+        results_db.save("quality", [{
+            "symbol": "sh600019", "name": "宝钢股份", "q": 55.0,
+            "q_grade": "合格", "v": None, "v_grade": "数据不足",
+            "conclusion": "数据不足，不下结论", "reason": "无机构覆盖",
+            "risks_hit": 0, "risks_watch": 0, "risks_known": 14,
+            "payload": {"detail": {
+                "meta": {"industry": "钢铁"},
+                "q": {"score": 55.0, "grade": "合格", "coverage": 100,
+                      "groups": []},
+                "v": {"score": None, "grade": "数据不足", "coverage": 0,
+                      "parts": [],
+                      "historical": {"available": True, "score": 45.0,
+                                     "grade": "中偏高", "verdict": "略偏贵",
+                                     "median_percentile": 55.0,
+                                     "sample_weeks": 252, "spread": 22.0,
+                                     "metrics": [
+                                         {"key": "pb", "label": "PB",
+                                          "percentile": 44.0},
+                                         {"key": "ps", "label": "PS(TTM)",
+                                          "percentile": 66.0}]}},
+                "risks": [], "risk_counts": {}, "fatal": [],
+                "valuation": {"rows": [], "sample": ""},
+                "forecast": {"available": False, "rows": []},
+                "tracking": [],
+                "data_quality": {"risks_known": 14, "risks_total": 14,
+                                 "coverage": 100, "institution": 0,
+                                 "blockers": []},
+                "decision": {"label": "数据不足，不下结论",
+                             "reason": "无机构覆盖"},
+            }},
+        }], "2026-11-14", argv="test", db=self.db_path)
+        html = client.get("/stock/sh600019?focus=quality").get_data(as_text=True)
+        self.assertIn("历史分位参考", html)
+        self.assertIn("45.0", html)
+        self.assertIn("只展示，不参与结论", html)
+
     def test_cycle_detail_sections_and_charts(self):
         html = self.client().get("/stock/sh600019?focus=cycle").get_data(as_text=True)
         self.assertIn("判断① 是不是周期股", html)
@@ -547,6 +586,23 @@ class TestStockReports(WebCase):
             self.assertIn(f'href="/stock/sh600019?focus={tool}"', html)
             self.assertIn(label, html)
         self.assertIn('class="tab on" href="/stock/sh600019?focus=cycle"', html)
+
+    def test_report_page_drops_dashboard_chrome(self):
+        """有原版报告时整页换成报告版式：不再套深蓝 hero 和四张摘要卡。"""
+        client = self.client()
+        self._save_with_report("cycle", "sh600019", "周期报告", "<p>正文</p>")
+        html = client.get("/stock/sh600019?focus=cycle").get_data(as_text=True)
+        self.assertIn('class="stock-report"', html)       # body 换成报告底色
+        self.assertNotIn('class="cards"', html)           # 四张摘要卡让位
+        self.assertNotIn('class="hero', html)             # 报告自己的表头才是 hero
+
+    def test_old_row_without_report_keeps_dashboard_chrome(self):
+        """旧行没有原版报告：保留看板 hero + 卡片 + 明细视图。"""
+        client = self.client()
+        html = client.get("/stock/sh600019?focus=cycle").get_data(as_text=True)
+        self.assertNotIn('class="stock-report"', html)
+        self.assertIn('class="cards"', html)
+        self.assertIn('class="hero"', html)
 
     def test_report_route_404_when_row_has_no_report(self):
         resp = self.client().get("/stock/sh600019/report/top")

@@ -28,10 +28,12 @@
       <div class="v">{{ qd.q.score|num(1) }}</div>
       <div class="s">{{ qd.q.grade or '—' }}{% if qd.q.coverage is not none %} · 覆盖 {{ qd.q.coverage|num(0) }}%{% endif %}</div>
     </div>
+    {% set vh = qd.v.historical or {} %}
+    {% set v_show = vh.score if (qd.v.score is none and vh.available) else qd.v.score %}
     <div class="metric">
-      <div class="k">估值分 V</div>
-      <div class="v">{{ qd.v.score|num(1) if qd.v.score is not none else '—' }}</div>
-      <div class="s">{{ qd.v.grade or ('无机构覆盖，V 不参与' if qd.v.score is none else '') }}</div>
+      <div class="k">估值分 V{% if qd.v.score is none and vh.available %}（历史分位参考）{% endif %}</div>
+      <div class="v">{{ v_show|num(1) if v_show is not none else '—' }}</div>
+      <div class="s">{% if qd.v.score is none and vh.available %}{{ vh.grade or '—' }} · {{ vh.verdict or '' }} · 只展示，不参与结论{% else %}{{ qd.v.grade or ('无机构覆盖，V 不参与' if qd.v.score is none else '') }}{% endif %}</div>
     </div>
     <div class="metric">
       <div class="k">结论</div>

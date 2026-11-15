@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 <script src="{{ url_for('static', filename='chart.umd.min.js') }}"></script>
 </head>
-<body>
+<body class="{% block bodyclass %}{% endblock %}">
 <div class="topbar">
   <div class="topbar-inner">
     <div class="brand">个股研究看板<small>RESULTS.DB · 只读</small></div>

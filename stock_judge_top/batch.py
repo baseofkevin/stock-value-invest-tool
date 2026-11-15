@@ -20,6 +20,7 @@ can only be used in that same thread`，实测共用会只有第一个线程成�
 from __future__ import annotations
 
 import csv
+import json
 import threading
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -128,6 +129,35 @@ def _one(target: dict, end: str, refresh: bool, db: str | None) -> dict:
     }
 
 
+def _existing(end: str) -> dict[str, dict]:
+    """结果库里这个基准日已经算过的票：{code: 结果 dict}（供续跑复用）。"""
+    try:
+        from stock_data_fetch import results as results_db
+        rows = results_db.latest_for("top", end)
+    except Exception:                          # noqa: BLE001
+        return {}
+    out: dict[str, dict] = {}
+    for row in rows:
+        try:
+            payload = json.loads(row.get("payload") or "{}")
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict) or not payload:
+            continue
+        code = row.get("symbol") or payload.get("code")
+        if not code:
+            continue
+        try:
+            code = normalize_code(str(code))
+        except ValueError:
+            continue
+        payload["ok"] = True
+        payload["code"] = code
+        payload["name"] = row.get("name") or payload.get("name") or ""
+        out[code] = payload
+    return out
+
+
 def _pack_report(r: dict) -> str:
     """渲染原版四因子报告并压成入库串；渲染失败返回空串，不拖垮落库。"""
     try:
@@ -182,14 +212,28 @@ def run_targets(targets: list[dict], end: str, *, refresh: bool = False,
     这一截能占掉半屏。要看就加 `-v`。
     """
     total = len(targets)
-    print(f"批量顶部观察：{total} 只，基准日 {end}，并发 {workers}，来自 {source}")
-    log(f"[批量] {total} 只，基准日 {end}")
-
+    existing = {} if refresh else _existing(end)
     results: list[dict] = []
-    done = 0
+    pending: list[dict] = []
+    for t in targets:
+        hit = existing.get(t["code"])
+        if hit:
+            hit["name"] = t.get("name") or hit.get("name") or ""
+            results.append(hit)
+        else:
+            pending.append(t)
+    print(f"批量顶部观察：{total} 只，基准日 {end}，并发 {workers}，来自 {source}")
+    if results:
+        print(f"复用 {len(results)} 只（{end} 已算过；要重算加 --refresh），"
+              f"待跑 {len(pending)} 只")
+    log(f"[批量] {total} 只，基准日 {end}，复用 {len(results)} 只")
+
+    done = len(results)
+    pool = None
     try:
-        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-            futures = {pool.submit(_one, t, end, refresh, db): t for t in targets}
+        if pending:
+            pool = ThreadPoolExecutor(max_workers=max(1, workers))
+            futures = {pool.submit(_one, t, end, refresh, db): t for t in pending}
             for fut in as_completed(futures):
                 t = futures[fut]
                 try:
@@ -209,7 +253,18 @@ def run_targets(targets: list[dict], end: str, *, refresh: bool = False,
                     # 失败的照常报：数量少、每条都要人处理，藏起来没好处。
                     print(f"[{done:2d}/{total}] {r['code']} {r.get('name') or ''} "
                           f"失败：{r['error']}")
+    except KeyboardInterrupt:
+        # 已完成的结果先写库，重跑会跳过；别让这一批白跑。
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
+            pool = None
+        _save_results(results, end)
+        print("\n已中断：已完成的结果已写入 results.db；"
+              "重新运行会跳过库里已有的票。")
+        return 130
     finally:
+        if pool is not None:
+            pool.shutdown(wait=True)
         _close_thread_hub()
 
     # 按输入顺序排回来（as_completed 是完成顺序）

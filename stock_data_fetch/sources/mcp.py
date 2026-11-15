@@ -15,9 +15,14 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
+import os
+import ssl
+import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -120,8 +125,54 @@ class McpClient:
         self.headers = dict(headers or {})
         self.session_id: str | None = None
         self.last_error: str = ""
+        # 连接复用：一次批量要打几十次 tools/call，每次重新 TLS 握手实测
+        # 0.3–2.8s；复用后 0.15–0.35s。每个线程一条连接，Hub 不跨线程。
+        parts = urllib.parse.urlsplit(self.url)
+        self._scheme = parts.scheme or "https"
+        self._host = parts.hostname or ""
+        self._port = parts.port
+        self._path = parts.path or "/"
+        if parts.query:
+            self._path += "?" + parts.query
+        self._local = threading.local()
+        # 有代理时退回 urllib：http.client 不会自动走 HTTPS_PROXY。
+        self._use_proxy = bool(os.environ.get("HTTPS_PROXY")
+                               or os.environ.get("https_proxy")
+                               or os.environ.get("ALL_PROXY")
+                               or os.environ.get("all_proxy"))
 
     # ---- 底层 ----
+
+    def _conn(self):
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            if self._scheme == "http":
+                conn = http.client.HTTPConnection(self._host, self._port,
+                                                  timeout=self.timeout)
+            else:
+                conn = http.client.HTTPSConnection(
+                    self._host, self._port, timeout=self.timeout,
+                    context=ssl.create_default_context())
+            self._local.conn = conn
+        return conn
+
+    def _drop_conn(self) -> None:
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            finally:
+                self._local.conn = None
+
+    def _post_urllib(self, body: bytes, h: dict) -> tuple[int, dict, str]:
+        req = urllib.request.Request(self.url, data=body, headers=h)
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                return resp.status, dict(resp.headers), resp.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            return e.code, dict(e.headers or {}), e.read().decode("utf-8", "replace")
+        except urllib.error.URLError as e:
+            raise SourceUnavailable(f"连不上 {self.url}：{e.reason}") from e
 
     def _post(self, payload: dict) -> tuple[int, dict, str]:
         h = {"Content-Type": "application/json",
@@ -132,14 +183,26 @@ class McpClient:
             h["Authorization"] = "Bearer " + self.token
         if self.session_id:
             h["Mcp-Session-Id"] = self.session_id
-        req = urllib.request.Request(self.url, data=json.dumps(payload).encode(), headers=h)
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                return resp.status, dict(resp.headers), resp.read().decode("utf-8", "replace")
-        except urllib.error.HTTPError as e:
-            return e.code, dict(e.headers or {}), e.read().decode("utf-8", "replace")
-        except urllib.error.URLError as e:
-            raise SourceUnavailable(f"连不上 {self.url}：{e.reason}") from e
+        body = json.dumps(payload).encode()
+        if self._use_proxy or self._scheme not in ("http", "https"):
+            return self._post_urllib(body, h)
+
+        last: Exception | None = None
+        for attempt in range(2):
+            conn = self._conn()
+            try:
+                conn.request("POST", self._path, body=body, headers=h)
+                resp = conn.getresponse()
+                data = resp.read()
+                status, headers = resp.status, dict(resp.getheaders())
+                if resp.will_close:
+                    self._drop_conn()
+                return status, headers, data.decode("utf-8", "replace")
+            except (http.client.HTTPException, OSError) as e:
+                # 复用到的连接可能已被服务端关掉：丢掉重连一次，不让整只票失败。
+                last = e
+                self._drop_conn()
+        raise SourceUnavailable(f"连不上 {self.url}：{last}") from last
 
     def _rpc(self, method: str, params: dict) -> dict:
         status, headers, body = self._post(

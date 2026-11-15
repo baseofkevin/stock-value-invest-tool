@@ -405,6 +405,23 @@ class ParserTest(unittest.TestCase):
         self.assertIn("./run.py menu", text)
         self.assertNotIn("① 选股", text)
 
+    def test_help_lists_csv_examples_for_all_three_tools(self) -> None:
+        """`-h` 里要能直接抄到 cycle/quality/top 的 --csv 用法。"""
+        text = run.build_parser().format_help()
+        self.assertIn("./run.py cycle   --csv", text)
+        self.assertIn("./run.py quality --csv ~/MyData/选股_2026-11-06.csv --workers 2", text)
+        self.assertIn("--workers 2 --retries 0", text)
+        self.assertIn("./run.py top     --csv", text)
+
+    def test_subcommand_help_lists_csv_examples(self) -> None:
+        choices = run.build_parser()._subparsers._group_actions[0].choices
+        self.assertIn("--csv ~/MyData/选股_2026-11-06.csv --workers 2 --retries 0",
+                      choices["quality"].format_help())
+        self.assertIn("--csv ~/MyData/选股_2026-11-06.csv --workers 4",
+                      choices["cycle"].format_help())
+        self.assertIn("./run.py top --csv ~/MyData/持仓.csv",
+                      choices["top"].format_help())
+
     def test_top_accepts_code_or_csv(self) -> None:
         """top 三种用法：单只/多只代码、--csv、--from-select。"""
         p = run.build_parser()
@@ -413,7 +430,71 @@ class ParserTest(unittest.TestCase):
                          ["600519", "000001"])
         self.assertEqual(p.parse_args(["top", "--csv", "x.csv"]).csv, "x.csv")
         self.assertTrue(p.parse_args(["top", "--from-select"]).from_select)
+        self.assertTrue(p.parse_args(["top", "--refresh"]).refresh)
         self.assertEqual(p.parse_args(["top"]).codes, [])   # 运行时再报错
+
+    def test_cycle_and_quality_accept_csv(self) -> None:
+        """`--csv` 必须由 argparse 吃下：否则它会被透传到 extra 末尾，
+        变成 `--from-select <date> x.csv --csv`，工具直接报参数错。"""
+        p = run.build_parser()
+        for cmd in ("cycle", "quality"):
+            with self.subTest(cmd=cmd):
+                a = p.parse_args([cmd, "--csv", "x.csv"])
+                self.assertEqual(a.csv, "x.csv")
+                self.assertEqual(a.extra, [])
+
+    def test_cycle_and_quality_accept_workers_and_force(self) -> None:
+        """并发/重试参数也得由 argparse 吃下，否则 `--workers 8` 会被拆散。"""
+        p = run.build_parser()
+        q = p.parse_args(["quality", "--csv", "x.csv", "--workers", "8",
+                          "--retries", "0", "--force"])
+        self.assertEqual((q.workers, q.retries, q.force), (8, 0, True))
+        self.assertEqual(q.extra, [])
+        c = p.parse_args(["cycle", "--workers", "8", "--force"])
+        self.assertEqual((c.workers, c.force), (8, True))
+        self.assertEqual(c.extra, [])
+
+    def test_cycle_and_quality_forward_csv_without_from_select(self) -> None:
+        """给了 CSV 就不要再注入 --from-select（两者在工具里互斥）。"""
+        calls = []
+        orig = run.run_step
+
+        def fake(tee, title, argv, cwd, **kw):
+            calls.append(list(argv))
+            return 0, 0
+
+        run.run_step = fake
+        try:
+            run.step_quality(None, "2026-11-13", ["--force"], csv_path=Path("x.csv"))
+            run.step_cycle(None, "2026-11-13", [], csv_path=Path("x.csv"))
+        finally:
+            run.run_step = orig
+        self.assertEqual(calls[0][1:], ["stock_report.py", "--csv", "x.csv", "--force"])
+        self.assertEqual(calls[1][1:], ["cycle_report.py", "--csv", "x.csv"])
+        for argv in calls:
+            self.assertNotIn("--from-select", argv)
+
+    def test_top_csv_is_forwarded_not_turned_into_from_select(self) -> None:
+        """`top --csv` 必须把 CSV 交给 stock_judge_top，不能静默改跑库里名单。"""
+        calls = []
+        orig = run.run_step
+
+        def fake(tee, title, argv, cwd, **kw):
+            calls.append(list(argv))
+            return 0, 0
+
+        run.run_step = fake
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                csv = Path(tmp) / "持仓.csv"
+                csv.write_text("代码\n600019\n", encoding="utf-8")
+                run.step_top(type("T", (), {"verbose": False})(),
+                             "2026-11-13", [], [], csv_path=csv)
+        finally:
+            run.run_step = orig
+        self.assertIn("--csv", calls[0])
+        self.assertEqual(calls[0][calls[0].index("--csv") + 1], str(csv))
+        self.assertNotIn("--from-select", calls[0])
 
     def test_top_without_anything_is_rejected_at_runtime(self) -> None:
         """`top` 什么也不给时由 step_top 拦下（返回 2），不是靠 argparse。"""
@@ -460,11 +541,12 @@ class ParserTest(unittest.TestCase):
 
 class PassthroughUnknownTest(unittest.TestCase):
     def test_unknown_flags_go_to_extra(self) -> None:
-        """`--force` 这类子进程参数必须能透传，不能被 argparse 判成 unrecognized。"""
+        """没声明的子进程参数必须能透传，不能被 argparse 判成 unrecognized。"""
         p = run.build_parser()
-        args, unknown = p.parse_known_args(["cycle", "--stock", "600519", "--force"])
+        args, unknown = p.parse_known_args(["cycle", "--stock", "600519", "--foo"])
         self.assertEqual(args.stock, "600519")
-        self.assertEqual(unknown, ["--force"])
+        self.assertEqual(unknown, ["--foo"])
+        self.assertTrue(p.parse_args(["cycle", "--force"]).force)
 
 
 if __name__ == "__main__":

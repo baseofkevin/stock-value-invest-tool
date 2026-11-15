@@ -563,7 +563,8 @@ class TestBatchMode(unittest.TestCase):
             return self.fake_fetch_one(code, **kwargs)
 
         with mock.patch.object(fetch, "fetch_one", side_effect=counting):
-            code, out, err, _ = run_main(["--csv", csv_path], out_dir=self.out)
+            code, out, err, _ = run_main(["--csv", csv_path, "--force"],
+                                         out_dir=self.out)
         self.assertEqual(calls, ["601899"])
         self.assertEqual(code, cycle_report.EXIT_OK)
 
@@ -580,6 +581,21 @@ class TestBatchMode(unittest.TestCase):
                                self.fake_fetch_one(c, **k)):
             code, out, _, _ = run_main(["--from-select", "2026-11-13"],
                                        out_dir=self.out)
+        self.assertEqual(calls, [])
+        self.assertEqual(code, cycle_report.EXIT_OK)
+        self.assertIn("库里已有跳过 1 只", out)
+
+    def test_csv_reuses_existing_without_force(self):
+        """CSV 模式同样按当天续跑：第二次跑不再取数。"""
+        csv_path = make_csv(self.tmp, [("601899", "紫金矿业")])
+        with mock.patch.object(fetch, "fetch_one", side_effect=self.fake_fetch_one):
+            run_main(["--csv", csv_path, "--force"], out_dir=self.out)
+
+        calls = []
+        with mock.patch.object(fetch, "fetch_one",
+                               side_effect=lambda c, **k: calls.append(c) or
+                               self.fake_fetch_one(c, **k)):
+            code, out, _, _ = run_main(["--csv", csv_path], out_dir=self.out)
         self.assertEqual(calls, [])
         self.assertEqual(code, cycle_report.EXIT_OK)
         self.assertIn("库里已有跳过 1 只", out)

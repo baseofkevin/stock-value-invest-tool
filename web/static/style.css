@@ -219,12 +219,6 @@ table.grid tr.grouprow td{background:#f8fafc;font-weight:700;color:#334155;
   .metrics,.judge-3{grid-template-columns:1fr}
 }
 
-/* 压扁的 hero：个股页嵌着原版报告时，报告自己带表头，这里只留一行身份信息 */
-.hero.slim{padding:14px 20px;margin-bottom:12px;border-radius:14px}
-.hero.slim h1{font-size:19px;margin:2px 0 2px}
-.hero.slim p{font-size:12px;color:#b9c9d8}
-.hero.slim .eyebrow{font-size:10px;letter-spacing:.14em}
-
 /* ---------------------------------------------------------------- 个股页标签 */
 /* 三份工具报告一次只摆一份：标签在页面上方，像"文档切换"而不是三份文档摞着。
    标签本身不做 ajax——点一下换 ?focus=，整页重渲染（服务端只解压那一份报告）。 */
@@ -270,4 +264,73 @@ table.grid tr.grouprow td{background:#f8fafc;font-weight:700;color:#334155;
   body{background:#fff}
   .topbar{display:none}
   .panel,.card,.chart-box{box-shadow:none;break-inside:avoid}
+}
+
+/* ---------------------------------------------------------------- 报告版式 */
+/* 个股页一旦嵌的是工具原版报告，整页就按报告自己的设计语言走：
+   底色 #f5f6f4、墨绿主色、12px 圆角白卡片、1040 内容宽。
+   深蓝渐变 hero / 四张摘要卡 / 套在报告外面的那层 panel 全部让位——
+   报告自己已经有表头和卡片，再包一层就成了"卡片里套卡片"。
+   下面「取数缺口」「历次结果」「结论怎么变的」也换成同一套卡片，免得
+   一份报告看到底，突然接回看板的另一套样式。 */
+body.stock-report{background:#f5f6f4}
+body.stock-report .topbar{background:rgba(245,246,244,.9)}
+body.stock-report .page{max-width:1080px;padding:16px 20px 56px}
+
+body.stock-report .report-tabs{
+  padding:8px 10px;margin:0 20px 14px;background:#fff;
+  border:1px solid #e3e8ee;border-radius:12px;
+  box-shadow:0 1px 2px rgba(20,40,60,.03)}
+body.stock-report .report-tabs .tab{
+  padding:5px 12px;border-radius:999px;font-size:12.5px;font-weight:600;
+  color:#66727f;background:#f7f9fb;border:1px solid #e3e8ee}
+body.stock-report .report-tabs .tab:hover{
+  color:#2f6152;border-color:#b9c8c2;text-decoration:none}
+body.stock-report .report-tabs .tab.on{
+  background:#2f6152;border-color:#2f6152;color:#fff}
+body.stock-report .report-tabs .tab-meta{color:#8b98a5;font-size:11.5px}
+body.stock-report .report-tabs .tab-meta a{color:#2f6152;font-weight:600}
+
+/* 报告 iframe 直接铺在页面底色上：去掉外框、圆角和内边距，让它看起来就是
+   页面正文，而不是嵌在卡片里的一个小窗口。 */
+body.stock-report .report-panel{
+  padding:0;margin:0;background:transparent;border:0;border-radius:0;box-shadow:none}
+body.stock-report .report-frame{
+  background:#f5f6f4;border-radius:12px;box-shadow:none}
+
+/* 报告下方的三块：和报告里的 section 同一套尺寸与分隔线。 */
+body.stock-report .panel{
+  padding:20px 22px;margin:14px 20px;background:#fff;
+  border:1px solid #e3e8ee;border-radius:12px;
+  box-shadow:0 1px 2px rgba(20,40,60,.03)}
+body.stock-report .panel>h2{
+  font-size:18px;margin:0 0 12px;padding-bottom:8px;
+  border-bottom:2px solid #eef1f4;color:#2b3d36}
+body.stock-report .panel>.sub{
+  font-size:12px;color:#66727f;margin:0 0 14px;line-height:1.75}
+body.stock-report .tag{
+  background:transparent;color:#8b98a5;font-size:12px;font-weight:400;padding:0}
+
+body.stock-report table.grid{font-size:13px}
+body.stock-report table.grid th{
+  background:#f7f9fb;color:#40566a;font-size:11.5px;
+  border-bottom:1px solid #e3e8ee}
+body.stock-report table.grid td{border-bottom:1px solid #eef1f4}
+body.stock-report table.grid tbody tr:hover td{background:#f7f9fb}
+body.stock-report table.kv th{color:#40566a}
+body.stock-report table.kv th,body.stock-report table.kv td{border-bottom:1px solid #eef1f4}
+body.stock-report .chip{border-radius:999px;font-size:11px}
+body.stock-report .chip.good{color:#1f7a4d;background:#e8f4ec;border-color:#bfe3cd}
+body.stock-report .chip.info{color:#2f6152;background:#f2f7f5;border-color:#cfe0d9}
+
+body.stock-report .chart-box{border:0;background:transparent;padding:0}
+body.stock-report .foot{color:#66727f;font-size:12px;margin:22px 20px 0}
+body.stock-report .foot strong{color:#425466}
+
+@media (max-width:640px){
+  body.stock-report .page{padding:10px 12px 36px}
+  body.stock-report .report-tabs{margin:0 10px 12px}
+  body.stock-report .panel{margin:12px 10px;padding:16px 14px;border-radius:12px}
+  body.stock-report .panel>h2{font-size:16px}
+  body.stock-report .foot{margin:18px 10px 0}
 }

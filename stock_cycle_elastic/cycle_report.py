@@ -18,6 +18,7 @@
 """
 
 import argparse
+import datetime as dt
 import difflib
 import os
 import re
@@ -361,7 +362,8 @@ def run_batch(args):
         except ValueError as exc:
             sys.stderr.write(f"错误：{exc}\n")
             return EXIT_USAGE
-        target_date = None
+        # 和 quality 一样：CSV 模式也要有基准日，Ctrl-C 后重跑才能复用已算完的票。
+        target_date = dt.date.today().isoformat()
         source = os.path.basename(args.csv)
 
     if not items:

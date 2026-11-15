@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-VERSION = "0.9.11"   # 2.13.0 建议（改造文档）：盈利结构改名 + 垄断性标注 + 存续安全
+VERSION = "0.9.12"   # 2.13.0 建议（改造文档）：盈利结构改名 + 垄断性标注 + 存续安全
 
 PROJECT_DIR = Path(__file__).resolve().parent      # stock_quality_screen/
 HUB_DIR = PROJECT_DIR.parent                       # stock-value-invest-tool/
@@ -187,6 +187,9 @@ VAL_SPREAD_STRONG = 45.0   # 跨度超过这个值，措辞从「比」升到「
 # 10 个周样本落在序列最高点，也会被读成「历史顶部，估值明显偏贵」，
 # 这个结论只反映「这只股票上市没多久」，不反映估值位置。
 VAL_MIN_SAMPLE_WEEKS = 52
+# 历史分位参考分（V_hist）至少要有两个口径才算：只有一个 PB 时，位置没有交叉验证，
+# 很容易被单一口径的会计特征带偏。它只展示，不进入 V/结论。
+HIST_VAL_MIN_METRICS = 2
 
 # ---- 风险阈值 -------------------------------------------------------------
 # 检查 1 的四档判定用下面的 CASH_NI_*；第五节跟踪表的阈值也用 CASH_NI_OK，
