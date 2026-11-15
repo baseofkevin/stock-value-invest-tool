@@ -92,7 +92,7 @@ def run_row(conn, run_id: int) -> dict | None:
     return _run(row) if row else None
 
 
-def runs(conn, limit: int = 80) -> list[dict]:
+def runs(conn, limit: int = 60) -> list[dict]:
     """最近的运行（两种 kind 都在内，按时间倒序）。"""
     rows = conn.execute(
         f"select r.*, {_kind_expr(conn)} as kind from run r "
