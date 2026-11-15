@@ -15,7 +15,6 @@ from stock_data_fetch.hub import preflight
 
 from .evaluate import evaluate
 from .log import configure, log
-from .render.html import write_html_file
 from .render.text import print_report
 
 PREFIXES = ("sh", "sz", "bj")
@@ -67,6 +66,9 @@ def main(argv=None):
         description="单只股票四因子独立观察（不合并总分，不筛选；共享数据层版）")
     ap.add_argument("code", nargs="?", default=None,
                     help="股票代码：sh600519 / 600519 / 600519.SH；用 --csv 时省略")
+    ap.add_argument("--from-select", metavar="日期", nargs="?", const="",
+                    default=None,
+                    help="批量模式：名单用结果库里这一天的选股结果（省略日期=最近一次）")
     ap.add_argument("--csv", metavar="CSV",
                     help="批量模式：从该 CSV 的代码列逐只出报告（代码 / 股票代码 / 证券代码 / code）")
     ap.add_argument("--workers", type=int, default=4,
@@ -78,11 +80,9 @@ def main(argv=None):
     ap.add_argument("--json-full", action="store_true",
                     help="JSON 里同时带行情快照 quote（默认剔除）")
     ap.add_argument("--verbose", action="store_true",
-                    help="打印执行过程和完整命令行报告（默认只生成文件）")
+                    help="打印执行过程与完整命令行报告（默认只写 results.db）")
     ap.add_argument("--quiet", action="store_true",
-                    help="不输出日志与命令行报告，只写结果文件")
-    ap.add_argument("--no-html", "--no-md", dest="no_html", action="store_true",
-                    help="不生成 HTML 结果文件（--no-md 为兼容旧用法）")
+                    help="不输出日志与命令行报告，只写 results.db")
     ap.add_argument("--db", help="共享库路径（默认 STOCKHUB_DB 或项目内 shared.db）")
     a = ap.parse_args(argv)
 
@@ -92,10 +92,13 @@ def main(argv=None):
     if a.csv and a.code:
         sys.stderr.write("参数错误：--csv 与股票代码不能同时给\n")
         return 2
-    if not a.csv and not a.code:
-        sys.stderr.write("参数错误：给一个股票代码，或用 --csv 跑批量\n")
+    if a.from_select is not None and (a.code or a.csv):
+        sys.stderr.write("参数错误：--from-select 不能和股票代码 / --csv 一起用\n")
         return 2
-    if a.csv and a.json:
+    if not a.csv and not a.code and a.from_select is None:
+        sys.stderr.write("参数错误：给一个股票代码，或用 --from-select / --csv 跑批量\n")
+        return 2
+    if (a.csv or a.from_select is not None) and a.json:
         sys.stderr.write("参数错误：--json 只支持单只模式\n")
         return 2
 
@@ -109,6 +112,11 @@ def main(argv=None):
     # 原来默认 `dt.date.today()`：周末或盘中跑会得到「末端不足（库 11-13 / 需 11-15）」
     # 然后报「当前无 K 线（可能停牌）」——把「今天不是交易日」说成了「停牌」。
     end = a.date or hub.target
+
+    if a.from_select is not None:
+        from .batch import from_select
+        return from_select(a.from_select or None, end, refresh=a.refresh,
+                           workers=a.workers, db=a.db, quiet=a.quiet)
 
     if a.csv:
         from .batch import run as run_batch
@@ -150,12 +158,7 @@ def main(argv=None):
     except Exception:                            # noqa: BLE001 - 落库失败绝不影响出报告
         pass
 
-    if not a.no_html:
-        try:
-            html_path = write_html_file(r)
-            if not a.quiet and not a.json:
-                print(f"[输出] HTML：{html_path}")
-                sys.stdout.flush()
-        except Exception as e:
-            sys.stderr.write(f"[输出] HTML 写入失败：{e}\n")
+    if not a.quiet and not a.json:
+        print(f"[完成] {code} 的结果已写入 results.db（用 ./run.py web 查看）")
+        sys.stdout.flush()
     return 0

@@ -58,9 +58,9 @@ v2.0 改的只是「数据从哪来」，不是「怎么选」。
 | 6 | 防未来函数 | `InfoPublDate ≤ 基准日` 过滤 | **不过滤** | 当期运行（S = 最近交易日）时库里的最新期必然已披露，等价；**补跑历史日不等价**，见 §9.4 |
 | 7 | 金融股「不适用」 | balancesheet `EnterpriseType` | `stock.is_financial` | 词表判定，`profile` 域一份三用（次新/行业/金融）。⚠️ 词表曾漏判「非银金融」，见 §1.5 |
 | 8 | 盘中闸 | `_prepare` 里直接终止 | hub 闸 1 + `S <= hub.target` | 库够用就随时能跑；**联网才拦**（闸 1 语义），收盘闸由 `target` 表达 |
-| 9 | CSV 列数 | 16 列 | **15 列** | 少「二级行业」——库里没有申万二级，拿一级凑数是编数据 |
+| 9 | 结果列数 | 16 列 | **15 列** | 少「二级行业」——库里没有申万二级，拿一级凑数是编数据 |
 | 10 | 缓存参数 | `--refresh` / `--refresh-industry` / `--prune-kline` / `--no-clean` / `--clean-dry-run` | **全删** | 缓存管理归 hub（coverage 闸 + GC）；要强制重取用 hub 的 `repair` 或删库 |
-| 11 | 产物位置 | `csv_output/` + `database/` | `output/kline-screen/`，**只有两件产物** | 中间数据全在 `shared.db`，没有「中间文件」这个东西了 |
+| 11 | 产物位置 | `csv_output/` + `database/` | `results.db` 的 `select_result` 表 | 中间数据全在 `shared.db`，没有「中间文件」这个东西了；2026-11-15 连结果 CSV 也取消，结论进库、展示归看板 |
 
 ### 1.3 砍掉的东西及理由
 
@@ -154,7 +154,7 @@ MA20。但如果只看这个，名单里会混进「纯资金推动、基本面�
 | 6 | `_enrich_market` | 取 `quote` → 算 20 日换手与池内分位 → 三条计数断言 | `[6/6]` |
 | 7 | `_annotate_turnaround` | 取 `finance`，标注「毛利率改善」（只标注） | （无前缀） |
 | 8 | `_annotate_industry` | 用 `profile.industry` 填一级行业，缺的记「未分类」 | （无前缀） |
-| 9 | `_write` | 排序、CSV 原子写、result JSON、终端摘要，收尾 `hub.prune_scan()` | （无前缀） |
+| 9 | `_write` | 排序、写 `results.db`、终端摘要，收尾 `hub.prune_scan()` | （无前缀） |
 
 **为什么次新要挪到 5b 惰性做**：判次新要 `list_date`，对全池（可能 4000 只）逐只取
 太贵；而裁决走到 ⑤ 之前，池子已被 ①②③④ 砍到几十只。原版用服务端四桶标签
@@ -168,7 +168,7 @@ MA20。但如果只看这个，名单里会混进「纯资金推动、基本面�
 剔除代码 ∪ 名单 == 粗筛池（逐股都有去向）
 ```
 
-外加 CSV 行数 == 名单数、产物必须落盘两条。
+外加「入库行数 == 名单数」一条（`_save_results` 里核对）。
 
 ---
 
@@ -290,22 +290,34 @@ python3 -m stock_kline_screen --turn-pct 0.4       # 只留池内换手最低 40
 
 ## 5. 输出
 
-产物目录：`~/MyData/stock-value-invest-tool/output/kline-screen/`（`OUT_DIR_NAME`），
-**只有一个文件**，`_write` 里先写 `.tmp` 再 `os.replace`：
+产物是 `results.db` 里的一批行（表 `select_result`），**没有文件**。
+`_write` 里排序后 `_save_results` 落库，失败只 warn 一行、不影响名单本身。
 
-| 文件 | 内容 |
+| 列 | 内容 |
 |---|---|
-| `选股_<S>.csv` | UTF-8 with BOM（Excel 友好），15 列，按池内换手分位升序 |
+| `symbol` / `name` | 如 `sh600000` / 浦发银行 |
+| `pool_turnover_rank` | 池内换手分位，0 = 最冷、100 = 最热；空 = 数据不足（分母见 §9.1） |
+| `launch_date` / `days_since_launch` / `vol_multiple` / `launch_gain_pct` | 启动日与启动日量能/涨幅 |
+| `ma20_gap_pct` / `ma60_gap_pct` | 距 MA20 / MA60 |
+| `gross_margin_up` | 毛利率改善（`是 / 否 / 无数据 / 不适用` + 证据） |
+| `turnover20` / `stars` / `close` / `market_cap_yi` / `industry` | 20 日换手、星级、收盘、总市值、一级行业 |
+| `payload` | 完整 JSON（含逐股去向与参数） |
 
-原先还有一份 `result_<S>.json`（全部参数、剔除明细、逐股去向、名单），
-**2026-11-15 按要求删掉了**：要看的东西终端摘要里都有打印（粗筛池/入选数、
-剔除明细、行业分布、名单表）。同一次运行的内部状态现在通过
-`pipeline.run(a, hub, into=st)` 回填给调用方，测试与复盘都从那里取，
-不再落盘——也就不会出现"盘上的和跑出来的不一致"。
+原先还有 `选股_<S>.csv` 和 `result_<S>.json` 两份文件，**2026-11-15 都删掉了**：
+看结果用 `./run.py web` 的「选股」页（换手分位 × 20 日换手散点、行业分布、
+逐只表），同一次运行的状态通过 `pipeline.run(a, hub, into=st)` 回填给调用方，
+测试从那里取——不再出现"盘上的和跑出来的不一致"。
 
-### 5.1 `选股_<S>.csv`（15 列）
+下游（周期 / 质量 / 顶部）也不再读 CSV，用 `--from-select <基准日>` 直接读库：
 
-| # | 列 | 含义 |
+```bash
+python3 -m stock_kline_screen --date 2026-11-13
+cd stock_cycle_elastic && python3 cycle_report.py --from-select 2026-11-13
+```
+
+### 5.1 结果字段（15 项）
+
+| # | 字段 | 含义 |
 |:--:|---|---|
 | 1 | 代码 | 如 `sh600000` |
 | 2 | 名称 | 基准日名称（会带 `ST` 前缀） |
@@ -323,7 +335,7 @@ python3 -m stock_kline_screen --turn-pct 0.4       # 只留池内换手最低 40
 | 14 | 最新收盘价 | **S 日 `scan` 的 close**（不用 `quote.price`：补跑历史日时它是最新交易日的价） |
 | 15 | 总市值（亿） | `quote.total_mv ÷ 1e8`，只展示 |
 
-第 10、11–13、15 列**只展示，不参与筛选、排序或裁决**（换手列在
+第 10、11–13、15 项**只展示，不参与筛选、排序或裁决**（换手项在
 `--turn-pct > 0` 时才参与过滤）。
 
 ---
@@ -355,7 +367,7 @@ hard      = {其余：PartialData / ThrottleTimeout / 源不可达}
 | `circ_mv` 缺失（取到了但字段空） | `RuntimeError` 中止，同上 |
 | `finance` 取数失败 | **降级**：毛利率列留空，`数据是否可用=false`，选股结果不受影响 |
 | `profile` 取数失败 | 次新/行业/金融判定按「未知」处理，stderr 告警，不中止 |
-| `prune_scan()` 失败 | 只跳过，不抛（收尾清理不该毁掉一份已经写盘的名单） |
+| `prune_scan()` 失败 | 只跳过，不抛（收尾清理不该毁掉一份已经入库的名单） |
 
 原则：**凡是会让名单「少股」或「错股」的失败，一律中止**；凡是只影响标注列的，
 一律降级 + 告警。宁可不出名单，也不出一份看起来正常、实际缺了几十只的名单。
@@ -389,9 +401,9 @@ python3 -m stock_kline_screen.tests          # 4 个文件 83 项
 | `test_rules.py` | 27 | `find_start` 各分支（无 bar / 无 S / 历史不足 / 未站上 / 非真上穿）、`judge` 七条逐条触发、⑤ 双查、`reason_cat` 归一（`MA20` 放行） |
 | `test_turnover.py` | 18 | 20 日换手计算、`amount` 缺失退回 `close×volume`、覆盖 <15 天判不足、分位是「严格小于比例」、硬过滤自适应放宽/收紧、样本 <20 跳过硬过滤 |
 | `test_turnaround.py` | 18 | `prev_quarter` 脏日期、`_Q` 列优先与累计差分兜底、三重护栏各分支、金融股「不适用」、`是/否/无数据` 取值 |
-| `test_pipeline.py` | 20 | 用 `FakeHub` 顶替共享库做端到端：正常链路写盘与计数自洽、\*ST 剔除、**历史不足不中止**、**硬失败中止**、参数边界 |
+| `test_pipeline.py` | 20 | 用 `FakeHub` 顶替共享库做端到端：正常链路入库与计数自洽、\*ST 剔除、**历史不足不中止**、**硬失败中止**、参数边界 |
 
-测试全部不联网、不读写真实 `shared.db`、不碰 `output/`。
+测试全部不联网、不读写真实 `shared.db`，结果库由 `tests/__init__.py` 指到一个临时文件。
 
 ---
 
@@ -477,12 +489,12 @@ stock_kline_screen/
 ├── __init__.py       版本与用法
 ├── __main__.py       python3 -m stock_kline_screen 入口
 ├── cli.py            参数解析 + preflight + 异常 → 退出码
-├── params.py         规则参数、CSV 列、RESULT_VERSION
+├── params.py         规则参数、结果字段、RESULT_VERSION
 ├── pipeline.py       九步主流程 + 三条计数断言
 ├── rules.py          find_start / judge / reason_cat
 ├── turnover.py       20 日换手、池内分位、硬过滤
 ├── turnaround.py     ①毛利率环比改善（只标注）
-├── output.py         CSV 行、result JSON、终端摘要
+├── output.py         终端摘要（结果行由 pipeline 直接写 results.db）
 ├── tests/            test_rules / test_turnover / test_turnaround / test_pipeline
 └── README.md         本文件
 ```

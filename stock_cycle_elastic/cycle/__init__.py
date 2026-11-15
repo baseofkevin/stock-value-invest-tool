@@ -7,9 +7,8 @@
     build.py   两张表 → 干净季度序列
     metrics.py 序列 → 三个指标（纯计算）
     decide.py  指标 → 三个标签（5 个阈值）
-    render.py  数据 → HTML 报告
-    batch.py   CSV → 批量编排
-    index_html.py 索引页
+    fmt.py     数值格式化（显示值不许跨判定边界）
+    batch.py   名单 → 批量编排 → results.db
 """
 
 __all__ = [
@@ -19,7 +18,6 @@ __all__ = [
     "build",
     "metrics",
     "decide",
-    "render",
+    "fmt",
     "batch",
-    "index_html",
 ]

@@ -6,13 +6,13 @@
     python3 run.py menu            # 交互菜单
     python3 run.py -h              # 帮助
     python3 run.py select          # 只跑选股（stock_kline_screen）
-    python3 run.py cycle           # 周期弹性批量（依赖当天的选股 CSV）
+    python3 run.py cycle           # 周期弹性批量（读结果库里当天的选股名单）
     python3 run.py cycle --stock 600519     # 周期弹性单只
-    python3 run.py quality         # 质量初筛批量（依赖当天的选股 CSV）
+    python3 run.py quality         # 质量初筛批量（读结果库里当天的选股名单）
     python3 run.py quality --stock 600519   # 质量初筛单只
     python3 run.py top sh600519    # 顶部判断（stock_judge_top，单只，随时可跑）
-    python3 run.py top --csv 选股.csv           # 顶部判断批量：读 CSV 的代码列
-    python3 run.py top --from-select            # 顶部判断批量：用当天选股结果
+    python3 run.py top --from-select            # 顶部判断批量：读结果库的名单
+    python3 run.py web                          # 打开看板（Flask + Chart.js）
 
 ## 为什么要有这个脚本
 
@@ -26,7 +26,7 @@
    `is_trading(今天)` 为假 → 回落到上周五 → 三件套安安静静再产一份上周的报告，
    文件名、目录名都看不出来。所以每一步之前都先**校验目标日在日历里**，
    不在就停下来并提示先跑 `build_calendar`（`--with-calendar` 可以自动更新）。
-3. **下游依赖选股 CSV**。选股 0 只时下游没有输入，脚本在交接处就拦下来，
+3. **下游依赖选股名单**。选股 0 只时下游没有输入，脚本在交接处就拦下来，
    不让它带着空表跑到一半才炸。
 
 除此之外还有：逐步计时、全程日志（`output/logs/`）、盘前/盘中告警
@@ -53,8 +53,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT / "output"
-KLINE_CSV_DIR = OUTPUT / "kline-screen"
 LOG_DIR = OUTPUT / "logs"
+DB_PATH = ROOT / "results.db"
+"""派生结果库：四个工具的结论落在这里，看板也读它。"""
 
 CLOSE_GRACE = (15, 5)
 """收盘宽限。与 `stock_data_fetch.config.CLOSE_GRACE` 保持一致：15:05 之前
@@ -202,16 +203,19 @@ def py_module(name: str) -> list[str]:
     return [sys.executable, "-m", name]
 
 
-def csv_for(day: str) -> Path:
-    return KLINE_CSV_DIR / f"选股_{day}.csv"
+def select_count(day: str) -> int:
+    """当天选股名单的只数（读 results.db 里基准日为 day 的那次运行）。
 
-
-def csv_rows(path: Path) -> int:
-    """CSV 的**数据行数**（不含表头）。文件不存在返回 -1。"""
-    if not path.exists():
+    原来是数 `选股_<day>.csv` 的行数。CSV 取消后，名单只在结果库里——
+    交接判断从"文件在不在"变成"这次运行有没有留下记录"，更贴近事实：
+    即使选股跑了、但一只都没选中，也是 0 行，而不是"文件缺失"。
+    读不到库（还没跑过）返回 -1，与原来"文件不存在"同一套语义。
+    """
+    try:
+        from stock_data_fetch import results as results_db
+        return len(results_db.symbols_for("select", day))
+    except Exception:                              # noqa: BLE001
         return -1
-    with path.open(encoding="utf-8-sig") as fh:
-        return max(0, sum(1 for _ in fh) - 1)
 
 
 def step_select(tee: Tee, day: str, extra: list[str]) -> int:
@@ -219,50 +223,46 @@ def step_select(tee: Tee, day: str, extra: list[str]) -> int:
     code, _ = run_step(tee, f"① 选股 stock_kline_screen（{day}）", argv, ROOT)
     if code != 0:
         return code
-    path = csv_for(day)
-    n = csv_rows(path)
-    if n < 0:
-        tee.line(f"❌ 选股退出码 0，但没有产物：{path}")
-        return 1
-    if n == 0:
-        tee.line(f"⚠️  {path.name} 只有表头——今天没有股票通过初筛。")
+    n = select_count(day)
+    if n <= 0:
+        tee.line(f"⚠️  {day} 没有股票通过初筛（结果库里 0 行）。")
         tee.line("    下游（周期/质量）没有输入，流程到此为止。")
         return 3
-    tee.line(f"📄 {path}  共 {n} 只")
+    tee.line(f"📄 results.db  select_result  共 {n} 只")
     return 0
 
 
 def step_cycle(tee: Tee, day: str, extra: list[str], stock: str | None = None) -> int:
-    """周期弹性。`stock` 给了就是单只模式（不依赖当天 CSV）。"""
+    """周期弹性。`stock` 给了就是单只模式（不依赖当天名单）。"""
     if stock:
         argv = [sys.executable, "cycle_report.py", "--stock", stock] + extra
         code, _ = run_step(tee, f"② 周期弹性 stock_cycle_elastic（{stock} 单只）",
                            argv, ROOT / "stock_cycle_elastic")
         return code
-    csv = csv_for(day)
-    if csv_rows(csv) <= 0:
-        tee.line(f"❌ 找不到可用的选股结果：{csv}")
+    n = select_count(day)
+    if n <= 0:
+        tee.line(f"❌ 结果库里没有 {day} 的选股名单")
         tee.line(f"    先跑选股：python3 run.py select --date {day}")
         return 2
-    argv = [sys.executable, "cycle_report.py", "--csv", str(csv)] + extra
+    argv = [sys.executable, "cycle_report.py", "--from-select", day] + extra
     code, _ = run_step(tee, f"② 周期弹性 stock_cycle_elastic（{day}）",
                        argv, ROOT / "stock_cycle_elastic")
     return code
 
 
 def step_quality(tee: Tee, day: str, extra: list[str], stock: str | None = None) -> int:
-    """质量初筛。`stock` 给了就是单只模式（不依赖当天 CSV）。"""
+    """质量初筛。`stock` 给了就是单只模式（不依赖当天名单）。"""
     if stock:
         argv = [sys.executable, "stock_report.py", "--stock-code", stock] + extra
         code, _ = run_step(tee, f"③ 质量初筛 stock_quality_screen（{stock} 单只）",
                            argv, ROOT / "stock_quality_screen")
         return code
-    csv = csv_for(day)
-    if csv_rows(csv) <= 0:
-        tee.line(f"❌ 找不到可用的选股结果：{csv}")
+    n = select_count(day)
+    if n <= 0:
+        tee.line(f"❌ 结果库里没有 {day} 的选股名单")
         tee.line(f"    先跑选股：python3 run.py select --date {day}")
         return 2
-    argv = [sys.executable, "stock_report.py", "--csv", str(csv)] + extra
+    argv = [sys.executable, "stock_report.py", "--from-select", day] + extra
     code, _ = run_step(tee, f"③ 质量初筛 stock_quality_screen（{day}）",
                        argv, ROOT / "stock_quality_screen")
     return code
@@ -287,18 +287,19 @@ def note_single_date(tee: Tee, day: str, wanted: str | None) -> int:
 
 def step_top(tee: Tee, day: str, codes: list[str], extra: list[str],
              csv_path: Path | None = None, workers: int = 4) -> int:
-    """顶部判断：**随时可跑**，单只或多只，也可以整份 CSV 批量。
+    """顶部判断：**随时可跑**，单只或多只，也可以整份名单批量。
 
-    批量走 `stock_judge_top --csv`（程序自己读代码列、自己并发），比在这里
-    一只只 fork 快得多，失败也不会中断其余的。
+    批量走 `stock_judge_top --from-select <day>`（程序自己读结果库、自己并发），
+    比在这里一只只 fork 快得多，失败也不会中断其余的。
     """
     if csv_path is not None:
-        if csv_rows(csv_path) <= 0:
-            tee.line(f"❌ 找不到可用的股票清单：{csv_path}")
+        n = select_count(day)
+        if n <= 0:
+            tee.line(f"❌ 结果库里没有 {day} 的选股名单")
             return 2
         argv = py_module("stock_judge_top") + [
-            "--csv", str(csv_path), "--date", day, "--workers", str(workers)] + extra
-        rc, _ = run_step(tee, f"④ 顶部判断 stock_judge_top（批量 {csv_rows(csv_path)} 只 @ {day}）",
+            "--from-select", day, "--date", day, "--workers", str(workers)] + extra
+        rc, _ = run_step(tee, f"④ 顶部判断 stock_judge_top（批量 {n} 只 @ {day}）",
                          argv, ROOT)
         return rc
 
@@ -360,10 +361,7 @@ def summary(tee: Tee, day: str, steps: list[tuple[str, int, float]]) -> None:
         mark = "✅" if rc == 0 else ("⚠️" if rc == 3 else "❌")
         tee.line(f"  {mark} {name:<28s} {spent:6.1f}s   退出码 {rc}")
     tee.line("")
-    tee.line(f"  选股 CSV    {csv_for(day)}")
-    tee.line(f"  周期报告    {OUTPUT / 'cycle-elastic' / day}")
-    tee.line(f"  质量报告    {OUTPUT / 'quality-screen' / day}")
-    tee.line(f"  顶部判断    {OUTPUT / 'judge-top'}")
+    tee.line(f"  结果库      {DB_PATH}（看板：./run.py web）")
     tee.line(f"  本次日志    {tee.fh.name}")
 
 
@@ -425,7 +423,7 @@ def cmd_single(action: str):
         if action == "top":
             csv_path = None
             if getattr(args, "from_select", False):
-                csv_path = csv_for(day)
+                csv_path = "results"          # 只是一个"走批量"的开关
             elif getattr(args, "csv", None):
                 csv_path = Path(args.csv).expanduser()
                 if not csv_path.is_absolute():
@@ -442,6 +440,30 @@ def cmd_calendar(args, tee: Tee) -> int:
     if days:
         tee.line(f"日历：{days[0]} .. {days[-1]}（{len(days)} 个交易日）")
     return rc
+
+
+# ---------------------------------------------------------------------------
+# 看板
+# ---------------------------------------------------------------------------
+
+def cmd_web(args) -> int:
+    """起本地看板。
+
+    **不套 Tee**：Tee 是给"跑完就退出"的四步用的，看板是长驻进程，
+    套上它反而让 Ctrl-C 退出后日志文件留着半截。Flask 自己的访问日志够用。
+    """
+    try:
+        from web.app import create_app
+    except ModuleNotFoundError as exc:
+        say(f"❌ 起不来看板：{exc}")
+        say("   Flask 不是标准库，需要装一次：")
+        say(f"   {sys.executable} -m pip install flask")
+        return 2
+    app = create_app(DB_PATH)
+    say(f"看板：http://{args.host}:{args.port}   结果库 {DB_PATH}")
+    say("       Ctrl-C 退出")
+    app.run(host=args.host, port=args.port, debug=getattr(args, "debug", False))
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -617,7 +639,7 @@ def interactive() -> int:
                 rc = cmd_single("select")(args, tee)
             elif choice in ("3", "4"):
                 who = "周期弹性" if choice == "3" else "质量初筛"
-                code = input(f"{who}——股票代码（回车=批量跑当天选股 CSV）: ").strip()
+                code = input(f"{who}——股票代码（回车=批量跑当天的选股名单）: ").strip()
                 args = argparse.Namespace(date=day_hint, no_calendar=False,
                                           stock=code or None,
                                           extra=[] if code else ["--workers", "2"])
@@ -663,12 +685,14 @@ def build_parser() -> argparse.ArgumentParser:
   ./run.py cycle   --stock 600519         # 周期弹性，单只
   ./run.py quality --stock 600519         # 质量初筛，单只
   ./run.py top     600519                 # 顶部判断
+  ./run.py web                            # 打开看板（读 results.db，只读）
   ./run.py backup                         # 备份数据库（VACUUM INTO + 保留 7 份）
 
 不带参数只打印本帮助，不跑任何程序（全流程要三十多分钟，免得误敲回车就开跑）。
 
-下游（cycle/quality）认的是 output/kline-screen/选股_<基准日>.csv，
-所以它们的 --date 必须和那天的选股一致；不给就按「今天（过了 15:05）」算。""")
+下游（cycle/quality/top）认的是 results.db 里「基准日 = 那一天」的选股运行记录，
+所以它们的 --date 必须和那天的选股一致；不给就按「今天（过了 15:05）」算。
+四个工具都不再产出 CSV/HTML：结果只进 results.db，人看结果用 ./run.py web。""")
     sub = p.add_subparsers(dest="cmd")
 
     def add_date(sp):
@@ -697,17 +721,17 @@ def build_parser() -> argparse.ArgumentParser:
         sp = sub.add_parser(name, help=helptext + "（批量或单只）")
         add_date(sp)
         sp.add_argument("--stock", metavar="代码", default=None,
-                        help=f"单只模式：只跑这一只（转成 {flag}），不需要当天的选股 CSV")
+                        help=f"单只模式：只跑这一只（转成 {flag}），不需要当天的选股名单")
         sp.add_argument("extra", nargs="*", default=[], help="透传给该程序的参数")
 
-    sp = sub.add_parser("top", help="顶部判断 stock_judge_top（单只/多只/CSV 批量）")
+    sp = sub.add_parser("top", help="顶部判断 stock_judge_top（单只/多只/名单批量）")
     add_date(sp)
     sp.add_argument("codes", nargs="*", default=[],
                     help="股票代码，如 sh600519 600519 600519.SH（与 --csv 二选一）")
     sp.add_argument("--csv", metavar="CSV", default=None,
                     help="批量：从该 CSV 读代码列（代码/股票代码/证券代码/code）")
     sp.add_argument("--from-select", action="store_true",
-                    help="批量：直接用当天选股结果 output/kline-screen/选股_<基准日>.csv")
+                    help="批量：直接用结果库里当天的选股名单（基准日 = --date）")
     sp.add_argument("--workers", type=int, default=4, help="批量并发线程数，默认 4")
     sp.add_argument("extra", nargs="*", default=[], help="透传给 stock_judge_top 的参数")
 
@@ -722,6 +746,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="只备份其中一个库")
     sp.add_argument("--list", dest="list_only", action="store_true",
                     help="只列出已有备份，不做备份")
+
+    sp = sub.add_parser("web", help="打开看板：Flask + Chart.js，读 results.db")
+    sp.add_argument("--port", type=int, default=5000, help="端口，默认 5000")
+    sp.add_argument("--host", default="127.0.0.1", help="监听地址，默认只本机")
+    sp.add_argument("--debug", action="store_true", help="Flask 调试模式（改模板自动重载）")
 
     sub.add_parser("menu", help="交互菜单（0-6 选择）")
     return p
@@ -753,7 +782,7 @@ def main(argv: list[str] | None = None) -> int:
             say(f"❌ weekly 不认识这些参数：{' '.join(unknown)}")
             say("   透传请用 --select-args / --cycle-args / --quality-args。")
             return 2
-    elif args.cmd in ("backup", "calendar", "menu"):
+    elif args.cmd in ("backup", "calendar", "menu", "web"):
         # 这三个不接受透传参数：未知参数直接报错，别让 `--dry-run` 这种
         # 打错/臆想的开关被静默吞掉（人会以为它生效了）。
         if unknown:
@@ -774,6 +803,9 @@ def main(argv: list[str] | None = None) -> int:
             args.cycle_args = split_passthrough(getattr(args, "cycle_args", ""))
             args.quality_args = split_passthrough(getattr(args, "quality_args", ""))
             return cmd_all(args, tee)
+        if args.cmd == "web":
+            tee.close()
+            return cmd_web(args)
         if args.cmd == "calendar":
             return cmd_calendar(args, tee)
         if args.cmd == "backup":

@@ -5,21 +5,16 @@
 原来这一层还管 westock 令牌（`WESTOCK_TOKEN_FILE` / `WESTOCK_MCP_URL` /
 `WESTOCK_BIN` / `JUDGE_USE_EXTERNAL_WESTOCK`）与缓存目录（`JUDGE_CACHE_DIR`）。
 现在取数全部走共享库 hub（`stock_data_fetch`），令牌、重试、配额、缓存
-都归 hub 管，这里只剩 HTML 输出目录。
+都归 hub 管。
+
+2026-11-15 又删掉了 HTML 输出目录（`JUDGE_OUT_DIR`）：报告不再落文件，
+结论写 results.db，人看结果走 `./run.py web`。所以这个模块现在只剩路径常量。
 
 环境变量
 --------
-JUDGE_OUT_DIR     HTML 输出目录，默认 <项目根>/output/judge-top
 STOCKHUB_DB       共享库路径（透传给 hub.preflight，hub 自己解析默认值）
 """
 import os
 
 # 项目根 = stock-value-invest-tool/（本包的上一级）
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def _dir(env, default):
-    return os.path.abspath(os.path.expanduser(os.environ.get(env) or default))
-
-
-OUT_DIR = _dir("JUDGE_OUT_DIR", os.path.join(ROOT, "output", "judge-top"))

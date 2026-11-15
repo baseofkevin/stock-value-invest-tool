@@ -61,23 +61,15 @@ class _FakeHub:
 
 class MainTest(unittest.TestCase):
     def setUp(self):
-        self._orig = (cli_mod.evaluate, cli_mod.write_html_file,
-                      cli_mod.print_report, cli_mod.preflight)
+        self._orig = (cli_mod.evaluate, cli_mod.print_report, cli_mod.preflight)
         self.rendered = []
-        self.html_calls = []
         cli_mod.preflight = lambda **kw: _FakeHub()
         # 迁移后签名：evaluate(hub, code, end, refresh)
         cli_mod.evaluate = lambda hub, code, end, refresh: fx.result()
-        cli_mod.write_html_file = self._fake_html
         cli_mod.print_report = lambda r: self.rendered.append(r)
 
     def tearDown(self):
-        (cli_mod.evaluate, cli_mod.write_html_file,
-         cli_mod.print_report, cli_mod.preflight) = self._orig
-
-    def _fake_html(self, r, now=None):
-        self.html_calls.append(r)
-        return "/tmp/fake.html"
+        (cli_mod.evaluate, cli_mod.print_report, cli_mod.preflight) = self._orig
 
     def run_cli(self, *argv):
         out, err = io.StringIO(), io.StringIO()
@@ -85,11 +77,12 @@ class MainTest(unittest.TestCase):
             code = cli_mod.main(list(argv))
         return code, out.getvalue(), err.getvalue()
 
-    def test_default_prints_only_html_path(self):
+    def test_default_reports_db_write(self):
+        """默认只报「已写入 results.db」，不再生成 HTML 文件。"""
         code, out, _ = self.run_cli("600519", "--date", "2026-10-23")
         self.assertEqual(code, 0)
-        self.assertEqual(out.strip(), "[输出] HTML：/tmp/fake.html")
-        self.assertEqual(len(self.html_calls), 1)
+        self.assertIn("results.db", out)
+        self.assertIn("web", out)
 
     def test_default_date_comes_from_hub_target(self):
         """不给 --date 时用 hub.target，而不是 date.today()。
@@ -128,28 +121,23 @@ class MainTest(unittest.TestCase):
         self.assertEqual(out, "")
         self.assertEqual(err, "")
         self.assertEqual(self.rendered, [])
-        self.assertEqual(len(self.html_calls), 1)
 
     def test_verbose_prints_report(self):
         code, out, _ = self.run_cli("600519", "--verbose")
         self.assertEqual(code, 0)
         self.assertEqual(len(self.rendered), 1)
-        self.assertIn("[输出] HTML", out)
+        self.assertIn("results.db", out)
 
     def test_quiet_with_json_still_outputs_payload(self):
         code, out, _ = self.run_cli("600519", "--json", "--quiet")
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out)["code"], "sh600519")
 
-    def test_no_html_skips_write(self):
-        code, out, _ = self.run_cli("600519", "--no-html")
+    def test_quiet_writes_nothing_to_stdout(self):
+        """HTML 已移除，--quiet 之后唯一要守的不变量就是"一行都不打"。"""
+        code, out, _ = self.run_cli("600519", "--quiet")
         self.assertEqual(code, 0)
-        self.assertEqual(self.html_calls, [])
         self.assertEqual(out, "")
-
-    def test_no_md_alias(self):
-        self.run_cli("600519", "--no-md")
-        self.assertEqual(self.html_calls, [])
 
     def test_bad_code_exits_2_without_evaluating(self):
         called = []
@@ -167,14 +155,6 @@ class MainTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("判断失败", err)
         self.assertIn("无行情数据", err)
-
-    def test_html_failure_does_not_change_exit_code(self):
-        def boom(r, now=None):
-            raise OSError("只读目录")
-        cli_mod.write_html_file = boom
-        code, _, err = self.run_cli("600519")
-        self.assertEqual(code, 0)
-        self.assertIn("HTML 写入失败", err)
 
 
 class ScriptSmokeTest(unittest.TestCase):

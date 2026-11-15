@@ -29,10 +29,10 @@ from stock_data_fetch.need import want
 
 from .params import (C2_TOL, C3_RATIO, KLINE_BARS,
                      KLINE_MIN_BARS, NEW_STOCK_YEARS,
-                     OUT_DIR_NAME, TURN_WINDOW)
+                     TURN_WINDOW)
 from .rules import find_start, judge, reason_cat
 from .turnover import apply_turnover
-from .output import csv_row, print_summary, turn_cell, turn_star
+from .output import print_summary, turn_cell, turn_star
 from .turnaround import compute_turnaround
 
 
@@ -503,40 +503,25 @@ def _annotate_industry(st) -> None:
             f"CSV 记「未分类」\n")
 
 
-# ---------------------------------------------------------------- 9 写盘
+# ---------------------------------------------------------------- 9 落库
 
 def _write(st) -> None:
-    from .params import CSV_HEADER
-    hub, final = st["hub"], st["final"]
-    outdir = _out_dir(hub)
-    S = st["S"]
+    """只落 results.db，不再产出 CSV。
+
+    CSV 原来有两个角色：给人看，和给下游三个工具当输入。2026-11-15 起两个
+    都被 results.db 接走（`--from-select` 读同一批 `select_result`），
+    于是这里只保留三件事：排好顺序、计数、写库。
+    """
+    final = st["final"]
     # 展示顺序：池内换手分位升序（最冷在前）；分位 None 的排最后。
     final.sort(key=lambda x: (x.get("turn20_rank") is None,
                               x.get("turn20_rank") or 0.0, x["code"]))
-
-    csv_path = os.path.join(outdir, f"选股_{S}.csv")
-    import csv as _csv
-    rows = [csv_row(x) for x in final]
-    tmp = csv_path + ".tmp"
-    with open(tmp, "w", newline="", encoding="utf-8-sig") as f:
-        w = _csv.writer(f)
-        w.writerow(CSV_HEADER)
-        w.writerows(rows)
-    os.replace(tmp, csv_path)
-    n_csv = len(rows)
-    if n_csv != len(final):
-        raise RuntimeError(f"CSV 行数 {n_csv} ≠ 名单 {len(final)}")
-
-    st.update({"csv_path": csv_path, "n_csv": n_csv})
-    if not os.path.exists(csv_path):
-        raise RuntimeError("产物缺失：CSV 没写上盘")
-
-    # 结果是派生数据，另存一份到 results.db（失败只 warn，绝不影响名单本身）
-    _save_results(st, final, S)
+    st.update({"n_csv": len(final)})
+    _save_results(st, final, st["S"])
 
 
 def _save_results(st, final, S) -> None:
-    """把入选名单写进结果库，字段与 CSV 同源（`x` 是同一批 dict）。"""
+    """把入选名单写进结果库（`x` 就是名单里那个 dict，不另做映射层）。"""
     try:
         from stock_data_fetch import results
     except Exception:                            # noqa: BLE001
@@ -555,9 +540,3 @@ def _save_results(st, final, S) -> None:
     } for x in final]
     results.save("select", rows, S, argv="stock_kline_screen",
                  note=f"粗筛池 {st.get('pool_n')} 只 / 入选 {len(final)} 只")
-
-
-def _out_dir(hub) -> str:
-    outdir = os.path.join(str(hub.cfg.state_dir.parent), "output", OUT_DIR_NAME)
-    os.makedirs(outdir, exist_ok=True)
-    return outdir

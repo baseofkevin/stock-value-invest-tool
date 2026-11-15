@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}周期{% endblock %}
+{% block body %}
+
+<section class="hero">
+  <div class="eyebrow">stock_cycle_elastic</div>
+  <h1>周期弹性</h1>
+  <p>三个判断各自出档位、程序不合并：是不是周期股 → 弹性强弱 → 在周期的哪个位置。</p>
+</section>
+
+{% if rows %}
+<div class="charts">
+  <div class="chart-box tall">
+    <h3>毛利率波动 × 弹性比值</h3>
+    <p class="sub">右上角才是"又波动又敏感"的强周期股。横轴 σ&lt;5pp 且靠左的，多属稳定生意。</p>
+    <div class="canvas-wrap"><canvas id="scatter"></canvas></div>
+  </div>
+  <div class="chart-box tall">
+    <h3>产能周转率分位</h3>
+    <p class="sub">判断③：产能利用率处在自身十年分位。&lt;40 低位、&gt;60 高位（虚线）。</p>
+    <div class="canvas-wrap"><canvas id="position"></canvas></div>
+  </div>
+</div>
+
+<section class="panel">
+  <h2>明细（{{ rows|length }} 只）</h2>
+  <p class="sub">
+    周期股 {{ rows|selectattr('is_cycle')|list|length }} 只；
+    弹性：强 {{ rows|selectattr('elastic_label','equalto','strong')|list|length }}
+    / 弱 {{ rows|selectattr('elastic_label','equalto','weak')|list|length }}
+    / 不稳定 {{ rows|selectattr('elastic_label','equalto','unstable')|list|length }}。
+  </p>
+  <div class="scroll">
+    <table class="grid">
+      <thead><tr>
+        <th>代码</th><th>名称</th>
+        <th>是否周期股</th>
+        <th class="n">毛利率σ(pp)</th><th class="n">CV%</th><th class="n">毛利率中位</th>
+        <th class="n">弹性比值</th><th>弹性</th>
+        <th class="n">产能分位</th><th>位置</th>
+      </tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td class="code">{{ r.symbol }}</td>
+          <td class="name"><a href="/stock/{{ r.symbol }}">{{ r.name or '—' }}</a></td>
+          <td>{% if r.is_cycle %}<span class="chip warn">周期股</span>{% else %}<span class="chip muted">非周期</span>{% endif %}</td>
+          <td class="n">{{ r.gm_std_pp|num(2) }}</td>
+          <td class="n">{{ r.gm_cv_pct|num(1) }}</td>
+          <td class="n">{{ r.gm_median_pct|num(1) }}</td>
+          <td class="n">{{ r.elasticity|ratio }}</td>
+          <td><span class="chip {{ 'good' if r.elastic_label == 'strong' else ('muted' if r.elastic_label == 'weak' else 'info') }}">{{ {'strong':'强','weak':'弱','unstable':'不稳定'}.get(r.elastic_label, r.elastic_label or '—') }}</span></td>
+          <td class="n">{{ r.position_pct|num(1) }}</td>
+          <td><span class="chip {{ r.position_label|tone }}">{{ r.position_label|poslabel }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% else %}
+<div class="empty">还没有周期结果：跑 <code>./run.py cycle</code>。</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+{% if rows %}
+<script>
+const name = {{ rows|map(attribute='name')|list|tojson }};
+const gm   = {{ rows|map(attribute='gm_std_pp')|list|tojson }};
+const ela  = {{ rows|map(attribute='elasticity')|list|tojson }};
+const isCy = {{ rows|map(attribute='is_cycle')|list|tojson }};
+const pos  = {{ rows|map(attribute='position_pct')|list|tojson }};
+const posL = {{ rows|map(attribute='position_label')|list|tojson }};
+const code = {{ rows|map(attribute='symbol')|list|tojson }};
+
+const COLORS = {warn: 'rgba(180,83,9,.7)', info: 'rgba(29,78,216,.6)', muted: 'rgba(148,163,184,.7)'};
+const groups = [['warn', '周期股'], ['muted', '非周期股']];
+const ds = groups.map(([tone, label]) => ({
+  label, pointRadius: 5,
+  backgroundColor: COLORS[tone],
+  data: gm.map((x, i) => isCy[i] && tone === 'warn' || !isCy[i] && tone === 'muted'
+      ? {x: x, y: ela[i], name: name[i], code: code[i]} : null).filter(Boolean)
+}));
+
+new Chart(document.getElementById('scatter'), {
+  type: 'scatter',
+  data: {datasets: ds},
+  options: {
+    maintainAspectRatio: false,
+    plugins: { tooltip: { callbacks: { label: c =>
+      `${c.raw.name} ${c.raw.code}｜σ ${c.raw.x}pp｜弹性 ${c.raw.y}` } } },
+    scales: {
+      x: {title: {display: true, text: '毛利率 σ（pp，20 季）'}, grid: {color: '#eef2f7'}},
+      y: {title: {display: true, text: '弹性比值（8 季中位）'}, grid: {color: '#eef2f7'}}
+    }
+  }
+});
+
+const posColor = posL.map(l => l === 'high' ? COLORS.warn : (l === 'low' ? COLORS.info : COLORS.muted));
+new Chart(document.getElementById('position'), {
+  type: 'bar',
+  data: { labels: name.map((n, i) => `${n}`),
+    datasets: [{data: pos, backgroundColor: posColor, borderRadius: 5}] },
+  options: {
+    maintainAspectRatio: false,
+    plugins: {legend: {display: false},
+      tooltip: {callbacks: {label: c => `${c.raw.y} 分位（${posL[c.dataIndex]}）`}}},
+    scales: {y: {min: 0, max: 100, grid: {color: '#eef2f7'},
+                 title: {display: true, text: '产能周转率分位'}},
+             x: {grid: {display: false}, ticks: {autoSkip: false, maxRotation: 60, font: {size: 10}}}}
+  }
+});
+</script>
+{% endif %}
+{% endblock %}

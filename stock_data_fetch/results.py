@@ -387,6 +387,43 @@ def latest(tool: str, db: str | Path | None = None) -> list[dict]:
         conn.close()
 
 
+def latest_for(tool: str, target_date: str | None = None,
+               db: str | Path | None = None) -> list[dict]:
+    """基准日恰好是 `target_date` 的那一批（取最新一次运行）。
+
+    下游三个工具原来靠"读当天的选股 CSV"接上选股结果，现在改读这里：
+    日期对不上就是没有输入，宁可返回空、让调用方报错，也不要悄悄拿
+    最近一次运行凑数——那会把 11-13 的名单算成 11-20 的结论。
+
+    `target_date` 给 None 时才退回"最近一次运行"。
+    """
+    if not target_date:
+        return latest(tool, db)
+    conn = connect(db)
+    try:
+        row = conn.execute(
+            "select max(id) from run where tool=? and target_date=?",
+            (tool, str(target_date)[:10])).fetchone()
+        if not row or row[0] is None:
+            return []
+        cur = conn.execute(
+            f"select * from {TABLE[tool]} where run_id=? order by symbol", (row[0],))
+        names = [d[0] for d in cur.description]
+        return [dict(zip(names, r)) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def symbols_for(tool: str, target_date: str | None = None,
+                db: str | Path | None = None) -> list[dict]:
+    """`[{symbol, name}]`——下游工具要的最小清单。"""
+    try:
+        rows = latest_for(tool, target_date, db)
+    except Exception:                              # noqa: BLE001
+        return []
+    return [{"symbol": r["symbol"], "name": r.get("name")} for r in rows if r.get("symbol")]
+
+
 def history(tool: str, symbol: str, db: str | Path | None = None) -> list[dict]:
     """某只票在某工具上的历史结果（旧→新），用于看结论怎么变的。"""
     conn = connect(db)

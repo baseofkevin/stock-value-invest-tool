@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}看板{% endblock %} · stock-value-invest</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script src="{{ url_for('static', filename='chart.umd.min.js') }}"></script>
+</head>
+<body>
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">个股研究看板<small>RESULTS.DB · 只读</small></div>
+    <nav class="nav">
+      {% for href, label in nav %}
+      <a href="{{ href }}" class="{{ 'on' if request.path == href or (href != '/' and request.path.startswith(href)) else '' }}">{{ label }}</a>
+      {% endfor %}
+    </nav>
+  </div>
+</div>
+
+<main class="page">
+  {% block body %}{% endblock %}
+
+  <div class="foot">
+    <strong>说明</strong>：数据全部来自 <code>results.db</code>——它是四个工具的派生结果库，
+    每跑一次工具就多一批记录，本页不缓存、刷新即最新。
+    页面只做展示，不合并总分、不输出买卖结论。
+  </div>
+</main>
+
+<footer class="footer-note"></footer>
+{% block scripts %}{% endblock %}
+</body>
+</html>

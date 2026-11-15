@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block title %}{{ name }}{% endblock %}
+{% block body %}
+
+<section class="hero">
+  <div class="eyebrow">STOCK</div>
+  <h1>{{ name }}<span class="code">{{ symbol }}</span></h1>
+  <p>
+    四个工具的结论并排。
+    {% set sel = rows.select %}{% set cyc = rows.cycle %}{% set qua = rows.quality %}{% set top = rows.top %}
+    {% if top %}最近基准日 {{ top.data.date or '' }}　收盘 {{ top.close|num(2) }}　距 250 日高点 {{ top.pos250|pct }}。{% else %}这只票不在最近一批顶部判断里。{% endif %}
+  </p>
+</section>
+
+<div class="cards">
+  <a class="card" href="/select">
+    <div class="k">选股</div>
+    <div class="v">{{ '入选' if sel else '不在名单' }}</div>
+    <div class="s">{% if sel %}池内换手分位 {{ sel.pool_turnover_rank|num(1) }} · {{ sel.stars or '' }}{% else %}—{% endif %}</div>
+  </a>
+  <a class="card" href="/cycle">
+    <div class="k">周期</div>
+    <div class="v">{{ '周期股' if cyc and cyc.is_cycle else ('非周期' if cyc else '—') }}</div>
+    <div class="s">{% if cyc %}σ {{ cyc.gm_std_pp|num(2) }}pp · 弹性 {{ {'strong':'强','weak':'弱','unstable':'不稳定'}.get(cyc.elastic_label, cyc.elastic_label or '—') }} · {{ cyc.position_label|poslabel }}{% else %}—{% endif %}</div>
+  </a>
+  <a class="card" href="/quality">
+    <div class="k">质量 / 估值</div>
+    <div class="v">{{ qua.q|num(1) if qua else '—' }} / {{ qua.v|num(1) if qua else '—' }}</div>
+    <div class="s">{% if qua %}<span class="chip {{ qua.conclusion|tone }}">{{ qua.conclusion }}</span>{% else %}—{% endif %}</div>
+  </a>
+  <a class="card" href="/top">
+    <div class="k">顶部·动量</div>
+    <div class="v">{{ top.momentum_state if top else '—' }}</div>
+    <div class="s">{% if top %}换手 {{ top.turnover_state }} · 业绩 {{ top.earnings_state }} · 量价 {{ top.volume_state }}{% endif %}</div>
+  </a>
+</div>
+
+{% if views %}
+<section class="panel">
+  <h2>四因子独立观察</h2>
+  <p class="sub">四个维度各说各的，程序不做加权、不合计、不替你下结论。</p>
+  <div class="two">
+    {% for v in views %}
+    <div class="tile">
+      <h3>{{ v[0] }}<span class="chip {{ v[1]|tone }}" style="margin-left:8px">{{ v[1] }}</span></h3>
+      <p class="sub">这是 {{ top.data.date or '' }} 这一天按当时的 K 线/财务算出来的结论块。</p>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<div class="two">
+  {% if extras %}
+  <section class="panel">
+    <h2>旁证</h2>
+    <p class="sub">估值分位 / 机构目标价 / 基本面反证 / 周期状态，各一句话，不参与结论。</p>
+    {% set val = (extras.valuation or {}).get('metrics') or {} %}
+    <table class="kv"><tbody>
+      <tr class="tone-info"><th>估值分位</th><td>
+        {% if val %}
+          {% for key, label in [('pe','PE(TTM)'), ('pb','PB'), ('ps','PS(TTM)')] %}
+            {% set item = val.get(key) or {} %}
+            {% if item.current is not none %}{{ label }} {{ item.current|num(2) }}（{% if item.percentile is not none %}P{{ item.percentile|num(0) }}{% else %}分位不足{% endif %}）{% if not loop.last %} · {% endif %}{% endif %}
+          {% endfor %}
+          <br><small style="color:#94a3b8">样本 {{ (extras.valuation or {}).get('sample_start') }} 起 {{ (extras.valuation or {}).get('weeks') }} 周</small>
+        {% else %}—{% endif %}
+      </td></tr>
+      <tr><th>机构目标价</th><td>
+        {% set con = extras.consensus or {} %}
+        {% if con.target %}{{ con.target|num(2) }}（距现价 {{ con.upside|pct }}，{{ con.forecasts }} 个预测年度）{% else %}无机构覆盖（上游一致预期为空表，不是取数故障）{% endif %}
+      </td></tr>
+      <tr class="{{ 'tone-warn' if (extras.risk or {}).get('hit') else 'tone-info' }}"><th>基本面反证</th><td>
+        {% set rk = extras.risk or {} %}
+        {% set rk_items = rk.get('items') or [] %}
+        {% if rk_items %}
+          {% for i in rk_items %}{{ i.label }} {{ i.text }}{% if not loop.last %}；{% endif %}{% endfor %}
+          <br><small style="color:#94a3b8">命中 {{ rk.hit }} / 提示 {{ rk.watch }}（命中项越多，"这波涨没有基本面"的证据越强）</small>
+        {% else %}—{% endif %}
+      </td></tr>
+      {% set cy = extras.cycle or {} %}
+      {% if cy %}
+      <tr><th>周期状态</th><td>
+        毛利率σ {{ cy.gm_std|num(2) }}pp、CV {% if cy.gm_cv is none %}—{% else %}{{ cy.gm_cv|num(0) }}%{% endif %}
+        → {{ '是周期股' if cy.is_cycle else '不是周期股' }}；弹性
+        {{ {'strong':'强','weak':'弱','unstable':'不稳定'}.get(cy.elastic_label, cy.elastic_label or '—') }}；
+        产能周转率 {% if cy.position_pct is none %}—{% else %}{{ cy.position_pct|num(0) }}% 分位{% endif %}
+        （{{ cy.position_label|poslabel }}）
+      </td></tr>
+      {% endif %}
+    </tbody></table>
+  </section>
+  {% endif %}
+
+  <section class="panel">
+    <h2>质量初筛</h2>
+    <p class="sub">Q 越低要求 V 越高；Q &lt; 45 一律回避。</p>
+    {% if qua %}
+    <table class="kv"><tbody>
+      <tr><th>质量分 Q</th><td><b>{{ qua.q|num(1) }}</b>　{{ (qua.data.payload or {}).get('q_grade') or '' }}</td></tr>
+      <tr><th>估值分 V</th><td><b>{{ qua.v|num(1) }}</b>　{{ (qua.data.payload or {}).get('v_grade') or '' }}</td></tr>
+      <tr><th>结论</th><td><span class="chip {{ qua.conclusion|tone }}">{{ qua.conclusion }}</span></td></tr>
+      <tr><th>理由</th><td>{{ qua.reason or '—' }}</td></tr>
+      <tr><th>风险检查</th><td>命中 {{ qua.risks_hit if qua.risks_hit is not none else '—' }} / 提示 {{ qua.risks_watch if qua.risks_watch is not none else '—' }} / 已知 {{ qua.risks_known if qua.risks_known is not none else '—' }}</td></tr>
+    </tbody></table>
+    {% else %}
+    <div class="empty">这只票没有质量初筛结果。</div>
+    {% endif %}
+  </section>
+</div>
+
+{% if cyc %}
+<section class="panel">
+  <h2>周期弹性三判断</h2>
+  <p class="sub">三个判断分开看，程序不合并成一个"周期总分"。</p>
+  <table class="kv"><tbody>
+    <tr><th>判断① 是不是周期股</th><td>{% if cyc.is_cycle %}<span class="chip warn">是周期股</span>{% else %}<span class="chip muted">不是</span>{% endif %}
+      　毛利率 σ {{ cyc.gm_std_pp|num(2) }}pp，CV {% if cyc.gm_cv_pct is none %}—{% else %}{{ cyc.gm_cv_pct|num(1) }}%{% endif %}，中位 {{ cyc.gm_median_pct|num(1) }}%</td></tr>
+    <tr><th>判断② 弹性</th><td>{{ {'strong':'强（利润对收入敏感）','weak':'弱','unstable':'不稳定'}.get(cyc.elastic_label, cyc.elastic_label or '—') }}
+      　比值 {{ cyc.elasticity|ratio }}</td></tr>
+    <tr><th>判断③ 周期位置</th><td>{{ cyc.position_label|poslabel }}
+      　产能周转率分位 {{ cyc.position_pct|num(1) }}</td></tr>
+  </tbody></table>
+</section>
+{% endif %}
+
+{% if gaps %}
+<section class="panel">
+  <h2>取数缺口</h2>
+  <p class="sub">这些是没取到的旁证数据，不影响四因子（四因子用的是 K 线与财务）。</p>
+  <table class="kv"><tbody>
+    {% for g in gaps %}
+    <tr><th>{{ g.domain }}</th><td>{{ g.why }}</td></tr>
+    {% endfor %}
+  </tbody></table>
+</section>
+{% endif %}
+
+{% if hist and (hist.top|length > 1 or hist.quality|length > 1) %}
+<section class="panel">
+  <h2>历史</h2>
+  <p class="sub">每次运行各留一条记录（旧→新）。只画有值的点，断点表示那次没跑这只票。</p>
+  <div class="chart-box tall" style="border:0;padding:0">
+    <div class="canvas-wrap"><canvas id="hist"></canvas></div>
+  </div>
+</section>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+{% if hist %}
+<script>
+const posHist = {{ hist.top|map(attribute='pos250')|list|tojson }};
+const qHist   = {{ hist.quality|map(attribute='q')|list|tojson }};
+const labels  = [...Array(Math.max(posHist.length, qHist.length)).keys()].map(i => '第' + (i + 1) + '次');
+const datasets = [];
+if (posHist.length) datasets.push({label: '距250日高点 %', data: posHist.map(v => v == null ? null : +(v * 100).toFixed(2)),
+  borderColor: '#0f766e', backgroundColor: 'rgba(15,118,110,.12)', tension: .25, spanGaps: true});
+if (qHist.length) datasets.push({label: '质量分 Q', data: qHist, yAxisID: 'y2',
+  borderColor: '#1d4ed8', backgroundColor: 'rgba(29,78,216,.1)', tension: .25, spanGaps: true});
+new Chart(document.getElementById('hist'), {
+  type: 'line',
+  data: {labels, datasets},
+  options: {maintainAspectRatio: false, interaction: {mode: 'index', intersect: false},
+    scales: {y: {title: {display: true, text: '距高点 %'}, grid: {color: '#eef2f7'}},
+             y2: {position: 'right', title: {display: true, text: 'Q'}, grid: {display: false}}}}
+});
+</script>
+{% endif %}
+{% endblock %}

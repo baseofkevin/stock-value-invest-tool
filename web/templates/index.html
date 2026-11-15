@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}概览{% endblock %}
+{% block body %}
+
+<section class="hero">
+  <div class="eyebrow">Dashboard</div>
+  <h1>四个工具的最新结论，一张表看完</h1>
+  <p>
+    选股 → 周期 → 质量 → 顶部，全部读自 <code>results.db</code>。
+    {% if summary and summary[0].target_date %}最近一批基准日 <strong style="color:#fff">{{ summary[0].target_date }}</strong>。{% endif %}
+  </p>
+</section>
+
+<div class="cards">
+  {% for s in summary %}
+  <a class="card" href="{{ s.href }}">
+    <div class="k">{{ s.label }}</div>
+    <div class="v">{{ counts[s.tool] }} 只</div>
+    <div class="s">
+      {% if s.run_id %}
+        {{ s.target_date }} · {{ s.started_at|clock }}
+        {% if s.n_fail %} · 失败 {{ s.n_fail }}{% endif %}
+      {% else %}
+        还没有运行记录
+      {% endif %}
+    </div>
+  </a>
+  {% endfor %}
+</div>
+
+<section class="panel">
+  <h2>合并表</h2>
+  <p class="sub">一只票一行，四边的结论并排。点名称进入个股页。空白表示该工具这次没算这只票。</p>
+  <div class="scroll">
+    <table class="grid" id="merged">
+      <thead>
+        <tr>
+          <th>代码</th><th>名称</th>
+          <th class="n">选股·换手分位</th>
+          <th>周期</th>
+          <th class="n">Q</th><th class="n">V</th><th>质量结论</th>
+          <th class="n">距250日高点</th><th>动量</th><th>周期位置</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in merged %}
+        <tr class="{{ '' if r.top or r.quality else 'dim' }}">
+          <td class="code">{{ r.symbol }}</td>
+          <td class="name"><a href="/stock/{{ r.symbol }}">{{ r.name or '—' }}</a></td>
+          <td class="n">{% if r.select %}{{ r.select.pool_turnover_rank|num(1) }}{% else %}—{% endif %}</td>
+          <td>{% if r.cycle %}<span class="chip {{ r.cycle.position_label|tone }}">{{ r.cycle.position_label|poslabel }}</span>{% if r.cycle.is_cycle %}<span class="chip info" style="margin-left:6px">周期</span>{% endif %}{% else %}—{% endif %}</td>
+          <td class="n">{{ r.quality.q|num(1) if r.quality else '—' }}</td>
+          <td class="n">{{ r.quality.v|num(1) if r.quality else '—' }}</td>
+          <td>{% if r.quality %}<span class="chip {{ r.quality.conclusion|tone }}">{{ r.quality.conclusion or '—' }}</span>{% else %}—{% endif %}</td>
+          <td class="n">{{ r.top.pos250|pct if r.top else '—' }}</td>
+          <td>{% if r.top %}<span class="chip {{ r.top.momentum_state|tone }}">{{ r.top.momentum_state or '—' }}</span>{% else %}—{% endif %}</td>
+          <td>{% if r.top and r.top.cycle_state %}<span class="chip {{ r.top.cycle_state|tone }}">{{ r.top.cycle_state|cycle_state }}</span>{% else %}—{% endif %}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="10"><div class="empty">结果库还是空的：先跑 <code>./run.py all</code>，四个工具会把结论写进来。</div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% endblock %}

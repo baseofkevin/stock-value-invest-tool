@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}质量{% endblock %}
+{% block body %}
+
+<section class="hero">
+  <div class="eyebrow">stock_quality_screen</div>
+  <h1>质量初筛 &amp; 估值</h1>
+  <p>质量分 Q（五个维度）＋ 估值分 V（机构口径）。<b style="color:#fff">Q &lt; 45 一律回避</b>；Q 越低要求 V 越高。</p>
+</section>
+
+{% if rows %}
+<div class="charts">
+  <div class="chart-box tall">
+    <h3>质量 × 估值</h3>
+    <p class="sub">左上角是"好公司但贵"，右下角是"便宜但质地差"。竖线 Q=45 是硬地板，横线 V=60 是常见门槛。</p>
+    <div class="canvas-wrap"><canvas id="qv"></canvas></div>
+  </div>
+  <div class="chart-box tall">
+    <h3>结论分布</h3>
+    <p class="sub">这一批里有多少只被直接排除、多少只要看第二节的风险信号。</p>
+    <div class="canvas-wrap"><canvas id="concl"></canvas></div>
+  </div>
+</div>
+
+<section class="panel">
+  <h2>明细（{{ rows|length }} 只）</h2>
+  <p class="sub">风险检查列是"命中 / 提示 / 已知项"，已知项越少说明数据越不完整。</p>
+  <div class="scroll">
+    <table class="grid">
+      <thead><tr>
+        <th>代码</th><th>名称</th>
+        <th class="n">Q</th><th>质量档</th>
+        <th class="n">V</th><th>估值档</th>
+        <th>结论</th>
+        <th class="n">风险 命中/提示/已知</th>
+        <th>理由</th>
+      </tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td class="code">{{ r.symbol }}</td>
+          <td class="name"><a href="/stock/{{ r.symbol }}">{{ r.name or '—' }}</a></td>
+          <td class="n"><b>{{ r.q|num(1) }}</b></td>
+          <td>{{ r.q_grade or '—' }}</td>
+          <td class="n">{{ r.v|num(1) }}</td>
+          <td>{{ r.v_grade or '—' }}</td>
+          <td><span class="chip {{ r.conclusion|tone }}">{{ r.conclusion or '—' }}</span></td>
+          <td class="n">{{ r.risks_hit if r.risks_hit is not none else '—' }} / {{ r.risks_watch if r.risks_watch is not none else '—' }} / {{ r.risks_known if r.risks_known is not none else '—' }}</td>
+          <td style="max-width:420px">{{ r.reason or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% else %}
+<div class="empty">还没有质量结果：跑 <code>./run.py quality</code>。</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+{% if rows %}
+<script>
+const name = {{ rows|map(attribute='name')|list|tojson }};
+const code = {{ rows|map(attribute='symbol')|list|tojson }};
+const q    = {{ rows|map(attribute='q')|list|tojson }};
+const v    = {{ rows|map(attribute='v')|list|tojson }};
+const concl = {{ rows|map(attribute='conclusion')|list|tojson }};
+
+const byConcl = {};
+concl.forEach((c, i) => {
+  const k = c || '—';
+  (byConcl[k] = byConcl[k] || []).push({x: q[i], y: v[i], name: name[i], code: code[i]});
+});
+const colorOf = c => c.includes('回避') ? 'rgba(180,83,9,.7)'
+  : c.includes('观察') ? 'rgba(29,78,216,.65)' : 'rgba(148,163,184,.75)';
+
+new Chart(document.getElementById('qv'), {
+  type: 'scatter',
+  data: {datasets: Object.keys(byConcl).map(k => ({
+    label: k, data: byConcl[k].filter(p => p.x != null && p.y != null),
+    pointRadius: 5, backgroundColor: colorOf(k)}))},
+  options: {
+    maintainAspectRatio: false,
+    plugins: { tooltip: {callbacks: {label: c =>
+      `${c.raw.name} ${c.raw.code}｜Q ${c.raw.x} V ${c.raw.y}`}} },
+    scales: {
+      x: {title: {display: true, text: '质量分 Q'}, grid: {color: '#eef2f7'}, suggestedMin: 0, suggestedMax: 100},
+      y: {title: {display: true, text: '估值分 V'}, grid: {color: '#eef2f7'}, suggestedMin: 0, suggestedMax: 100}
+    }
+  }
+});
+
+const tally = {};
+concl.forEach(c => { const k = c || '—'; tally[k] = (tally[k] || 0) + 1; });
+const labels = Object.keys(tally).sort((a, b) => tally[b] - tally[a]);
+new Chart(document.getElementById('concl'), {
+  type: 'doughnut',
+  data: {labels, datasets: [{data: labels.map(l => tally[l]),
+    backgroundColor: labels.map(colorOf), borderColor: '#fff', borderWidth: 2}]},
+  options: {maintainAspectRatio: false, cutout: '58%',
+    plugins: {legend: {position: 'bottom', labels: {boxWidth: 10, font: {size: 11}}}}}
+});
+</script>
+{% endif %}
+{% endblock %}

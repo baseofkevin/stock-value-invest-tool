@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ code }}{% endblock %}
+{% block body %}
+<section class="hero">
+  <div class="eyebrow">ERROR {{ code }}</div>
+  <h1>这儿什么都没有</h1>
+  <p>{{ msg }}</p>
+</section>
+<p style="text-align:center"><a href="/">← 回概览</a></p>
+{% endblock %}

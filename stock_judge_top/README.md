@@ -2,10 +2,14 @@
 
 > 2026-11-15 从 `~/MyData/stock-judge-top-tool` 迁移重建。原版 1911 行、
 > 纯标准库零依赖；本次迁移**逻辑层一字未动**（indicators / finance /
-> judgement / views / render / log 全部原样拷贝），只重写了数据层与入口。
+> judgement / views / log 全部原样拷贝），只重写了数据层、入口与产出方式。
+>
+> 同日稍晚又删掉了 HTML 报告（`render/html.py` + `render/css.py`）：
+> 结论写 `results.db`，人看结果走 `./run.py web`。
 
     python3 -m stock_judge_top sh600519 [--date 2026-11-13] [--json] [--refresh]
-    python3 -m stock_judge_top --csv 选股.csv [--workers 4] [--quiet]
+    python3 -m stock_judge_top --from-select 2026-11-13 [--workers 4] [--quiet]
+    python3 -m stock_judge_top --csv 我的持仓.csv [--workers 4] [--quiet]
 
 四因子（动量 / 换手 / 业绩 / 量价）各自独立出结果，不打分、不合并总分、
 不判顶——这是原版的设计立场，迁移不改。
@@ -19,19 +23,20 @@
 交易日）。原来默认 `date.today()`，周末跑会先报「末端不足（库 11-13 / 需 11-15）」
 再报「当前无 K 线（可能停牌）」——把"今天不是交易日"说成"停牌"。
 
-## 0. 批量模式（2026-11-15 新增）
+## 0. 批量模式
 
 持仓一多、或者想在下周五的选股结果上整体扫一遍"谁已经贴着 250 日高点"，
 一只只敲太慢：
 
-    python3 -m stock_judge_top --csv output/kline-screen/选股_2026-11-20.csv --workers 4
+    python3 -m stock_judge_top --from-select 2026-11-13 --workers 4
+    python3 -m stock_judge_top --csv 我的持仓.csv --workers 4
 
-- 读 CSV 的**代码列**（`代码` / `股票代码` / `证券代码` / `code` / `symbol`）；
+- 名单默认取 `results.db` 里那一天的选股结果（`--from-select`，省略日期=最近一次）；
+  `--csv` 读**代码列**（`代码` / `股票代码` / `证券代码` / `code` / `symbol`），
   没有表头时取第一列。同一只出现多次只跑一次（保序）。
 - 单只失败不影响其余，最后汇总「成功 N / 失败 M」并列出失败代码。
-- 每只照旧出一份 HTML，另外多一个索引页
-  `output/judge-top/四因子观察-批量_<日期>_<时间>.html`：按「距 250 日高点」
-  从近到远排序，一眼看出谁在高位。
+- 每只的结论写进 `results.db` 的 `top_result` 表；看板的「顶部」页按
+  「距 250 日高点」从近到远排，一眼看出谁在高位。
 - 并发是**每线程一个库连接**（SQLite 连接不能跨线程），`--workers` 默认 4。
 
 ## 1. 与原版的差异（只有数据层）
@@ -103,15 +108,16 @@ CLI 接口不变；`--refresh` 现在透传为 hub 的 `force`（清重试标记
     cd /home/kevin/MyData/stock-value-invest-tool && \
     python3 -m stock_judge_top.tests
 
-8 个文件（unittest）：indicators / finance / judgement / views / render /
-evaluate / judge（CLI 与退出码）+ 新增 hubdata（§2.1/§2.2 的映射断言）。
-全部离线。原版的 test_mcp / test_westock / test_data 随数据层一起删除。
+8 个文件（unittest）：indicators / finance / judgement / views / text（终端报告）/
+evaluate / judge（CLI 与退出码）+ hubdata（§2.1/§2.2 的映射断言）。
+全部离线。原版的 test_mcp / test_westock / test_data 随数据层一起删除，
+test_render 里的 HTML 断言随报告一起删除（终端的那些保留）。
 
 ## 4. 冒烟记录（2026-11-15）
 
-- `sh600519 --date 2026-11-13 --verbose`：四因子完整报告，HTML 写入
-  `output/judge-top/贵州茅台_*.html`；业绩卡片 2026Q3（402.67 亿营收，
-  同比 +3.1%）——财务链路（finance_full → westock 字段名）数值正确。
+- `sh600519 --date 2026-11-13 --verbose`：四因子完整报告打到终端，结论写入
+  `results.db`；业绩卡片 2026Q3（402.67 亿营收，同比 +3.1%）——
+  财务链路（finance_full → westock 字段名）数值正确。
 - `sh600000 --json`：JSON 契约（quote 剔除 / views 四键 / warnings 空 /
   av20=0.196%）。
 - `sz300750`（库里无 K 线）+ 恰逢腾讯 WAF 封禁窗口：exit 1、错误信息清晰，

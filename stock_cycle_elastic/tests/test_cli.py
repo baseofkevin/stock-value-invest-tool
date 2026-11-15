@@ -13,6 +13,7 @@ CLI 是唯一对外的门面，错在细节上最伤用户体验：
 import contextlib
 import hashlib
 import io
+import json
 import os
 import re
 import shutil
@@ -27,6 +28,7 @@ from tests.fixtures import FIXTURE_DIR, load
 import config
 import cycle_report
 from cycle import batch, fetch
+from stock_data_fetch import results as results_db
 
 # ---------------------------------------------------------------------------
 # 运行辅助
@@ -57,16 +59,10 @@ atexit.register(_cleanup_temp_dirs)
 def run_main(argv, out_dir=None):
     """跑 main()，返回 (exit_code, stdout, stderr, out_dir)。
 
-    **`--out-dir` 参数已删除**（产物位置统一由 `_out_dir_for()` 决定，
-    见 cycle_report 模块文档）。测试不能靠命令行改输出目录了，
-    改为 patch 掉 `_out_dir_for` 让它返回临时目录：
-
-    这样断言仍然是"产物落在 out_dir 里"，而不是落在真实的
-    `output/cycle-elastic/` 里把真报告污染掉。
-
-    **临时目录不在这里删** —— 调用方要在返回后检查产物，
-    删掉的话所有 "文件是否生成" 的断言都会假失败。
-    由 `_TEMP_DIRS` + atexit 统一清理。
+    2026-11-15 起 CLI **不再产出任何文件**（HTML/索引页/CSV 全部取消，结果只写
+    results.db），所以这里返回的 out_dir 只是一个空的临时目录：留给"什么都没
+    写出来"这类断言用，`list_files()` 永远是空列表。写库的目标由
+    `tests/__init__.py` 里的 `STOCK_RESULTS_DB` 指到临时库，不碰真实的 results.db。
     """
     argv = list(argv)
     if out_dir is None:
@@ -75,8 +71,7 @@ def run_main(argv, out_dir=None):
     _TEMP_DIRS.append(out_dir)
 
     out, err = io.StringIO(), io.StringIO()
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
-            mock.patch.object(cycle_report, "_out_dir_for", return_value=out_dir):
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         code = cycle_report.main(argv)
 
     return code, out.getvalue(), err.getvalue(), out_dir
@@ -116,13 +111,13 @@ class TestParser(unittest.TestCase):
         self.assertEqual(args.workers, 4)
         self.assertEqual(args.sample, 500)
         self.assertFalse(args.force)
-        self.assertFalse(args.no_index)
         self.assertFalse(args.quiet)
+        self.assertIsNone(args.from_select)
 
     def test_removed_options_are_gone(self):
         """`--out-dir` / `--timeout` / `--retries` / `--retry-wait` 都已删除。
 
-        - `--out-dir`：产物目录由 `_out_dir_for()` 统一算，不给用户覆盖的口子。
+        - `--out-dir`：报告整体取消后没有"产物目录"这回事了。
         - 后三个：原本控制 node 客户端，迁移到共享数据层后超时由 Throttle 管、
           重试由 `_ensure_retrying` 管，留着不生效的参数比删掉更误导人
           （用户会以为调它能改变行为）。
@@ -152,7 +147,15 @@ class TestParser(unittest.TestCase):
 
     def test_epilog_has_examples(self):
         self.assertIn("--stock 600519", self.parser.epilog)
-        self.assertIn("--csv 池.csv", self.parser.epilog)
+        self.assertIn("--from-select 2026-11-13", self.parser.epilog)
+        self.assertIn("--csv 我的持仓.csv", self.parser.epilog)
+
+    def test_no_index_option(self):
+        """索引页取消后 `--no-index` 也不该还在（传了要报 2）。"""
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as ctx:
+                self.parser.parse_args(["--stock", "600519", "--no-index"])
+        self.assertEqual(ctx.exception.code, 2)
 
 
 class TestValidateArgs(unittest.TestCase):
@@ -331,84 +334,41 @@ class TestResolveStock(unittest.TestCase):
 class TestSingleMode(unittest.TestCase):
 
     def test_bundle_end_to_end(self):
-        """--bundle 跑通：出 HTML、退出码 0、打印三个判断。"""
+        """--bundle 跑通：退出码 0、三个判断打印出来、结论落进结果库。"""
         code, out, err, out_dir = run_main(
             ["--stock", "601899", "--bundle", bundle_path()])
         self.assertEqual(code, cycle_report.EXIT_OK)
-
-        files = list_files(out_dir)
-        self.assertEqual(len(files), 1)
-        self.assertTrue(files[0].endswith(".html"))
-        self.assertIn("601899", files[0])
-        self.assertIn(config.REPORT_NAME_TAG, files[0])
+        self.assertEqual(list_files(out_dir), [])          # 一个文件都不该有
 
         # 终端要打印三个判断
         self.assertIn("是不是周期股", out)
         self.assertIn("弹性", out)
         self.assertIn("周期位置", out)
-        self.assertIn("报告", out)
+        self.assertIn("results.db", out)
 
-    def test_bundle_report_has_ten_attrs(self):
-        _, _, _, out_dir = run_main(
-            ["--stock", "601899", "--bundle", bundle_path()])
-        path = os.path.join(out_dir, list_files(out_dir)[0])
-        with open(path, "r", encoding="utf-8") as fh:
-            html = fh.read()
-
-        for attr in ("data-code", "data-name", "data-quarters", "data-gm-std",
-                     "data-cycle", "data-elastic", "data-elastic-ratio",
-                     "data-position", "data-position-pct", "data-financial"):
-            self.assertIn(f'{attr}="', html)
-        self.assertIn('data-code="601899"', html)
-        self.assertIn('data-cycle="1"', html)
+        row = results_db.latest_for("cycle", None)[0]
+        self.assertEqual(row["symbol"], "sh601899")        # 归一成代码带前缀
+        self.assertEqual(row["name"], "紫金矿业")
 
     def test_bundle_snapshot_is_stable(self):
-        """同一份 bundle 跑两次，锚点值逐字相同（判定可复现）。"""
-        def attrs_of():
-            _, _, _, out_dir = run_main(
-                ["--stock", "601899", "--bundle", bundle_path()])
-            path = os.path.join(out_dir, list_files(out_dir)[0])
-            with open(path, "r", encoding="utf-8") as fh:
-                body = re.search(r"<body([^>]*)>", fh.read()).group(1)
-            return dict(re.findall(r'(data-[a-z-]+)="([^"]*)"', body))
+        """同一份 bundle 跑两次，库里的结论逐字段相同（判定可复现）。"""
+        def decision_of():
+            run_main(["--stock", "601899", "--bundle", bundle_path()])
+            return json.loads(results_db.latest_for("cycle", None)[0]["payload"])
 
-        self.assertEqual(attrs_of(), attrs_of())
+        self.assertEqual(decision_of(), decision_of())
 
     def test_name_override(self):
-        _, _, _, out_dir = run_main(
+        _, _, _, _ = run_main(
             ["--stock", "601899", "--bundle", bundle_path(), "--name", "自定义名"])
-        self.assertTrue(any("自定义名" in f for f in list_files(out_dir)))
+        self.assertEqual(results_db.latest_for("cycle", None)[0]["name"], "自定义名")
 
-    def test_default_out_dir_points_to_shared_output(self):
-        """默认产物落 `stock-value-invest-tool/output/cycle-elastic`，与 CWD 无关。
-
-        原版断言是"落在项目内 html-report/"。改这一条不是迁就新代码——
-        原设计"产物进源码目录"本身就是问题：跑几次之后源码目录里躺着几十份
-        HTML 和一个 html-report2/，说不清哪份最新。现在四个工具统一进
-        `output/<工具名>/`（见 output/README.md）。
-        """
-        self.assertEqual(config.DEFAULT_OUT_DIR,
-                         os.path.join(config.HUB_ROOT, "output", "cycle-elastic"))
-        # 必须在 hub 根下，且不在源码目录下
-        self.assertTrue(config.DEFAULT_OUT_DIR.startswith(config.HUB_ROOT))
-        self.assertFalse(config.DEFAULT_OUT_DIR.startswith(config.PROJECT_ROOT))
-
-    def test_out_dir_for_batch_uses_csv_date(self):
-        """批量模式：分批次日录，日期优先取 CSV 文件名。"""
-        got = cycle_report._out_dir_for("/x/选股_2026-11-13.csv", [])
-        self.assertEqual(os.path.basename(got), "2026-11-13")
-        self.assertEqual(os.path.dirname(got), config.DEFAULT_OUT_DIR)
-
-    def test_out_dir_for_batch_falls_back_to_start_column(self):
-        """文件名没日期 → 用「启动日」列。"""
-        rows = [{"启动日": "2026-11-13"}, {"启动日": "2026-11-13"},
-                {"启动日": "2026-11-12"}]
-        got = cycle_report._out_dir_for("/x/池.csv", rows)
-        self.assertEqual(os.path.basename(got), "2026-11-13")   # 众数，不是第一行
-
-    def test_out_dir_for_single_has_no_date_layer(self):
-        """单股没有批次概念，直接落根下 —— 不加日期层。"""
-        self.assertEqual(cycle_report._out_dir_for(), config.DEFAULT_OUT_DIR)
+    def test_resolve_date_accepts_several_shapes(self):
+        self.assertEqual(cycle_report._resolve_date("2026-11-13"), "2026-11-13")
+        self.assertEqual(cycle_report._resolve_date("2026/11/13"), "2026-11-13")
+        self.assertEqual(cycle_report._resolve_date("20261113"), "2026-11-13")
+        self.assertIsNone(cycle_report._resolve_date(""))
+        self.assertIsNone(cycle_report._resolve_date("昨天"))
 
     def test_no_cycle_output_dir_created(self):
         """§4 修正：不再生成 cycle-output/。"""
@@ -429,7 +389,7 @@ class TestSingleMode(unittest.TestCase):
             ["--stock", "601899", "--bundle", bundle_path(), "--quiet"])
         self.assertEqual(code, cycle_report.EXIT_OK)
         self.assertEqual(out.strip(), "")
-        self.assertEqual(len(list_files(out_dir)), 1)
+        self.assertEqual(list_files(out_dir), [])
 
     def test_data_error_returns_2_and_writes_nothing(self):
         with mock.patch.object(fetch, "fetch_one",
@@ -473,7 +433,7 @@ class TestSingleMode(unittest.TestCase):
         code, out, err, out_dir = run_main(
             ["--stock", "301101", "--bundle", bundle_path("short_12q")])
         self.assertEqual(code, cycle_report.EXIT_OK)
-        self.assertEqual(len(list_files(out_dir)), 1)
+        self.assertEqual(list_files(out_dir), [])
         self.assertIn("历史不足", out)
 
     def test_financial_prints_note(self):
@@ -523,58 +483,37 @@ class TestBatchMode(unittest.TestCase):
             raise fetch.DataError(f"{code} 取数失败")
         return load(name)
 
-    def test_batch_produces_one_html_per_stock_and_index(self):
+    def test_batch_writes_rows_to_results_db(self):
+        """批量：每只票一条记录进结果库，一个文件都不写。"""
         csv_path = make_csv(self.tmp, [("601899", "紫金矿业"),
                                        ("600036", "招商银行")])
         with mock.patch.object(fetch, "fetch_one", side_effect=self.fake_fetch_one):
             code, out, err, _ = run_main(["--csv", csv_path], out_dir=self.out)
 
         self.assertEqual(code, cycle_report.EXIT_OK)
-        files = list_files(self.out)
-        self.assertIn("池.html", files)
-        htmls = [f for f in files if f.endswith(".html") and f != "池.html"]
-        self.assertEqual(len(htmls), 2)
+        self.assertEqual(list_files(self.out), [])
         self.assertIn("完成 2 只", out)
-
-    def test_index_links_resolve(self):
-        """索引页里的每个 href 都能在本目录找到对应文件（编码正确）。"""
-        from urllib.parse import unquote
-        csv_path = make_csv(self.tmp, [("601899", "紫金矿业")])
-        with mock.patch.object(fetch, "fetch_one", side_effect=self.fake_fetch_one):
-            run_main(["--csv", csv_path], out_dir=self.out)
-
-        with open(os.path.join(self.out, "池.html"), "r", encoding="utf-8") as fh:
-            index = fh.read()
-        hrefs = re.findall(r'<a class="btn" href="([^"]+)"', index)
-        self.assertTrue(hrefs)
-        for href in hrefs:
-            self.assertTrue(all(ord(c) < 128 for c in href), href)
-            target = os.path.join(self.out, unquote(href))
-            self.assertTrue(os.path.exists(target), target)
+        rows = results_db.latest_for("cycle", None)
+        self.assertEqual(sorted(r["symbol"] for r in rows), ["sh600036", "sh601899"])
 
     def test_partial_failure_returns_1(self):
-        """有失败行 → 退出码 1，但成功的那只照常出报告。"""
+        """有失败行 → 退出码 1，但成功的那只照常入库。"""
         csv_path = make_csv(self.tmp, [("601899", "紫金矿业"),
                                        ("600999", "查无此股")])
         with mock.patch.object(fetch, "fetch_one", side_effect=self.fake_fetch_one):
             code, out, err, _ = run_main(["--csv", csv_path], out_dir=self.out)
         self.assertEqual(code, cycle_report.EXIT_PARTIAL)
         self.assertIn("失败 1 只", out)
-        self.assertIn("池.html", list_files(self.out))
+        self.assertEqual(list_files(self.out), [])
+        # 成功那只照样入库，失败那只不入（结果库只存算出来的结论）
+        self.assertEqual([r["symbol"] for r in results_db.latest_for("cycle", None)],
+                         ["sh601899"])
 
     def test_invalid_code_row_counted_as_failure(self):
         csv_path = make_csv(self.tmp, [("601899", "紫金矿业"), ("abc", "坏代码")])
         with mock.patch.object(fetch, "fetch_one", side_effect=self.fake_fetch_one):
             code, out, err, _ = run_main(["--csv", csv_path], out_dir=self.out)
         self.assertEqual(code, cycle_report.EXIT_PARTIAL)
-
-    def test_no_index_flag(self):
-        csv_path = make_csv(self.tmp, [("601899", "紫金矿业")])
-        with mock.patch.object(fetch, "fetch_one", side_effect=self.fake_fetch_one):
-            code, out, _, _ = run_main(["--csv", csv_path, "--no-index"],
-                                       out_dir=self.out)
-        self.assertEqual(code, cycle_report.EXIT_OK)
-        self.assertNotIn("池.html", list_files(self.out))
 
     def test_csv_is_not_modified(self):
         """**输入 CSV 只读** —— 跑完 md5 必须一致。"""
@@ -586,12 +525,11 @@ class TestBatchMode(unittest.TestCase):
         self.assertEqual(before, md5_of(csv_path))
 
     def test_no_extra_result_files(self):
-        """不产出任何汇总表/结果文件。"""
+        """一个文件都不产出：结果只进 results.db。"""
         csv_path = make_csv(self.tmp, [("601899", "紫金矿业")])
         with mock.patch.object(fetch, "fetch_one", side_effect=self.fake_fetch_one):
             run_main(["--csv", csv_path], out_dir=self.out)
-        extensions = {os.path.splitext(f)[1] for f in list_files(self.out)}
-        self.assertEqual(extensions, {".html"})
+        self.assertEqual(list_files(self.out), [])
 
     def test_no_cycle_output_created(self):
         csv_path = make_csv(self.tmp, [("601899", "紫金矿业")])
@@ -613,32 +551,44 @@ class TestBatchMode(unittest.TestCase):
         self.assertEqual(calls, ["601899"])
         self.assertEqual(code, cycle_report.EXIT_OK)
 
-    def test_reuses_existing_report_without_force(self):
-        """已有报告默认复用，不重复取数。"""
-        csv_path = make_csv(self.tmp, [("601899", "紫金矿业")])
+    def test_reuses_existing_rows_without_force(self):
+        """同一基准日已算过的票默认复用：不重复取数，也不重复算。"""
+        results_db.save("select", [{"symbol": "601899", "name": "紫金矿业"}],
+                        "2026-11-13", argv="test")
         with mock.patch.object(fetch, "fetch_one", side_effect=self.fake_fetch_one):
-            run_main(["--csv", csv_path], out_dir=self.out)
+            run_main(["--from-select", "2026-11-13"], out_dir=self.out)
 
         calls = []
         with mock.patch.object(fetch, "fetch_one",
                                side_effect=lambda c, **k: calls.append(c) or
                                self.fake_fetch_one(c, **k)):
-            code, _, _, _ = run_main(["--csv", csv_path], out_dir=self.out)
+            code, out, _, _ = run_main(["--from-select", "2026-11-13"],
+                                       out_dir=self.out)
         self.assertEqual(calls, [])
         self.assertEqual(code, cycle_report.EXIT_OK)
+        self.assertIn("库里已有跳过 1 只", out)
 
     def test_force_refetches(self):
-        csv_path = make_csv(self.tmp, [("601899", "紫金矿业")])
+        results_db.save("select", [{"symbol": "601899", "name": "紫金矿业"}],
+                        "2026-11-13", argv="test")
         with mock.patch.object(fetch, "fetch_one", side_effect=self.fake_fetch_one):
-            run_main(["--csv", csv_path], out_dir=self.out)
+            run_main(["--from-select", "2026-11-13"], out_dir=self.out)
 
         calls = []
         with mock.patch.object(fetch, "fetch_one",
                                side_effect=lambda c, **k: calls.append(c) or
                                self.fake_fetch_one(c, **k)):
-            code, _, _, _ = run_main(["--csv", csv_path, "--force"],
+            code, _, _, _ = run_main(["--from-select", "2026-11-13", "--force"],
                                      out_dir=self.out)
         self.assertEqual(calls, ["601899"])
+        self.assertEqual(code, cycle_report.EXIT_OK)
+
+    def test_from_select_without_rows_returns_2(self):
+        """结果库里没有这一天的选股名单 → 退出码 2，别拿空名单跑一遍。"""
+        code, _, err, _ = run_main(["--from-select", "2020-01-02"],
+                                   out_dir=self.out)
+        self.assertEqual(code, cycle_report.EXIT_USAGE)
+        self.assertIn("名单是空的", err)
 
     def test_csv_without_code_column_returns_2(self):
         path = os.path.join(self.tmp, "bad.csv")
@@ -648,16 +598,18 @@ class TestBatchMode(unittest.TestCase):
         self.assertEqual(code, cycle_report.EXIT_USAGE)
         self.assertIn("找不到代码列", err)
 
-    def test_empty_csv_exit_0(self):
+    def test_empty_csv_is_usage_error(self):
+        """只有表头 → 退出码 2。
+
+        旧版会产出一张"共 0 只"的索引页再退 0；报告取消后没有页可出，
+        空名单就是"这次什么也没算"，报错比安静退 0 更容易发现问题。
+        """
         path = os.path.join(self.tmp, "empty.csv")
         with open(path, "w", encoding="utf-8") as fh:
             fh.write("代码,名称\n")
-        code, out, _, _ = run_main(["--csv", path], out_dir=self.out)
-        self.assertEqual(code, cycle_report.EXIT_OK)
-        index = os.path.join(self.out, "empty.html")
-        self.assertTrue(os.path.exists(index))
-        with open(index, "r", encoding="utf-8") as fh:
-            self.assertIn("共 0 只", fh.read())
+        code, _, err, _ = run_main(["--csv", path], out_dir=self.out)
+        self.assertEqual(code, cycle_report.EXIT_USAGE)
+        self.assertIn("名单是空的", err)
 
     def test_keyboard_interrupt_returns_130(self):
         csv_path = make_csv(self.tmp, [("601899", "紫金矿业")])

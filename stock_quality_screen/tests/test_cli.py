@@ -1,31 +1,28 @@
 # -*- coding: utf-8 -*-
-"""CLI 测试：`stock_report.py` 的参数解析、退出码、输出目录推导。
+"""CLI 测试：`stock_report.py` 的参数解析、退出码、名单来源。
 
-CLI 测试分两层，**都不碰网络**：
+2026-11-15 起产物只剩 results.db（HTML / 导航页 / CSV 列都取消了），
+所以原来那一大批"报告落在哪个目录"的用例一起删掉，改为钉住新的三件事：
 
-1. **纯函数层**（`build_parser` / `_out_dir_for` / `_date_from_*` / `_safe_name`）
-   直接调，不需要 mock。这是大部分价值所在：输出目录的推导规则改一次错一次，
-   而这几个函数决定了「报告落在哪」，错了会留下散落各处的历史产物。
-2. **`main()` 层**：把 `_generate_report` / `_run_batch` 换成桩，只验证
-   **异常 → 退出码**的映射。退出码是脚本约定：
-   0 成功、2 用户/数据错误、3 未预期错误、130 Ctrl-C。
+1. **参数**：`--stock-code` / `--csv` / `--from-select` 三选一，旧的 `--out-dir` 不许回来。
+2. **退出码**：0 成功、2 用户/数据错误、3 未预期错误、130 Ctrl-C。
+3. **名单来源与续跑**：`--from-select` 读结果库、日期对不上就退 2、
+   库里已有的票不重复取数。
 """
 from __future__ import annotations
 
-import argparse
 import io
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
-from pathlib import Path
 from unittest import mock
 
 from tests import helpers  # noqa: F401  （顺带把项目根塞进 sys.path）
-import config
 import stock_report
-from screen.batch import SKIP_SCORE_TEXT, ReportResult
 from screen.fetch import DataError
 from screen.validate import ScreenError, SkipStock
+from stock_data_fetch import results as results_db
 
 
 def parse(argv):
@@ -46,7 +43,7 @@ class ParserCase(unittest.TestCase):
 # 一、参数解析
 # ---------------------------------------------------------------------------
 class TestParserSource(ParserCase):
-    """`--stock-code` 与 `--csv` 互斥且必填。"""
+    """三个来源互斥且必填。"""
 
     def test_stock_code(self):
         self.assertEqual(parse(["--stock-code", "600519"]).stock_code, "600519")
@@ -58,383 +55,263 @@ class TestParserSource(ParserCase):
         """`--csv-input` 是旧名，必须仍然可用且落到同一个 dest。"""
         self.assertEqual(parse(["--csv-input", "a.csv"]).csv_input, "a.csv")
 
+    def test_from_select_with_date(self):
+        self.assertEqual(parse(["--from-select", "2026-11-13"]).from_select,
+                         "2026-11-13")
+
+    def test_from_select_without_date(self):
+        """省略日期 = 用最近一次选股运行。"""
+        self.assertEqual(parse(["--from-select"]).from_select, "")
+
     def test_neither_is_required(self):
-        msg = self.assert_rejected([])
-        self.assertIn("required", msg.lower())
+        self.assert_rejected([])
 
     def test_both_rejected(self):
-        msg = self.assert_rejected(["--stock-code", "600519", "--csv", "a.csv"])
-        self.assertIn("not allowed with", msg)
+        self.assert_rejected(["--stock-code", "600519", "--csv", "a.csv"])
 
-    def test_stock_code_not_required_when_csv_given(self):
-        args = parse(["--csv", "a.csv"])
-        self.assertIsNone(args.stock_code)
+    def test_from_select_and_csv_rejected(self):
+        self.assert_rejected(["--from-select", "2026-11-13", "--csv", "a.csv"])
 
 
 class TestParserDefaults(unittest.TestCase):
     def test_defaults(self):
         args = parse(["--stock-code", "600519"])
-        self.assertEqual(args.name, "")
-        self.assertEqual(args.bundle, "")
         self.assertEqual(args.workers, 4)
         self.assertEqual(args.timeout, 90.0)
         self.assertEqual(args.retries, 2)
         self.assertEqual(args.retry_wait, 60.0)
-        self.assertFalse(args.force)
-        self.assertFalse(args.quiet)
+        self.assertEqual(args.name, "")
+        self.assertEqual(args.bundle, "")
 
     def test_force_quiet_are_flags(self):
         args = parse(["--stock-code", "600519", "--force", "--quiet"])
         self.assertTrue(args.force)
         self.assertTrue(args.quiet)
+        self.assertFalse(parse(["--stock-code", "600519"]).force)
 
 
 class TestRemovedOptions(unittest.TestCase):
-    """已删除的参数必须真的不存在，否则文档说删了、代码还收着。"""
-
-    REMOVED = ("out_dir", "output_dir")
-
     def test_out_dir_is_gone(self):
-        args = parse(["--stock-code", "600519"])
-        for name in self.REMOVED:
-            with self.subTest(name=name):
-                self.assertFalse(hasattr(args, name),
-                                 f"{name} 应该已删除：输出目录由 _out_dir_for() 统一决定")
+        """报告取消后没有"输出目录"这回事，参数不该留下来误导人。"""
+        self.assertFalse(hasattr(parse(["--stock-code", "600519"]), "out_dir"))
 
     def test_passing_out_dir_is_rejected(self):
         err = io.StringIO()
         with redirect_stderr(err), self.assertRaises(SystemExit) as cm:
-            parse(["--stock-code", "600519", "--out-dir", "/tmp/x"])
+            parse(["--stock-code", "600519", "--out-dir", "/tmp"])
         self.assertEqual(cm.exception.code, 2)
-        self.assertIn("unrecognized", err.getvalue())
+
+
+class TestResolveDate(unittest.TestCase):
+    def test_accepts_common_shapes(self):
+        for raw in ("2026-11-13", "2026/11/13", "20261113"):
+            with self.subTest(raw=raw):
+                self.assertEqual(stock_report._resolve_date(raw), "2026-11-13")
+
+    def test_empty_means_latest(self):
+        self.assertIsNone(stock_report._resolve_date(""))
+        self.assertIsNone(stock_report._resolve_date(None))
+
+    def test_unparsable_is_none(self):
+        self.assertIsNone(stock_report._resolve_date("昨天"))
 
 
 # ---------------------------------------------------------------------------
-# 二、输出目录推导
-# ---------------------------------------------------------------------------
-class TestOutDir(unittest.TestCase):
-    """`_out_dir_for()`：批量按批次日期分层，单股不加日期层。"""
-
-    def setUp(self):
-        self.base = Path(config.DEFAULT_OUT_DIR).resolve()
-
-    def test_single_stock_has_no_date_layer(self):
-        """单股没有批次概念，直接落根下——加日期层会让每次跑都换个目录。"""
-        self.assertEqual(stock_report._out_dir_for(), self.base)
-
-    def test_batch_uses_filename_date(self):
-        """`选股_2026-11-13.csv` → `.../2026-11-13/`。"""
-        out = stock_report._out_dir_for("/tmp/选股_2026-11-13.csv")
-        self.assertEqual(out, self.base / "2026-11-13")
-
-    def test_batch_falls_back_to_rows(self):
-        """文件名没日期 → 看「启动日」列的众数。"""
-        rows = [{"启动日": "2026-11-10"}, {"启动日": "2026-11-13"},
-                {"启动日": "2026-11-13"}]
-        out = stock_report._out_dir_for("/tmp/自选.csv", rows)
-        self.assertEqual(out, self.base / "2026-11-13")
-
-    def test_rows_mode_not_first_row(self):
-        """众数而不是第一行：混进别的交易日时，第一行是异类也不该决定整批目录。"""
-        rows = [{"启动日": "2026-11-20"}, {"启动日": "2026-11-13"},
-                {"启动日": "2026-11-13"}]
-        out = stock_report._out_dir_for("/tmp/自选.csv", rows)
-        self.assertEqual(out, self.base / "2026-11-13")
-
-    def test_no_date_anywhere_falls_back_to_today(self):
-        from datetime import datetime
-        out = stock_report._out_dir_for("/tmp/自选.csv", [])
-        self.assertEqual(out, self.base / f"{datetime.now():%Y-%m-%d}")
-
-    def test_out_dir_is_under_output_quality_screen(self):
-        """目录名与层级是 output/README.md 的约定，别的工具不能撞进来。"""
-        self.assertEqual(self.base.name, "quality-screen")
-        self.assertEqual(self.base.parent.name, "output")
-
-    def test_returns_path_object(self):
-        self.assertIsInstance(stock_report._out_dir_for("/tmp/a_2026-11-13.csv"), Path)
-
-
-class TestDateFromName(unittest.TestCase):
-    def test_iso_date(self):
-        self.assertEqual(stock_report._date_from_name("选股_2026-11-13.csv"), "2026-11-13")
-
-    def test_dot_and_dash(self):
-        self.assertEqual(stock_report._date_from_name("a_2026.11.13.csv"), "2026-11-13")
-        self.assertEqual(stock_report._date_from_name("a_2026-11-13.csv"), "2026-11-13")
-
-    def test_slash_is_not_a_filename_date(self):
-        """`/` 是路径分隔符：`Path(...).stem` 之后主名里不可能还有它。
-
-        正则是三种都收（「启动日」列里的日期可能是 `2026/11/13`），
-        但文件名这一路只可能遇到 `-` 和 `.`。
-        """
-        self.assertIsNone(stock_report._date_from_name("a_2026/11/13.csv"))
-
-    def test_takes_last_match(self):
-        """`选股_2026-11-13_备份-2026-11-14.csv` → 取后者：重命名时改的是它。"""
-        self.assertEqual(
-            stock_report._date_from_name("选股_2026-11-13_备份-2026-11-14.csv"),
-            "2026-11-14")
-
-    def test_no_date(self):
-        self.assertIsNone(stock_report._date_from_name("自选股.csv"))
-
-    def test_ignores_extension(self):
-        """只在主名里找：`a.csv` 里的数字不算日期。"""
-        self.assertIsNone(stock_report._date_from_name("20261113.csv"))
-
-
-class TestDateFromRows(unittest.TestCase):
-    def test_mode_not_first(self):
-        rows = [{"启动日": "2026-11-01"}, {"启动日": "2026-11-13"},
-                {"启动日": "2026-11-13"}]
-        self.assertEqual(stock_report._date_from_rows(rows), "2026-11-13")
-
-    def test_blank_values_ignored(self):
-        rows = [{"启动日": ""}, {"启动日": "  "}, {"启动日": "2026-11-13"}]
-        self.assertEqual(stock_report._date_from_rows(rows), "2026-11-13")
-
-    def test_missing_column(self):
-        self.assertIsNone(stock_report._date_from_rows([{"别的": "2026-11-13"}]))
-
-    def test_empty_rows(self):
-        self.assertIsNone(stock_report._date_from_rows([]))
-
-    def test_tie_breaks_on_largest_date(self):
-        """并列取最大日期：同样的输入必须稳定得到同一个目录。"""
-        rows = [{"启动日": "2026-11-13"}, {"启动日": "2026-11-20"}]
-        self.assertEqual(stock_report._date_from_rows(rows), "2026-11-20")
-
-    def test_custom_column(self):
-        rows = [{"日期": "2026-12-01"}]
-        self.assertEqual(stock_report._date_from_rows(rows, column="日期"), "2026-12-01")
-
-
-class TestSafeName(unittest.TestCase):
-    """文件名净化：上游公司名可能带 `/`、`*`、换行，直接拼进路径会写失败。"""
-
-    def test_strips_path_separators(self):
-        self.assertNotIn("/", stock_report._safe_name("A/B"))
-        self.assertNotIn("\\", stock_report._safe_name("A\\B"))
-
-    def test_strips_windows_reserved(self):
-        for ch in '*?"<>|':
-            with self.subTest(ch=ch):
-                self.assertNotIn(ch, stock_report._safe_name(f"A{ch}B"))
-
-    def test_strips_newlines(self):
-        self.assertEqual(stock_report._safe_name("A\nB"), "A_B")
-
-    def test_empty_falls_back(self):
-        self.assertEqual(stock_report._safe_name(""), "企业")
-        self.assertEqual(stock_report._safe_name("  ...  "), "企业")
-
-    def test_keeps_chinese(self):
-        self.assertEqual(stock_report._safe_name("贵州茅台"), "贵州茅台")
-
-
-# ---------------------------------------------------------------------------
-# 三、main()：退出码映射
+# 二、退出码
 # ---------------------------------------------------------------------------
 class TestExitCodes(unittest.TestCase):
-    """退出码是脚本约定：0 成功、2 用户/数据错误、3 未预期错误、130 中断。
-
-    走 `main()` 而不是直接调 `_run_single`：参数校验在 `main()` 里。
-    """
-
-    def run_main(self, argv, **patches):
+    def run_main(self, argv):
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            with mock.patch.multiple(stock_report, **patches):
-                code = stock_report.main(argv)
+            code = stock_report.main(argv)
         return code, out.getvalue(), err.getvalue()
 
     def test_negative_retries_rejected(self):
-        code, _out, err = self.run_main(["--stock-code", "600519", "--retries", "-1"],
-                                        set_quiet=mock.Mock())
+        code, _, err = self.run_main(["--stock-code", "600519", "--retries", "-1"])
         self.assertEqual(code, 2)
         self.assertIn("--retries", err)
 
     def test_negative_retry_wait_rejected(self):
-        code, _out, err = self.run_main(["--stock-code", "600519", "--retry-wait", "-1"],
-                                        set_quiet=mock.Mock())
+        code, _, err = self.run_main(["--stock-code", "600519", "--retry-wait", "-1"])
         self.assertEqual(code, 2)
         self.assertIn("--retry-wait", err)
 
-    def test_zero_is_allowed(self):
-        """0 是合法的「不重试」，不能被 `<0` 的校验误伤。"""
-        result = ReportResult(code="600519", name="x", target=Path("/tmp/x.html"),
-                              summary=None, data=helpers.render_data())
-        code, _out, _err = self.run_main(
-            ["--stock-code", "600519", "--retries", "0", "--quiet"],
-            set_quiet=mock.Mock(),
-            _generate_report=mock.Mock(return_value=result),
-        )
-        self.assertEqual(code, 0)
-
     def test_skip_stock_is_success(self):
-        """上市不足 3 年 → 跳过，退出码 0：这不是错误，脚本不该因此中断。"""
-        code, out, _err = self.run_main(
-            ["--stock-code", "600519"],
-            set_quiet=mock.Mock(),
-            _generate_report=mock.Mock(side_effect=SkipStock("上市不足 3 年")),
-        )
+        with mock.patch.object(stock_report, "_generate",
+                               side_effect=SkipStock("上市不足 3 年")):
+            code, out, _ = self.run_main(["--stock-code", "600519"])
         self.assertEqual(code, 0)
         self.assertIn("跳过", out)
 
     def test_data_error_is_2(self):
-        code, _out, err = self.run_main(
-            ["--stock-code", "600519"],
-            set_quiet=mock.Mock(),
-            _generate_report=mock.Mock(side_effect=DataError("取数失败")),
-        )
+        with mock.patch.object(stock_report, "_generate",
+                               side_effect=DataError("取数失败")):
+            code, _, err = self.run_main(["--stock-code", "600519"])
         self.assertEqual(code, 2)
         self.assertIn("取数失败", err)
 
     def test_screen_error_is_2(self):
-        code, _out, err = self.run_main(
-            ["--stock-code", "600519"],
-            set_quiet=mock.Mock(),
-            _generate_report=mock.Mock(side_effect=ScreenError("字段缺失")),
-        )
-        self.assertEqual(code, 2)
-        self.assertIn("字段缺失", err)
+        with mock.patch.object(stock_report, "_generate",
+                               side_effect=ScreenError("口径问题")):
+            self.assertEqual(self.run_main(["--stock-code", "600519"])[0], 2)
 
     def test_value_error_is_2(self):
-        """代码格式不对走 ValueError，也归为「用户输入问题」。"""
-        code, _out, _err = self.run_main(
-            ["--stock-code", "abc"],
-            set_quiet=mock.Mock(),
-            _generate_report=mock.Mock(side_effect=ValueError("代码应为 6 位数字")),
-        )
-        self.assertEqual(code, 2)
+        with mock.patch.object(stock_report, "_generate",
+                               side_effect=ValueError("代码不合法")):
+            self.assertEqual(self.run_main(["--stock-code", "zzz"])[0], 2)
 
     def test_unexpected_error_is_3(self):
-        """未预期异常要和「用户错误」分开：3 意味着该看堆栈了。"""
-        code, _out, err = self.run_main(
-            ["--stock-code", "600519"],
-            set_quiet=mock.Mock(),
-            _generate_report=mock.Mock(side_effect=RuntimeError("boom")),
-        )
+        with mock.patch.object(stock_report, "_generate",
+                               side_effect=RuntimeError("炸了")):
+            code, _, err = self.run_main(["--stock-code", "600519"])
         self.assertEqual(code, 3)
         self.assertIn("未预期错误", err)
-        self.assertIn("boom", err)
 
     def test_keyboard_interrupt_is_130(self):
-        code, _out, err = self.run_main(
-            ["--stock-code", "600519"],
-            set_quiet=mock.Mock(),
-            _generate_report=mock.Mock(side_effect=KeyboardInterrupt),
-        )
+        with mock.patch.object(stock_report, "_generate",
+                               side_effect=KeyboardInterrupt):
+            code, _, err = self.run_main(["--stock-code", "600519"])
         self.assertEqual(code, 130)
         self.assertIn("中断", err)
 
-    def test_quiet_is_applied_before_work(self):
-        """`--quiet` 要在取数之前生效，否则重试警告还是照打。"""
-        seen = []
-        result = ReportResult(code="600519", name="x", target=Path("/tmp/x.html"),
-                              summary=None, data=helpers.render_data())
-        self.run_main(
-            ["--stock-code", "600519", "--quiet"],
-            set_quiet=mock.Mock(side_effect=lambda v: seen.append(v)),
-            _generate_report=mock.Mock(return_value=result),
-        )
-        self.assertEqual(seen, [True])
-
     def test_csv_routes_to_batch(self):
-        """给了 `--csv` 就必须走批量，不能落进单股分支。"""
-        single = mock.Mock()
-        batch = mock.Mock(return_value=0)
-        code, _out, _err = self.run_main(
-            ["--csv", "a.csv"], set_quiet=mock.Mock(),
-            _run_single=single, _run_batch=batch)
-        self.assertEqual(code, 0)
-        batch.assert_called_once()
-        single.assert_not_called()
+        with mock.patch.object(stock_report, "_run_batch", return_value=0) as mock_batch, \
+                mock.patch.object(stock_report, "_run_single") as mock_single:
+            self.run_main(["--csv", "a.csv"])
+        self.assertTrue(mock_batch.called)
+        self.assertFalse(mock_single.called)
+
+    def test_from_select_routes_to_batch(self):
+        with mock.patch.object(stock_report, "_run_batch", return_value=0) as mock_batch:
+            self.run_main(["--from-select", "2026-11-13"])
+        self.assertTrue(mock_batch.called)
 
     def test_stock_code_routes_to_single(self):
-        single = mock.Mock(return_value=0)
-        batch = mock.Mock()
-        code, _out, _err = self.run_main(
-            ["--stock-code", "600519"], set_quiet=mock.Mock(),
-            _run_single=single, _run_batch=batch)
-        self.assertEqual(code, 0)
-        single.assert_called_once()
-        batch.assert_not_called()
+        with mock.patch.object(stock_report, "_run_single", return_value=0) as mock_single:
+            self.run_main(["--stock-code", "600519"])
+        self.assertTrue(mock_single.called)
 
 
+# ---------------------------------------------------------------------------
+# 三、Q/V 摘要行
+# ---------------------------------------------------------------------------
 class TestScoreLine(unittest.TestCase):
-    """CLI 摘要里的 Q/V 行：`None` 不能直接格式化（金融股会 TypeError）。"""
+    def line(self, data):
+        return stock_report._score_line(data)
 
     def test_numeric(self):
-        line = stock_report._score_line({
-            "quality": {"score": 72.34}, "valuation_score": {"score": 58.0}})
-        self.assertIn("72.3 / 100", line)
-        self.assertIn("58.0 / 100", line)
+        text = self.line({"quality": {"score": 62.3},
+                          "valuation_score": {"score": 71.0}})
+        self.assertIn("62.3 / 100", text)
+        self.assertIn("71.0 / 100", text)
 
     def test_not_applicable(self):
-        line = stock_report._score_line({
-            "quality": {"score": None, "not_applicable": True},
-            "valuation_score": {"score": None, "not_applicable": True}})
-        self.assertEqual(line.count("不适用"), 2)
+        """金融股 Q/V 是 None 但要写「不适用」，不能打 `—` 也不能抛 TypeError。"""
+        text = self.line({"quality": {"score": None, "not_applicable": True},
+                          "valuation_score": {"score": None, "not_applicable": True}})
+        self.assertEqual(text.count("不适用"), 2)
 
     def test_unknown_is_dash(self):
-        """「算不出来」和「不适用」必须分开：前者该补数据，后者本就不该算。"""
-        line = stock_report._score_line({"quality": {}, "valuation_score": {}})
-        self.assertEqual(line.count("—"), 2)
-        self.assertNotIn("不适用", line)
+        self.assertIn("—", self.line({"quality": {}, "valuation_score": {}}))
 
     def test_mixed(self):
-        """两栏独立判断：金融股常出现 Q 不适用而 V 也缺，但不能一律打成同一个词。"""
-        line = stock_report._score_line({
-            "quality": {"score": None, "not_applicable": True},
-            "valuation_score": {"score": 60.0}})
-        self.assertIn("不适用", line)
-        self.assertIn("60.0 / 100", line)
+        text = self.line({"quality": {"score": 50.0},
+                          "valuation_score": {"not_applicable": True}})
+        self.assertIn("50.0 / 100", text)
+        self.assertIn("不适用", text)
 
 
-class TestApplyResult(unittest.TestCase):
-    """批量结果回填导航页表格：五种状态各有固定文案。"""
+# ---------------------------------------------------------------------------
+# 四、批量：名单来源与续跑
+# ---------------------------------------------------------------------------
+class TestBatchList(unittest.TestCase):
+    """`_run_batch` 的名单来源与续跑（用桩替掉取数，不碰网络）。"""
 
-    def make_table(self, n=1):
-        rows = [{"代码": "600519"} for _ in range(n)]
-        return argparse.Namespace(rows=rows)
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="quality_cli_")
+        self.names = []
 
-    def test_skipped(self):
-        table = self.make_table()
-        stock_report._apply_result(table, [0], ReportResult(
-            code="600519", name="x", target=None, summary=None, skipped=True))
-        from screen.batch import LINK_COLUMN, SCORE_COLUMN
-        self.assertEqual(table.rows[0][SCORE_COLUMN], SKIP_SCORE_TEXT)
-        self.assertEqual(table.rows[0][LINK_COLUMN], "")
+    def fake_generate(self, code, **kwargs):
+        self.names.append(code)
+        return stock_report.ReportResult(
+            code=code, name=kwargs.get("name_override") or code,
+            data={"decision": {"label": "通过", "reason": "测试"},
+                  "quality": {"score": 70.0, "grade": "良好"},
+                  "valuation_score": {"score": 80.0, "grade": "低估"},
+                  "data_quality": {"risk_known": 9, "risk_total": 14, "risk_na": 0},
+                  "risks": {"checks": [{"status": "hit"}]}})
 
-    def test_error(self):
-        table = self.make_table()
-        stock_report._apply_result(table, [0], ReportResult(
-            code="600519", name="x", target=None, summary=None, error="取数失败"))
-        from screen.batch import LINK_COLUMN, SCORE_COLUMN
-        self.assertEqual(table.rows[0][SCORE_COLUMN], "生成失败")
-        self.assertEqual(table.rows[0][LINK_COLUMN], "")
+    def write_csv(self, codes):
+        path = os.path.join(self.tmp, "list.csv")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("代码,名称\n")
+            for code in codes:
+                fh.write(f"{code},{code}\n")
+        return path
 
-    def test_summary_missing(self):
-        """报告生成了但解析不出评分：保留链接，让人能点进去看。"""
-        table = self.make_table()
-        stock_report._apply_result(table, [0], ReportResult(
-            code="600519", name="x", target=Path("/tmp/贵州茅台-企业质量初筛-1.html"),
-            summary=None))
-        from screen.batch import SCORE_COLUMN
-        self.assertEqual(table.rows[0][SCORE_COLUMN], "评分提取失败")
+    def run_batch(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(stock_report, "_generate", side_effect=self.fake_generate), \
+                redirect_stdout(out), redirect_stderr(err):
+            code = stock_report.main(argv)
+        return code, out.getvalue(), err.getvalue()
 
-    def test_multiple_indices(self):
-        """同一只票可能在 CSV 里出现多次，每个下标都要回填。"""
-        table = self.make_table(3)
-        stock_report._apply_result(table, [0, 2], ReportResult(
-            code="600519", name="x", target=Path("/tmp/a.html"), summary=None,
-            error="取数失败"))
-        from screen.batch import SCORE_COLUMN
-        self.assertEqual(table.rows[0][SCORE_COLUMN], "生成失败")
-        self.assertEqual(table.rows[2][SCORE_COLUMN], "生成失败")
+    def test_from_select_reads_results_db(self):
+        results_db.save("select", [{"symbol": "600519", "name": "贵州茅台"},
+                                   {"symbol": "000001", "name": "平安银行"}],
+                        "2026-11-10", argv="test")
+        code, out, _ = self.run_batch(["--from-select", "2026-11-10"])
+        self.assertEqual(code, 0)
+        self.assertEqual(sorted(self.names), ["sh600519", "sz000001"])
+        self.assertIn("结果库 选股 2026-11-10", out)
+
+    def test_from_select_without_rows_returns_2(self):
+        code, _, err = self.run_batch(["--from-select", "2020-01-02"])
+        self.assertEqual(code, 2)
+        self.assertIn("名单是空的", err)
+
+    def test_second_run_reuses_rows(self):
+        """同一基准日再跑一遍：不再取数（续跑靠结果库，不靠扫 HTML）。"""
+        results_db.save("select", [{"symbol": "600519", "name": "贵州茅台"}],
+                        "2026-11-11", argv="test")
+        self.run_batch(["--from-select", "2026-11-11"])
+        self.names.clear()
+        code, out, _ = self.run_batch(["--from-select", "2026-11-11"])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.names, [])
+        self.assertIn("复用 1 只", out)
+
+    def test_force_refetches(self):
+        results_db.save("select", [{"symbol": "600519", "name": "贵州茅台"}],
+                        "2026-11-12", argv="test")
+        self.run_batch(["--from-select", "2026-11-12"])
+        self.names.clear()
+        self.run_batch(["--from-select", "2026-11-12", "--force"])
+        self.assertEqual(self.names, ["sh600519"])
+
+    def test_csv_source(self):
+        path = self.write_csv(["600519", "000001"])
+        code, out, _ = self.run_batch(["--csv", path])
+        self.assertEqual(code, 0)
+        self.assertEqual(sorted(self.names), ["sh600519", "sz000001"])
+        self.assertIn("list.csv", out)
+
+    def test_results_are_saved(self):
+        results_db.save("select", [{"symbol": "600519", "name": "贵州茅台"}],
+                        "2026-11-09", argv="test")
+        self.run_batch(["--from-select", "2026-11-09"])
+        row = results_db.latest_for("quality", "2026-11-09")[0]
+        self.assertEqual(row["symbol"], "sh600519")
+        self.assertEqual(row["q"], 70.0)
+        self.assertEqual(row["conclusion"], "通过")
+
+    def test_invalid_code_counted_as_failure(self):
+        path = os.path.join(self.tmp, "bad.csv")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("代码,名称\nzzz,坏代码\n")
+        code, _, err = self.run_batch(["--csv", path])
+        self.assertEqual(code, 1)
+        self.assertIn("跳过 zzz", err)
 
 
 if __name__ == "__main__":

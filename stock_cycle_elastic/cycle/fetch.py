@@ -15,7 +15,7 @@
 
     {"code", "name", "industry", "income": [...], "balance": [...], "data_gaps": [...]}
 
-`build.py` / `metrics.py` / `decide.py` / `render.py` 一行都不用动——它们只认这个结构。
+`build.py` / `metrics.py` / `decide.py` 一行都不用动——它们只认这个结构。
 这是敢换取数层的前提：下游 2000 多行计算与渲染代码零风险。
 
 ## 字段来源对照

@@ -24,19 +24,14 @@ TURN_GM_REQUIRE_YOY = True   # ① 同比护栏：最新单季毛利率须高于
 NEW_STOCK_YEARS = 3.0        # ⑤ 次新 = 上市不足 3 年（用 stock.list_date 判）
 
 # ---------------- 输出 ----------------
-# 2026-11-15 由 "stock_kline_screen" 改为 "kline-screen"，与另外两个工具
-# （quality-screen / cycle-elastic）统一用连字符：
-#   output/quality-screen/  output/cycle-elastic/  output/kline-screen/
-# 这纯粹是目录命名一致性，不涉及产物内容。改的时候同步了 compare.py、
-# README.md 和 tests/test_pipeline.py 里断言这个路径的地方（共 6 处）。
-OUT_DIR_NAME = "kline-screen"
-
-CSV_HEADER = ["代码", "名称", "一级行业", "启动日", "距启动交易日",
+# 结果字段（15 项）。2026-11-15 起不再产出 CSV，这份表只用来保持字段顺序与
+# 终端摘要、看板的一致；`compare.py` 与 `OUT_DIR_NAME` 随产物目录一起删掉了。
+RESULT_FIELDS = ["代码", "名称", "一级行业", "启动日", "距启动交易日",
               "启动日量能倍数", "启动日涨幅%", "距MA20%", "距MA60%",
               "毛利率改善",
               "20日换手%", "池内换手分位", "分位星级",
               "最新收盘价", "总市值（亿）"]
-"""15 列。相对原版（16 列）删了「二级行业」：共享库的 `stock.industry` 只有上游
-一级口径，没有申万二级。想恢复这列得先给 hub 加二级行业来源，不能拿一级凑数。"""
+"""15 项。相对原版（16 列）删了「二级行业」：共享库的 `stock.industry` 只有上游
+一级口径，没有申万二级。想恢复得先给 hub 加二级行业来源，不能拿一级凑数。"""
 
 RESULT_VERSION = "v2.0"

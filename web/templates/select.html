@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}选股{% endblock %}
+{% block body %}
+
+<section class="hero">
+  <div class="eyebrow">stock_kline_screen</div>
+  <h1>选股名单</h1>
+  <p>5 日涨幅池 → K 线形态 → 板块/财务过滤。名单按<b style="color:#fff">池内换手分位升序</b>排列：最冷门的在前。</p>
+</section>
+
+{% if rows %}
+<div class="charts">
+  <div class="chart-box tall">
+    <h3>换手分位 × 20 日换手</h3>
+    <p class="sub">横轴是这只票在全池里的换手分位（0 = 最冷），越靠左上说明本来就冷、成交也少。</p>
+    <div class="canvas-wrap"><canvas id="scatter"></canvas></div>
+  </div>
+  <div class="chart-box tall">
+    <h3>一级行业分布</h3>
+    <p class="sub">入选名单的行业集中度；单一行业过多时，名单更容易被板块行情带偏。</p>
+    <div class="canvas-wrap"><canvas id="industry"></canvas></div>
+  </div>
+</div>
+
+<section class="panel">
+  <h2>名单（{{ rows|length }} 只，池内 {{ rows[0].pool_size or '—' }} 只）</h2>
+  <p class="sub">星级 = 池内换手分位的档位；毛利率改善来自财务域，不参与筛选。</p>
+  <div class="scroll">
+    <table class="grid">
+      <thead><tr>
+        <th>代码</th><th>名称</th><th>行业</th>
+        <th class="n">换手分位</th><th class="n">星级</th>
+        <th class="n">20日换手%</th><th class="n">启动日</th>
+        <th class="n">距启动</th><th class="n">量能倍数</th>
+        <th class="n">启动涨幅</th><th class="n">距MA20</th><th class="n">距MA60</th>
+        <th class="n">收盘</th><th class="n">总市值(亿)</th><th>毛利率改善</th>
+      </tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td class="code">{{ r.symbol }}</td>
+          <td class="name"><a href="/stock/{{ r.symbol }}">{{ r.name or '—' }}</a></td>
+          <td>{{ r.industry or '—' }}</td>
+          <td class="n">{{ r.pool_turnover_rank|num(1) }}</td>
+          <td class="n">{{ r.stars or '—' }}</td>
+          <td class="n">{{ r.turnover20|num(2) }}</td>
+          <td class="n">{{ r.launch_date|date or '—' }}</td>
+          <td class="n">{{ r.days_since_launch }}</td>
+          <td class="n">{{ r.vol_multiple|ratio }}</td>
+          <td class="n">{{ r.launch_gain_pct|num(2) }}</td>
+          <td class="n">{{ r.ma20_gap_pct|num(2) }}</td>
+          <td class="n">{{ r.ma60_gap_pct|num(2) }}</td>
+          <td class="n">{{ r.close|num(2) }}</td>
+          <td class="n">{{ r.market_cap_yi|num(0) }}</td>
+          <td>{{ r.gross_margin_up or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% else %}
+<div class="empty">还没有选股结果：跑 <code>./run.py select</code>。</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+{% if rows %}
+<script>
+const rows = {{ rows|map(attribute='symbol')|list|tojson }};
+const pts = {{ rows|map(attribute='pool_turnover_rank')|list|tojson }};
+const turn = {{ rows|map(attribute='turnover20')|list|tojson }};
+const names = {{ rows|map(attribute='name')|list|tojson }};
+const industry = {{ rows|map(attribute='industry')|list|tojson }};
+
+new Chart(document.getElementById('scatter'), {
+  type: 'scatter',
+  data: { datasets: [{
+    label: '入选股',
+    data: pts.map((x, i) => ({x: x, y: turn[i], name: names[i], code: rows[i]})),
+    pointRadius: 5, pointHoverRadius: 8,
+    backgroundColor: 'rgba(15,118,110,.65)', borderColor: '#0f766e',
+  }]},
+  options: {
+    maintainAspectRatio: false,
+    plugins: { legend: {display: false},
+      tooltip: { callbacks: { label: c => `${c.raw.name} ${c.raw.code}｜分位 ${c.raw.x}｜换手 ${c.raw.y}%` } } },
+    scales: {
+      x: { title: {display: true, text: '池内换手分位（0=最冷）'}, grid: {color: '#eef2f7'} },
+      y: { title: {display: true, text: '20 日换手 %'}, grid: {color: '#eef2f7'} }
+    }
+  }
+});
+
+const counts = {};
+industry.forEach(x => { const k = x || '未分类'; counts[k] = (counts[k] || 0) + 1; });
+const labels = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+new Chart(document.getElementById('industry'), {
+  type: 'bar',
+  data: { labels,
+    datasets: [{ data: labels.map(l => counts[l]), backgroundColor: 'rgba(29,78,216,.6)', borderRadius: 6 }] },
+  options: {
+    maintainAspectRatio: false, indexAxis: 'y',
+    plugins: { legend: {display: false} },
+    scales: { x: {ticks: {precision: 0}, grid: {color: '#eef2f7'}}, y: {grid: {display: false}} }
+  }
+});
+</script>
+{% endif %}
+{% endblock %}

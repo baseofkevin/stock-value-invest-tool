@@ -7,7 +7,8 @@
 
 1. **基准日怎么定**。盘中（未过 15:05）必须排除今天——否则拿半天的数据算
    「收盘站上 MA20」；非交易日（周末复盘）要回落到上一个交易日而不是报错。
-2. **CSV 行数**。表头算不算、文件不存在怎么表示，决定了「0 只入选」能不能被拦住。
+2. **交接只数**。`select_count()` 从"数 CSV 行"改成"数结果库的行"，
+   语义不变：0 只入选要能被拦住，读不到库返回 -1。
 3. **透传参数的切分**。`--cycle-args "--workers 2"` 必须拆成两个 argv 元素。
 """
 
@@ -72,27 +73,42 @@ class DatePickTest(unittest.TestCase):
             run.pick_date(None, [])
 
 
-class CsvTest(unittest.TestCase):
-    def test_csv_rows_counts_data_only(self) -> None:
+class SelectCountTest(unittest.TestCase):
+    """`select_count()`：交接处的"今天选了几只"。
+
+    以前数 CSV 行，现在数结果库的行。两个边界必须钉住：**0 只要能识别**
+    （跑了但一只没选中），**读不到库返回 -1**（还没跑过）。
+    """
+
+    def setUp(self) -> None:
+        import os
         import tempfile
-        with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp) / "选股_2026-11-20.csv"
-            p.write_text("代码,名称\nsh600000,浦发银行\nsz000001,平安银行\n",
-                         encoding="utf-8-sig")
-            self.assertEqual(run.csv_rows(p), 2, "表头不算一行")
+        self.tmp = tempfile.mkdtemp(prefix="run-count-")
+        self._old = os.environ.get("STOCK_RESULTS_DB")
+        os.environ["STOCK_RESULTS_DB"] = self.tmp + "/results.db"
 
-    def test_csv_rows_missing_file(self) -> None:
-        self.assertEqual(run.csv_rows(Path("/nonexistent/x.csv")), -1)
+    def tearDown(self) -> None:
+        import os
+        if self._old is None:
+            os.environ.pop("STOCK_RESULTS_DB", None)
+        else:
+            os.environ["STOCK_RESULTS_DB"] = self._old
 
-    def test_csv_rows_header_only(self) -> None:
-        import tempfile
-        with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp) / "a.csv"
-            p.write_text("代码,名称\n", encoding="utf-8-sig")
-            self.assertEqual(run.csv_rows(p), 0, "0 只入选要能被识别出来")
+    def test_counts_rows(self) -> None:
+        from stock_data_fetch import results
+        results.save("select", [{"symbol": "sh600000", "name": "浦发银行"},
+                                {"symbol": "sz000001", "name": "平安银行"}],
+                     "2026-11-20", argv="test")
+        self.assertEqual(run.select_count("2026-11-20"), 2)
 
-    def test_csv_path_shape(self) -> None:
-        self.assertEqual(run.csv_for("2026-11-20").name, "选股_2026-11-20.csv")
+    def test_zero_is_distinguishable(self) -> None:
+        from stock_data_fetch import results
+        results.save("select", [], "2026-11-20", argv="test")
+        self.assertEqual(run.select_count("2026-11-20"), 0, "0 只入选要能被识别出来")
+
+    def test_unknown_day_is_not_positive(self) -> None:
+        """没跑过这一天 → 0 或 -1，总之不能被当成"有名单"。"""
+        self.assertLessEqual(run.select_count("2020-01-02"), 0)
 
 
 class PassthroughTest(unittest.TestCase):

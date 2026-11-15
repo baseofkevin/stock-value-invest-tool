@@ -1,6 +1,7 @@
 # stock-value-invest-tool
 
 个人股票研究工具箱：每周五收盘后跑一遍选股 + 质量 + 周期，买入后按需查顶部。
+四个工具的结论都写进 `results.db`，用 `./run.py web` 打开看板读。
 
 四个功能模块，共用一套本地数据层（`stock_data_fetch` + `shared.db`）——库里有的
 数据直接用，没有的才联网，拿到的写回库，下次（乃至其它三个模块）复用。
@@ -10,7 +11,7 @@
 | `stock_kline_screen` | 选股：5 日涨幅池 → K 线形态 → 板块/财务过滤 | `run.py select` |
 | `stock_cycle_elastic` | 周期弹性：是不是周期股 / 弹性强弱 / 周期位置 | `run.py cycle [--stock 代码]` |
 | `stock_quality_screen` | 质量初筛：质量分 Q + 估值分 V + 14 项风险检查 | `run.py quality [--stock 代码]` |
-| `stock_judge_top` | 顶部判断：四因子观察股票是否到顶部 | `run.py top <代码>` / `top --csv` |
+| `stock_judge_top` | 顶部判断：四因子观察股票是否到顶部 | `run.py top <代码>` / `top --from-select` |
 
 ## 每周五收盘后（15:10 之后）
 
@@ -28,13 +29,21 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ./run.py menu
 ```
 
-它会依次做四件事，并在最后打印汇总（每步耗时、退出码、四个产物目录）：
+它会依次做三件事，并在最后打印汇总（每步耗时、退出码、写进了哪张表）：
 
 ```
 ⓪ build_calendar        更新交易日历（日历不更新会让下游静默产出上一周的报告）
-① stock_kline_screen    选股 → output/kline-screen/选股_<日期>.csv
-② stock_cycle_elastic   周期弹性 → output/cycle-elastic/<日期>/
-③ stock_quality_screen  质量初筛 → output/quality-screen/<日期>/
+① stock_kline_screen    选股 → results.db / select_result
+② stock_cycle_elastic   周期弹性 → results.db / cycle_result
+③ stock_quality_screen  质量初筛 → results.db / quality_result
+```
+
+**四个工具不再产出 CSV 和 HTML**（2026-11-15 起）。结论只有一处：
+`results.db`。要看结果：
+
+```bash
+./run.py web                     # http://127.0.0.1:5000，只读，不需要登录
+./run.py web --port 8080
 ```
 
 `stock_judge_top`（顶部判断）不在全流程里：它是**买入之后**用来判断股价有没有到顶部区域的，
@@ -50,21 +59,21 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ./run.py backup                            # 备份两个数据库
 ```
 
-批量会多出一个索引页 `output/judge-top/四因子观察-批量_<日期>_<时间>.html`，
-按「距 250 日高点」从近到远排，一眼看出谁贴着一年高点。
+批量结果同样进 `results.db`，看板的「顶部」页按「距 250 日高点」从近到远排，
+一眼看出谁贴着一年高点。
 
 ## 单独跑某一步
 
 ```bash
 ./run.py select  --date 2026-11-20         # 只选股（只能批量）
-./run.py cycle                             # 周期弹性批量（用当天的选股 CSV）
-./run.py quality                           # 质量初筛批量（用当天的选股 CSV）
+./run.py cycle                             # 周期弹性批量（用库里的选股名单）
+./run.py quality                           # 质量初筛批量（用库里的选股名单）
 ./run.py calendar                          # 只更新日历
 ```
 
 ### 单只也能跑
 
-周期弹性和质量初筛都支持单只，不需要当天的选股 CSV：
+周期弹性和质量初筛都支持单只，不需要当天的名单：
 
 ```bash
 ./run.py cycle   --stock 600519            # 周期弹性：这一只是不是周期股、位置在哪
@@ -72,16 +81,17 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ./run.py top     600519                    # 顶部判断
 ```
 
-菜单里也是同样的：选 3 或 4，股票代码处**直接回车 = 批量跑当天 CSV**，填代码 = 只跑那一只。
+菜单里也是同样的：选 3 或 4，股票代码处**直接回车 = 批量跑当天名单**，填代码 = 只跑那一只。
 
 注意单只模式的基准日由程序自己决定（今天过了 15:05 就用今天，否则上一个交易日），
 **不接受 `--date`**——那两个程序没有日期参数。要按历史某天出报告只能走批量模式。
 
 子进程参数可以透传：`./run.py quality --stock 600519 --force`。
 
-下游（cycle/quality）认的是 `output/kline-screen/选股_<基准日>.csv`，所以它们的
-基准日必须和那天的选股一致；不给 `--date` 就按「今天（过了 15:05）」算，
-和 `stock_data_fetch` 内部的 `target_date()` 同一套规则。
+下游（cycle/quality/top）的名单来自 `results.db` 里那一天的选股结果
+（`--from-select <日期>`），所以基准日必须和那天的选股一致；不给 `--date`
+就按「今天（过了 15:05）」算，和 `stock_data_fetch` 内部的 `target_date()`
+同一套规则。名单在库里对不上就直接退 2，不会拿别的日期凑数。
 
 ## 几个容易踩的坑（脚本已经替你处理）
 
@@ -94,9 +104,10 @@ cd /home/kevin/MyData/stock-value-invest-tool
 3. **`cycle_report.py` / `stock_report.py` 必须在各自目录里跑**（顶层 `import config`），
    直接 `python -m stock_cycle_elastic.cycle_report` 会 `ModuleNotFoundError`。
    `run.py` 已经把 cwd 切好。
-4. **选股 0 只时下游没有输入**，脚本在交接处停下，不会带着空表跑到一半才炸。
+4. **选股 0 只时下游没有输入**，脚本在交接处停下，不会带着空名单跑到一半才炸。
 
 日志：每次运行写 `output/logs/run-<时间戳>.log`（完整子进程输出，事后可查）。
+`output/` 里现在只剩这一个日志目录——报告和 CSV 都不再落盘。
 
 ## 两个数据库
 
@@ -111,7 +122,8 @@ cd /home/kevin/MyData/stock-value-invest-tool
 
 `results.db` 每工具一张表（`select_result` / `cycle_result` / `quality_result` /
 `top_result`）+ 一张 `run` 台账，每条结果都带 `payload`（完整 JSON）。
-四个工具**自动写**，写失败只 warn 一行、绝不影响出报告。
+四个工具**自动写**，写失败只 warn 一行、绝不影响出报告。看板只读它，
+所以"页面上的"和"库里的"永远是同一份东西，不存在导出对不上的问题。
 
 ```bash
 python3 -m stock_data_fetch.results                    # 各工具最近一次运行
@@ -127,6 +139,30 @@ select t.symbol, t.name, s.pool_turnover_rank, q.conclusion, t.momentum_state
 from (select * from top_result   where run_id=(select max(id) from run where tool='top'))   t
 left join (select * from select_result  where run_id=(select max(id) from run where tool='select'))  s on s.symbol=t.symbol
 left join (select * from quality_result where run_id=(select max(id) from run where tool='quality')) q on q.symbol=t.symbol;
+```
+
+## 看板（`./run.py web`）
+
+Flask + Chart.js，单进程、只读、无登录。默认只监听 `127.0.0.1:5000`，
+要换端口 `./run.py web --port 8080`。启动后会打印实际地址。
+
+| 页面 | 看什么 |
+|---|---|
+| `/` 概览 | 四个工具的最新批次（数量 + 时间）+ 一张合并表：一只票一行，选股 / 周期 / 质量 / 顶部并排 |
+| `/select` 选股 | 换手分位 × 20 日换手散点，行业分布 |
+| `/cycle` 周期 | 毛利率 σ × 弹性散点，产能分位 |
+| `/quality` 质量 | Q × V 散点，结论分布 |
+| `/top` 顶部 | 距 250 日高点（最接近的 20 只）、动量状态、四因子矩阵 |
+| `/stock/<代码>` | 单只票：四张卡 + 四因子 + 旁证 + 周期三判断 + 数据缺口 |
+| `/runs` 运行记录 | 每次运行的批次日、行数、耗时、命令行 |
+
+页面上的每个数字都来自 `results.db`，没有第二份缓存；把库删掉重跑一遍，
+页面自然就更新了。`--db` 可以指向别的库（比如一份备份）用来对比。
+
+Flask 只在这个看板上用得到，四个工具本身仍然只用标准库：
+
+```bash
+pip install flask          # 或 python3 -m pip install flask
 ```
 
 ## 备份
@@ -147,7 +183,7 @@ left join (select * from quality_result where run_id=(select max(id) from run wh
 
 ## 环境
 
-- Python 3.13，只用标准库。
+- Python 3.13。四个工具只用标准库；看板需要 Flask（`pip install flask`）。
 - 交易日历 `state/trading_calendar.json`（`build_calendar` 生成）。
 
 ## 测试

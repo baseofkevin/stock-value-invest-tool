@@ -217,8 +217,9 @@ def run_quiet(hub, a, st=None):
     """跑一次，捕获输出。`st` 传一个 dict 就把内部状态回填进去。
 
     原来这些断言都是读 `output/kline-screen/result_<S>.json` 验的；2026-11-15
-    按要求删掉了那份 JSON（产物只留 CSV），改为直接拿 `run(..., into=st)`
-    回填的内存状态——比读盘更直接，也不会出现"盘上的和跑出来的不一致"。
+    按要求删掉了那份 JSON（当时的产物只剩 CSV，现在连 CSV 也没了，只留
+    results.db），改为直接拿 `run(..., into=st)` 回填的内存状态——比读盘更直接，
+    也不会出现"盘上的和跑出来的不一致"。
     """
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
@@ -229,17 +230,17 @@ def run_quiet(hub, a, st=None):
 # ---------------------------------------------------------------- 用例
 
 def test_happy_path() -> None:
-    section("正常链路：一只票走完全部 9 步并写盘")
+    section("正常链路：一只票走完全部 9 步并落库")
     hub, S, codes = make_market(mkdtemp())
     st = {}
     rc, out = run_quiet(hub, args(), st)
     check("退出码 0", rc == 0, str(rc))
+    # 2026-11-15 起不再产出 CSV/HTML：名单只进 results.db（web 看板读它），
+    # 所以这里改成"output 目录一个文件都不该有"。
     outdir = Path(str(hub.cfg.state_dir.parent)) / "output" / "kline-screen"
-    csv = outdir / f"选股_{S}.csv"
-    check("CSV 写出来了", csv.exists(), str(csv))
-    check("目录里只有 CSV（不再有 result JSON）",
-          sorted(p.suffix for p in outdir.iterdir()) == [".csv"],
-          str(sorted(p.name for p in outdir.iterdir())))
+    check("output 目录里没有产物文件（CSV/HTML 已移除）",
+          not outdir.exists() or not list(outdir.iterdir()),
+          str(sorted(p.name for p in outdir.iterdir())) if outdir.exists() else "不存在")
 
     final = st["final"]
     check("粗筛池 = 入选 + 剔除（计数自洽）",
@@ -248,9 +249,7 @@ def test_happy_path() -> None:
     check("每只股票都有去向（剔除代码 ∪ 名单 = 粗筛池）",
           set(st["rej_code"]) | {x["code"] for x in final} == set(st["pool"]),
           f'{len(set(st["rej_code"]) | {x["code"] for x in final})} vs {len(st["pool"])}')
-    check("CSV 行数 = 名单只数",
-          len(csv.read_text(encoding="utf-8-sig").strip().splitlines()) - 1 == len(final),
-          str(len(final)))
+    check("落库行数 = 名单只数", st.get("n_csv") == len(final), str(len(final)))
     check("好票入选了（规则链真的能选出票）",
           codes["good"] in {x["code"] for x in final},
           str([x["code"] for x in final]))
