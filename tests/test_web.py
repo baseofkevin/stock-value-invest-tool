@@ -456,6 +456,14 @@ class TestNavAndLinks(WebCase):
 
 
 
+def _demo_report(title: str, body: str) -> str:
+    """演示用「原版报告」：和工具真实入库同一种压缩格式（gzip+base64）。"""
+    return results_db.pack_html(
+        f'<!doctype html><html><head><meta charset="utf-8"><title>{title}</title>'
+        f'<style>body{{font:14px/1.6 sans-serif}}</style></head>'
+        f'<body><h1>{title}</h1>{body}</body></html>')
+
+
 class TestStockDetail(WebCase):
     """个股页的质量/周期两块：有明细就摆明细，旧行降级成一句提示。"""
 
@@ -483,6 +491,50 @@ class TestStockDetail(WebCase):
         html = self.client().get("/stock/sz000002?focus=quality").get_data(as_text=True)
         self.assertIn("没有明细", html)
         self.assertIn("--force", html)
+
+
+class TestStockReports(WebCase):
+    """工具渲染好的原版报告：存进 payload.report_html，看板原样吐出来。"""
+
+    def _save_with_report(self, tool: str, symbol: str, title: str, body: str):
+        row = {"symbol": symbol, "name": "演示", "payload": {"report_html": _demo_report(title, body)}}
+        results_db.save(tool, [row], "2026-11-15", argv="test", db=self.db_path)
+
+    def test_report_route_serves_the_stored_html(self):
+        client = self.client()                    # 先把演示库落下来，再加这一行
+        self._save_with_report("quality", "sh600019", "原版质量报告", "<p>五节正文</p>")
+        resp = client.get("/stock/sh600019/report/quality")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.mimetype.startswith("text/html"))
+        html = resp.get_data(as_text=True)
+        self.assertIn("原版质量报告", html)
+        self.assertIn("五节正文", html)
+
+    def test_stock_page_embeds_the_report_instead_of_detail_view(self):
+        client = self.client()
+        self._save_with_report("quality", "sh600019", "原版质量报告", "<p>五节正文</p>")
+        html = client.get("/stock/sh600019?focus=quality").get_data(as_text=True)
+        self.assertIn('/stock/sh600019/report/quality', html)     # iframe src
+        self.assertIn("原版报告", html)
+        self.assertNotIn("Q 分项", html)                          # 明细视图让位
+        self.assertIn("四因子独立观察", html)                     # 另外两块仍按明细回退
+
+    def test_report_route_404_when_row_has_no_report(self):
+        resp = self.client().get("/stock/sh600019/report/top")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_report_route_unknown_tool_is_404(self):
+        self.assertEqual(self.client().get("/stock/sh600019/report/nope").status_code, 404)
+
+    def test_report_route_by_run_id(self):
+        client = self.client()
+        run_id = results_db.save("quality", [{"symbol": "sh600019", "name": "演示", "q": 50.0,
+                                              "payload": {"report_html": _demo_report("第一次", "A")}}],
+                                 "2026-11-15", argv="test", db=self.db_path)
+        self._save_with_report("quality", "sh600019", "第二次", "B")
+        html = client.get(f"/stock/sh600019/report/quality?run={run_id}").get_data(as_text=True)
+        self.assertIn("第一次", html)
+        self.assertIn("A", html)
 
 
 class TestReadOnly(WebCase):

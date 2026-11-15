@@ -42,10 +42,30 @@
   </a>
 </div>
 
-{# 板块顺序由 focus 决定：从周期页点进来就先看周期，从质量页点进来就先看质量。
-   不给 focus（从综合评估进来）就是默认顺序：四因子 → 质量 → 周期。 #}
+{# 三个工具的原版报告，按 focus 排序（从周期页点进来就先看周期）。
+   报告是工具**算完就渲染好**存在 payload.report_html 里的，看板只解压、不重画：
+   这一份的版式（五节质量初筛 / 三个判断 + 含义说明 / 四因子卡片）是工具自己的，
+   看板复刻一遍必然走形。用 iframe 是为了两边 CSS 互不干扰（报告自带一整套
+   全局样式），高度在下面 scripts 里按内容撑开。
+   旧行没有 report_html 时退回看板自己的明细视图（_stock_*.html）。 #}
+{% set REPORT_TITLE = {'top': '顶部 · 四因子独立观察', 'quality': '企业质量初筛',
+                       'cycle': '周期弹性初筛'} %}
+{% set REPORT_TOOL = {'top': '顶部', 'quality': '质量', 'cycle': '周期'} %}
 {% for key in order %}
-  {% if key == 'top' %}{% include "_stock_top.html" %}
+  {% set row = rows[key] %}
+  {% if row and row|hasreport %}
+  <section class="panel report-panel">
+    <h2>{{ REPORT_TITLE[key] }} <span class="tag">原版报告</span></h2>
+    <p class="sub">
+      {{ REPORT_TOOL[key] }}工具自己排的版面（{{ row.kind_label }} · 基准日 {{ row.target_date }} ·
+      {{ row.started_at|clock }} 跑的）。
+      <a href="/stock/{{ symbol }}/report/{{ key }}?run={{ row.run_id }}" target="_blank" rel="noopener">单独打开这页</a>
+    </p>
+    <iframe class="report-frame" title="{{ REPORT_TITLE[key] }}"
+            src="/stock/{{ symbol }}/report/{{ key }}?run={{ row.run_id }}"
+            loading="lazy"></iframe>
+  </section>
+  {% elif key == 'top' %}{% include "_stock_top.html" %}
   {% elif key == 'quality' %}{% include "_stock_quality.html" %}
   {% elif key == 'cycle' %}{% include "_stock_cycle.html" %}
   {% endif %}
@@ -73,7 +93,7 @@
   <div class="scroll">
     <table class="grid">
       <thead><tr>
-        <th>跑于</th><th>基准日</th><th>来源</th><th>工具</th><th>结论</th><th class="n">#</th>
+        <th>跑于</th><th>基准日</th><th>来源</th><th>工具</th><th>结论</th><th>报告</th><th class="n">#</th>
       </tr></thead>
       <tbody>
         {% for e in timeline %}
@@ -83,6 +103,7 @@
           <td><span class="chip {{ 'good' if e.kind == 'batch' else 'info' }}">{{ e.kind_label }}</span></td>
           <td>{{ e.tool_label }}</td>
           <td>{{ e.brief }}</td>
+          <td>{% if e.report %}<a href="{{ e.report }}" target="_blank" rel="noopener">原版</a>{% else %}<span style="color:#cbd5e1">—</span>{% endif %}</td>
           <td class="n"><a href="{{ e.href }}?run={{ e.run_id }}">{{ e.run_id }}</a></td>
         </tr>
         {% endfor %}
@@ -105,6 +126,22 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+// 报告 iframe 按内容撑高：同源（都是本服务吐的），load 时量一次 body.scrollHeight。
+// 报告里没有会自己变高的东西（静态 SVG/表格），量一次就够；再挂个 resize 兜住换行。
+document.querySelectorAll('iframe.report-frame').forEach(function (f) {
+  function fit() {
+    try {
+      const d = f.contentDocument;
+      if (!d || !d.body) return;
+      const h = Math.max(d.body.scrollHeight, d.documentElement.scrollHeight);
+      if (h) f.style.height = (h + 8) + 'px';   // +8 给最后一截留白
+    } catch (e) { /* 跨域保护兜底：保持 CSS 里的默认高度 */ }
+  }
+  f.addEventListener('load', fit);
+  window.addEventListener('resize', fit);
+});
+</script>
 {% if hist %}
 <script>
 // 两条序列各自有各自的时间点（顶部和质量不一定同时跑过），

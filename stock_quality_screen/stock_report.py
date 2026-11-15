@@ -40,6 +40,7 @@ from screen.fetch import (DataError, close_hub, fetch_all, load_bundle,  # noqa:
 from screen.score import compute_scores  # noqa: E402
 from screen.validate import ScreenError, SkipStock, validate
 from screen.detail import build_detail  # noqa: E402
+from screen.render import render_html  # noqa: E402
 
 SKIP_SCORE_TEXT = f"跳过：上市不足 {config.MIN_ANNUAL_YEARS} 年"
 
@@ -119,7 +120,20 @@ def _payload(data: dict | None) -> dict:
         # 看板个股页要的明细（Q/V 分项、14 条风险、估值分位、机构预测）。
         # 只放展示用的那一小块；原始序列不进库。
         "detail": build_detail(data),
+        # 原版五节报告（HTML）压成一段存库，看板 /stock/<code>/report/quality 原样吐。
+        # 渲染在这里做、不在 web 里做：四个工具各有同名 config.py，同一进程里
+        # 没法同时 import；而且复用（不 --force）时这段 HTML 跟着行一起读回来。
+        "report_html": _pack_report(data),
     }
+
+
+def _pack_report(data: dict) -> str:
+    """渲染原版报告并压成入库串；渲染失败返回空串（不拖垮落库）。"""
+    try:
+        from stock_data_fetch import results as results_db
+        return results_db.pack_html(render_html(data))
+    except Exception:                          # noqa: BLE001
+        return ""
 
 
 def _score_line(data: dict) -> str:

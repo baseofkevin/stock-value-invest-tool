@@ -35,7 +35,7 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 
-from flask import Flask, abort, redirect, render_template, request, url_for
+from flask import Flask, Response, abort, redirect, render_template, request, url_for
 
 from . import db, review
 
@@ -118,6 +118,11 @@ def _detail(row):
     return (db.inner(row) or {}).get("detail") or None
 
 
+def _has_report(row):
+    """这一行里是否存着工具渲染好的原版报告。"""
+    return bool(db.report_html(row))
+
+
 def _date(value):
     return str(value or "")[:10]
 
@@ -154,7 +159,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
                                  date=_date, clock=_clock, tone=tone,
                                  weekday=_weekday,
                                  poslabel=_poslabel, cycle_state=_cycle_state,
-                                 detail=_detail)
+                                 detail=_detail, hasreport=_has_report)
     app.jinja_env.globals.update(TOOLS=db.TOOLS, ORDER=db.ORDER, TODAY=dt.date.today,
                                  KIND_LABEL=db.KIND_LABEL)
 
@@ -313,6 +318,31 @@ def create_app(db_path: str | Path | None = None) -> Flask:
                 qua=(rows.get("quality") or {}).get("data") or {},
                 focus=focus, order=FOCUS_ORDER.get(focus, DEFAULT_ORDER),
                 focus_label=FOCUS_LABEL.get(focus, ""))
+
+
+    @app.route("/stock/<symbol>/report/<tool>")
+    def stock_report(symbol, tool):
+        """原版单股报告（工具渲染、存在 payload.report_html 里）。
+
+        看板只做一件事：解压 + 原样返回。`?run=` 指定哪一次运行——「历次结果」
+        每一行都能点回它当时那份报告。
+        """
+        if tool not in db.TOOLS:
+            abort(404)
+        try:
+            run_id = int(request.args.get("run") or 0) or None
+        except ValueError:
+            run_id = None
+        with conn() as c:
+            row = (db.row_of_run(c, tool, run_id, symbol) if run_id
+                   else db.symbol_row(c, tool, symbol))
+            html = db.report_html(row)
+        if not html:
+            return render_template(
+                "error.html", code=404,
+                msg="这只票的这条结果里没有原版报告（2026-11-15 之前跑的行，"
+                    "或那次渲染失败）。个股页上还有工具明细和历次结果。"), 404
+        return Response(html, mimetype="text/html")
 
 
     return app

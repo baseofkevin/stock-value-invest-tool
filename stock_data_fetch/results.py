@@ -417,6 +417,35 @@ def _warn(msg: str) -> None:
     print(f"[results] {msg}", file=sys.stderr)
 
 
+# ------------------------------------------------------------------ 报告原文
+# 2026-11-15：三个工具不再往磁盘写 HTML 报告，人看报告走看板。但旧版那份单股报告
+# 信息密度最高（五个章节、SVG 图、判断含义说明），看板自己重画要几百行且必然走形。
+# 所以工具**在算完时就把它渲染好**，压一压存进 payload.report_html，看板原样吐出：
+#   * 只存一次，不重算：复用（不带 --force）读回来的行里也带着这段 HTML；
+#   * gzip + base64 大约压到 1/4，38 只票一批多几百 KB，不是几个 MB；
+#   * web 那边只解压、不渲染——工具各自的 config.py 同名，同一个进程里同时
+#     import 四个工具是做不到的。
+def pack_html(text: str | None) -> str:
+    """渲染好的报告 HTML → 可入 JSON 的紧凑串（gzip+base64）。"""
+    if not text:
+        return ""
+    import base64
+    import gzip
+    return base64.b64encode(gzip.compress(text.encode("utf-8"), 6)).decode("ascii")
+
+
+def unpack_html(blob: str | None) -> str:
+    """`pack_html()` 的逆操作；坏数据给空串，页面降级而不是 500。"""
+    if not blob:
+        return ""
+    import base64
+    import gzip
+    try:
+        return gzip.decompress(base64.b64decode(blob.encode("ascii"))).decode("utf-8")
+    except Exception:                            # noqa: BLE001
+        return ""
+
+
 # ------------------------------------------------------------------ 查询
 
 def run_stats(tool: str, target_date: str | None = None,

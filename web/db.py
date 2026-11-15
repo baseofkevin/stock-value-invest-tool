@@ -21,6 +21,8 @@
 """
 from __future__ import annotations
 
+import base64
+import gzip
 import json
 import sqlite3
 from pathlib import Path
@@ -226,6 +228,36 @@ def inner(row: dict) -> dict:
     return data
 
 
+def report_html(row: dict | None) -> str:
+    """工具在算完时渲染好的原版报告（gzip+base64，存在 payload.report_html）。
+
+    看板只解压、不渲染：四个工具各有同名 `config.py`，同一个 Flask 进程里
+    没法同时 import 它们。解不开就给空串，页面退回明细视图。
+    """
+    blob = (inner(row) or {}).get("report_html")
+    if not isinstance(blob, str) or not blob:
+        return ""
+    try:
+        return gzip.decompress(base64.b64decode(blob.encode("ascii"))).decode("utf-8")
+    except Exception:                            # noqa: BLE001
+        return ""
+
+
+def row_of_run(conn, tool: str, run_id: int, symbol: str) -> dict | None:
+    """指定那一次运行里这只票的结果（"历次结果"里点进来的那个时间点）。"""
+    table = TOOLS[tool][0]
+    row = conn.execute(
+        f"select t.*, r.id as run_id, r.target_date, r.started_at, "
+        f"{_kind_expr(conn)} as kind "
+        f"from {table} t join run r on r.id=t.run_id "
+        "where t.run_id=? and t.symbol=?", (run_id, symbol)).fetchone()
+    if not row:
+        return None
+    out = _load(row)
+    out["kind_label"] = KIND_LABEL.get(out.get("kind") or KIND_BATCH, out.get("kind"))
+    return out
+
+
 def rows_of(conn, tool: str, run_id: int) -> list[dict]:
     table = TOOLS[tool][0]
     rows = conn.execute(f"select * from {table} where run_id=?", (run_id,)).fetchall()
@@ -326,6 +358,8 @@ def symbol_history(conn, tool: str, symbol: str) -> list[dict]:
         d = _load(row)
         d["kind"] = d.get("kind") or KIND_BATCH
         d["kind_label"] = KIND_LABEL.get(d["kind"], d["kind"])
+        # 只留"有没有原版报告"，不解压：历次结果表只需知道能不能点开
+        d["report_html"] = bool((inner(d) or {}).get("report_html"))
         out.append(d)
     return out
 
@@ -387,6 +421,9 @@ def symbol_timeline(conn, symbol: str) -> list[dict]:
                 "kind": row.get("kind"),
                 "kind_label": row.get("kind_label"),
                 "brief": _brief(tool, row),
+                # 这一条记录自己的原版报告（有就能点开，没有就只是没有）
+                "report": f"/stock/{symbol}/report/{tool}?run={row.get('run_id')}"
+                          if row.get("report_html") else "",
             })
     out.sort(key=lambda x: (x.get("started_at") or "", x.get("run_id") or 0),
              reverse=True)

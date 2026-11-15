@@ -4,8 +4,9 @@
 > 纯标准库零依赖；本次迁移**逻辑层一字未动**（indicators / finance /
 > judgement / views / log 全部原样拷贝），只重写了数据层、入口与产出方式。
 >
-> 同日稍晚又删掉了 HTML 报告（`render/html.py` + `render/css.py`）：
-> 结论写 `results.db`，人看结果走 `./run.py web`。
+> 同日稍晚，HTML 报告改成**不落文件**：`render/html.py` 的 `html_report(r)`
+> 仍然渲染那份版式，但结果压进 `payload.report_html` 存 `results.db`，
+> 看板 `/stock/<代码>/report/top` 原样吐出来。人看结果仍然只走 `./run.py web`。
 
     python3 -m stock_judge_top sh600519 [--date 2026-11-13] [--json] [--refresh]
     python3 -m stock_judge_top --from-select 2026-11-13 [--workers 4] [--quiet]

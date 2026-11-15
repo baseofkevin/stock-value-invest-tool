@@ -20,7 +20,7 @@ import threading
 import config
 from cycle import build as build_mod
 from cycle import codes as codes_mod
-from cycle import decide, detail, fetch, metrics
+from cycle import decide, detail, fetch, metrics, render
 
 #: 代码列的可能列名（小写比较）
 CODE_COLUMNS = ("代码", "股票代码", "证券代码", "code", "symbol", "secuCode")
@@ -146,6 +146,16 @@ def process_one(code, name_hint="", force=False):
     # 看板个股页要的明细（三个判断的文字 + 三条指标序列）。跟结论一起入库：
     # 复用路径（不带 --force）读回来的 payload 里就带着它，不用重算。
     decision["detail"] = detail.build(stock, m, decision, config)
+    # 原版报告（三判断表 + 三条含义说明 + 三张 SVG 图）压成一段存库，
+    # 看板 /stock/<code>/report/cycle 原样吐。渲染在这里做、不在 web 里做：
+    # 四个工具各有同名 config.py，同一进程里没法同时 import。
+    try:
+        charts = metrics.series_for_chart(stock["quarters"], config)
+        from stock_data_fetch import results as results_db
+        decision["report_html"] = results_db.pack_html(
+            render.render(stock, decision, m, charts))
+    except Exception:                          # noqa: BLE001 - 渲染失败不拖垮落库
+        decision["report_html"] = ""
     return True, decision, stock, ""
 
 

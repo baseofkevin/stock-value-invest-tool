@@ -55,7 +55,11 @@ python3 cycle_report.py --csv examples/示例-股票清单.csv --workers 4
 ```
 
 结果写进 `results.db` 的 `cycle_result` 表，用 `./run.py web` 的「周期」页或
-`/stock/<代码>` 看（2026-11-15 起不再产出 HTML / 索引页）。
+`/stock/<代码>` 看（2026-11-15 起不再往磁盘写 HTML / 索引页）。
+
+单股那份报告（三个判断表 + 三段「判断含义」+ 三张 SVG 指标图）仍由本工具渲染
+（`cycle/render.py`），渲染结果压进 `payload.report_html`，看板
+`/stock/<代码>/report/cycle` 原样吐出来。
 
 ```sql
 symbol name is_cycle gm_std_pp gm_cv elasticity elastic_label

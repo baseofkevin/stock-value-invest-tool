@@ -28,6 +28,7 @@ from stock_data_fetch.hub import preflight
 
 from .cli import normalize_code
 from .evaluate import evaluate
+from .render.html import html_report
 from .log import log
 
 CODE_COLUMNS = ("代码", "股票代码", "证券代码", "code", "symbol", "股票编码", "证券编码")
@@ -120,7 +121,20 @@ def _one(target: dict, end: str, refresh: bool, db: str | None) -> dict:
         "gaps": r.get("gaps"),
         # 完整结果留给结果库（web 看板要看四因子的原始数值，不只这几个状态词）
         "views_full": r.get("views") or [],
+        # 原版四因子报告（HTML）压成一段存库，看板 /stock/<code>/report/top 原样吐。
+        # 渲染在这里做、不在 web 里做：四个工具各有同名 config.py，同一进程
+        # 里没法同时 import。
+        "report_html": _pack_report(r),
     }
+
+
+def _pack_report(r: dict) -> str:
+    """渲染原版四因子报告并压成入库串；渲染失败返回空串，不拖垮落库。"""
+    try:
+        from stock_data_fetch import results as results_db
+        return results_db.pack_html(html_report(r))
+    except Exception:                          # noqa: BLE001
+        return ""
 
 
 def run(path: str, end: str, *, refresh: bool = False, workers: int = 4,
