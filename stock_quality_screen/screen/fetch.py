@@ -438,7 +438,11 @@ def fetch_all(code: str, timeout: float = 90.0, retries: int = 0,
         try:
             if domain == "snapshot":
                 sub = tool.replace("data_", "")
-                calls.append(_snapshot_plain(h, sub, tool, c))
+                # 只重试 2 次：这两个域只喂 V 分（机构口径）。
+                # 对没有机构覆盖的小票，上游每次都合法地返回空表——重试 4 次
+                # 等于为"这只票没人跟踪"白打 12 次请求（一只票两个子域各 4 次），
+                # 38 只里 14 只没有覆盖，就多出上百次请求，还更容易把上游打出限频。
+                calls.append(_snapshot_plain(h, sub, tool, c, tries=2))
             else:
                 calls.append(_simple_call(h, domain, tool, c,
                                           N.want.profile(), shape))
@@ -465,7 +469,8 @@ def fetch_all(code: str, timeout: float = 90.0, retries: int = 0,
     return {"code": c, "calls": calls, "errors": errors, "extra": out_extra}
 
 
-def _snapshot_plain(h: Hub, sub: str, tool: str, c: str) -> dict[str, Any]:
+def _snapshot_plain(h: Hub, sub: str, tool: str, c: str,
+                    tries: int = 4) -> dict[str, Any]:
     """`consensus` / `rating`：一个子域一份 payload，包成**上游原样**返回。
 
     ## `{"data": {code: payload}}` 这一层不能省
@@ -488,7 +493,7 @@ def _snapshot_plain(h: Hub, sub: str, tool: str, c: str) -> dict[str, Any]:
     2. `{"data": {c: body}}` 能跑，但和上游不一致，属于"靠兜底活着"。
     """
     need = N.want.snapshot(sub, h.target)
-    _ensure_retrying(h, "snapshot", c, need)
+    _ensure_retrying(h, "snapshot", c, need, tries=tries)
     rng = h.read("snapshot", c, need)
     body: dict = {}
     if rng.rows:

@@ -41,6 +41,9 @@ def build_parser():
     ap.add_argument("--ma60-gap", type=float, default=MA60_GAP)
     ap.add_argument("--db", help="共享库路径（默认 STOCKHUB_DB 或 "
                                  "stock-value-invest-tool/shared.db）")
+    ap.add_argument("--quiet", action="store_true",
+                    help="不打名单表、剔除明细和行业分布，只报「粗筛池 → 入选」"
+                         "（全流程里名单去看板看）")
     return ap
 
 

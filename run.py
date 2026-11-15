@@ -156,14 +156,22 @@ def pick_date(explicit: str | None, days: list[str]) -> str:
 #: 2026-11-15 那次全流程里，这类行占了全部输出的一半以上。
 #: 控制台省掉，**日志文件里一行不少**；要现场看就加 `--verbose`。
 _NOISE = (
-    re.compile(r"^kline \S+ 失败："),      # stock_data_fetch.api 逐只 K 线失败
-    re.compile(r"^\[\d+/\d+\] FAIL "),   # cycle/quality 逐只
+    re.compile(r"^kline \S+ 失败："),        # stock_data_fetch.api 逐只 K 线失败
+    re.compile(r"^\s*↻ "),                   # 「上游返回空，重试 (1/3)」
     re.compile(r"^\[FAIL\]"),
 )
 
+#: 逐只进度的形状：`[ 3/38] 宝钢股份 sh600019  观察` / `[1/38] ok 600019`。
+#: 只认"`[n/m]` 打头 + 行里有 6 位代码"，因为选股那一步的 `[2/6] 横截面粗筛…`
+#: 也是这个开头——那是阶段标题，得留着。
+_PROGRESS = re.compile(r"^\s*\[\s*\d+/\d+\]")
+_CODE6 = re.compile(r"(?<!\d)\d{6}(?!\d)")
+
 
 def _is_noise(text: str) -> bool:
-    return any(p.match(text) for p in _NOISE)
+    if any(p.match(text) for p in _NOISE):
+        return True
+    return bool(_PROGRESS.match(text) and _CODE6.search(text))
 
 
 class Tee:
@@ -184,6 +192,9 @@ class Tee:
         self.fh.flush()
         if not self.verbose and _is_noise(text):
             self.muted += 1
+            # 这些工具在两条进度之间会打空行；进度行本身被省掉后，
+            # 空行就成了一串"什么都没说的空屏"。把被省掉的行当分隔符看。
+            self._blank = True
             return
         if not text and self._blank:
             return              # 连续空行压成一行
@@ -228,7 +239,7 @@ def run_step(tee: Tee, title: str, argv: list[str], cwd: Path) -> tuple[int, flo
     LAST_SPENT["s"] = spent
 
     if muted:
-        tee.line(f"    （省掉 {muted} 行逐只失败播报，日志里有；要看就加 --verbose）")
+        tee.line(f"    （省掉 {muted} 行逐只进度/重试播报，日志里有；要看就加 --verbose）")
     tee.line("")
     if code == 0:
         tee.line(f"✅ {title} 完成（{spent:.1f}s）")
@@ -296,6 +307,10 @@ def judge_step(tee: Tee, title: str, tool: str, day: str, rc: int,
 
 def step_select(tee: Tee, day: str, extra: list[str]) -> int:
     argv = py_module("stock_kline_screen") + ["--date", day] + extra
+    # 全流程的终局是看板：名单、剔除明细在「选股」页更清楚，终端只留一句。
+    # 想看终端报表就别走 all，单跑 `./run.py select`；或者所有步骤都加 --verbose。
+    if not tee.verbose and "--quiet" not in argv:
+        argv.append("--quiet")
     code, _ = run_step(tee, f"① 选股 stock_kline_screen（{day}）", argv, ROOT)
     if code != 0:
         return code
@@ -377,6 +392,9 @@ def step_top(tee: Tee, day: str, codes: list[str], extra: list[str],
             "--from-select", day, "--date", day, "--workers", str(workers)] + extra
         if tee.verbose and "--verbose" not in argv and "-v" not in argv:
             argv.append("--verbose")
+        elif not tee.verbose and "--quiet" not in argv:
+            # 四因子表在「顶部」页看得更清楚；终端留一行"成功 38 只"。
+            argv.append("--quiet")
         rc, _ = run_step(tee, f"④ 顶部判断 stock_judge_top（批量 {n} 只 @ {day}）",
                          argv, ROOT)
         return rc

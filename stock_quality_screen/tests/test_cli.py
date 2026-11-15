@@ -305,6 +305,32 @@ class TestBatchList(unittest.TestCase):
         self.assertEqual(row["q"], 70.0)
         self.assertEqual(row["conclusion"], "通过")
 
+    def test_rerun_keeps_q_and_v(self):
+        """不带 --force 重跑（复用库里的行）不能把 Q/V 冲成空。
+
+        复用路径拿到的是「入库时的行」（键是 q / v / conclusion），新算的
+        是 `_payload()`（键 q_score / v_score / label）。只认一种形状的后果
+        不是报错，而是这一批的 Q/V 全变「—」，人还以为上游没数据。
+        """
+        results_db.save("select", [{"symbol": "600519", "name": "贵州茅台"}],
+                        "2026-11-08", argv="test")
+        self.run_batch(["--from-select", "2026-11-08"])
+        first = results_db.latest_for("quality", "2026-11-08")[0]
+        self.names.clear()
+        self.run_batch(["--from-select", "2026-11-08"])      # 走复用
+        again = results_db.latest_for("quality", "2026-11-08")[0]
+        for key in ("q", "v", "q_grade", "v_grade", "conclusion", "reason"):
+            self.assertEqual(again[key], first[key], f"{key} 重跑一次就变了")
+
+    def test_row_fields_accepts_both_shapes(self):
+        """两种 payload 形状都要认（新算的 / 库里读回来的）。"""
+        fresh = {"q_score": 70.0, "v_score": 55.0, "label": "通过",
+                 "q_grade": "合格", "v_grade": "合理", "reason": "r"}
+        stored = {"q": 70.0, "v": 55.0, "conclusion": "通过",
+                  "q_grade": "合格", "v_grade": "合理", "reason": "r"}
+        self.assertEqual(stock_report._row_fields(fresh),
+                         stock_report._row_fields(stored))
+
     def test_invalid_code_counted_as_failure(self):
         path = os.path.join(self.tmp, "bad.csv")
         with open(path, "w", encoding="utf-8") as fh:

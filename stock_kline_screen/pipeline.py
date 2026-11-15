@@ -61,7 +61,12 @@ def run(a, hub, *, into: dict | None = None) -> int:
     _annotate_turnaround(st)
     _annotate_industry(st)
     _write(st)
-    print_summary(st)
+    if not getattr(st["a"], "quiet", False):
+        print_summary(st)
+    else:
+        # 全流程（run.py all）末尾会起看板：名单在「选股」页看得更清楚，
+        # 终端只留一句结论。单跑 select 时不加 --quiet，报表照旧。
+        print(f"\n粗筛池 {st['pool_n']} 只 → 入选 {len(st['final'])} 只")
     hub.prune_scan()                       # 收尾顺手清过期的横截面，失败不抛
     hub.prune_kline()                      # 同上：K 线只留最近 N 根，失败不抛
     if into is not None:

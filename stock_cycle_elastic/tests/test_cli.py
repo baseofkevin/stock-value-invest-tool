@@ -358,6 +358,22 @@ class TestSingleMode(unittest.TestCase):
 
         self.assertEqual(decision_of(), decision_of())
 
+    def test_rerun_keeps_numbers(self):
+        """不带 --force 重跑（走复用）必须原样保留毛利率 σ / 弹性 / 产能分位。
+
+        复用路径把「入库时的行」塞进 item.decision，键是扁平的
+        `gm_cv` / `elasticity` / `position_pct`；只认嵌套三档结构的话，
+        重跑一次就把这些写成 NULL——不报错，看板上一批全是「—」。
+        """
+        def metrics():
+            run_main(["--from-select", "2026-11-13", "--bundle", bundle_path()])
+            row = results_db.latest_for("cycle", "2026-11-13")[0]
+            return (row["gm_cv_pct"], row["elasticity"], row["position_pct"])
+
+        first = metrics()
+        self.assertIsNotNone(first[0])
+        self.assertEqual(metrics(), first, "重跑一次数值就不一样了")
+
     def test_name_override(self):
         _, _, _, _ = run_main(
             ["--stock", "601899", "--bundle", bundle_path(), "--name", "自定义名"])

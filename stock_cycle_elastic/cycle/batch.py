@@ -262,6 +262,40 @@ def _existing(target_date):
     return out
 
 
+def _decision_fields(d: dict) -> dict:
+    """从两种形状里取同一批字段：`decide()` 的三档结构，或**入库时的行**。
+
+    不带 `--force` 重跑时，复用路径把库里的行塞进 `item.decision`
+    （`run_targets()` 里 `item.decision = hit["payload"]`），那份 payload 的
+    键是扁平的 `gm_cv` / `elasticity` / `position_pct`，不是嵌套的
+    `cycle` / `elastic` / `position`。只认嵌套形状的话，重跑一次就把毛利率
+    σ、弹性、产能分位全写成 NULL——不报错，但看板上这一批变成一片「—」。
+    """
+    if not d:
+        return {}
+    if "cycle" in d or "elastic" in d or "position" in d:
+        cyc = d.get("cycle") or {}
+        ela = d.get("elastic") or {}
+        pos = d.get("position") or {}
+        return {
+            "is_cycle": cyc.get("label") == 1,      # decide.CYCLE_YES
+            "gm_std": cyc.get("gm_std"), "gm_cv": cyc.get("gm_cv"),
+            "gm_median": cyc.get("gm_median"),
+            "elasticity": ela.get("ratio"), "elastic_label": ela.get("label"),
+            "position_pct": pos.get("pct"), "position_label": pos.get("label"),
+            "payload": d,
+        }
+    return {
+        "is_cycle": bool(d.get("is_cycle")),
+        "gm_std": d.get("gm_std"), "gm_cv": d.get("gm_cv"),
+        "gm_median": d.get("gm_median"),
+        "elasticity": d.get("elasticity"), "elastic_label": d.get("elastic_label"),
+        "position_pct": d.get("position_pct"), "position_label": d.get("position_label"),
+        # 行里还留着原始三档结构（入库时塞进 payload），原样带走，别越跑越瘦
+        "payload": d.get("payload") or d,
+    }
+
+
 def _save_results(results, target_date=None, kind="batch") -> None:
     """把批量结果写进 results.db（派生数据，失败只 warn）。
 
@@ -274,22 +308,12 @@ def _save_results(results, target_date=None, kind="batch") -> None:
         return
     rows = []
     for item in results:
-        d = item.decision or {}
-        if not item.ok or not d:
+        fields = _decision_fields(item.decision or {})
+        if not item.ok or not fields:
             continue
-        cyc = d.get("cycle") or {}
-        ela = d.get("elastic") or {}
-        pos = d.get("position") or {}
-        rows.append({
-            "symbol": item.code,
-            "name": item.name or (item.stock or {}).get("name"),
-            "is_cycle": cyc.get("label") == 1,      # decide.CYCLE_YES
-            "gm_std": cyc.get("gm_std"), "gm_cv": cyc.get("gm_cv"),
-            "gm_median": cyc.get("gm_median"),
-            "elasticity": ela.get("ratio"), "elastic_label": ela.get("label"),
-            "position_pct": pos.get("pct"), "position_label": pos.get("label"),
-            "payload": d,
-        })
+        rows.append({"symbol": item.code,
+                     "name": item.name or (item.stock or {}).get("name"),
+                     **fields})
     if not rows:
         return
     # 没算出结论的（利润表为空等）要如实记成失败：看板与 run.py 都靠它

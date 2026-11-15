@@ -186,6 +186,31 @@ def _existing(target_date: str | None) -> dict[str, dict]:
     return out
 
 
+def _row_fields(payload: dict) -> dict:
+    """从两种 payload 形状里取同一批字段。
+
+    新算出来的走 `_payload()`（键是 `q_score` / `v_score` / `label`）；
+    **不带 `--force` 重跑**时，复用的结论是从库里读回来的，那份 payload 是
+    "入库时的行"（键是 `q` / `v` / `conclusion`）。
+
+    只认一种形状的后果不是报错、而是**静默认错**：复用一次就把 q/v 覆盖成
+    空值，看板上这一批的 Q/V 全变「—」，人还以为上游没数据。两种都认。
+    """
+    if not payload:
+        return {}
+    return {
+        "q": payload.get("q_score", payload.get("q")),
+        "q_grade": payload.get("q_grade"),
+        "v": payload.get("v_score", payload.get("v")),
+        "v_grade": payload.get("v_grade"),
+        "conclusion": payload.get("label") or payload.get("conclusion") or "",
+        "reason": payload.get("reason") or "",
+        "risks_hit": payload.get("risks_hit"),
+        "risks_watch": payload.get("risks_watch"),
+        "risks_known": payload.get("risks_known"),
+    }
+
+
 def _save_results(results: dict[str, ReportResult], target_date: str | None,
                   kind: str = "batch") -> None:
     """把这一次写进 results.db（失败只 warn，绝不影响报告本身）。
@@ -202,20 +227,11 @@ def _save_results(results: dict[str, ReportResult], target_date: str | None,
         payload = _payload(result.data) or result.payload
         if not payload:
             continue
-        rows.append({
-            "symbol": code,
-            "name": result.name,
-            "q": payload.get("q_score"),
-            "q_grade": payload.get("q_grade"),
-            "v": payload.get("v_score"),
-            "v_grade": payload.get("v_grade"),
-            "conclusion": payload.get("label") or "",
-            "reason": payload.get("reason") or "",
-            "risks_hit": payload.get("risks_hit"),
-            "risks_watch": payload.get("risks_watch"),
-            "risks_known": payload.get("risks_known"),
-            "payload": payload,
-        })
+        fields = _row_fields(payload)
+        if not fields:
+            continue
+        rows.append({"symbol": code, "name": result.name, **fields,
+                     "payload": payload})
     if not rows:
         return
     # 有结果、但拿不到 payload 的（数据缺口太大）如实记成失败。
@@ -385,6 +401,13 @@ def _run_batch(args: argparse.Namespace) -> int:
     if not args.quiet:
         print(f"\n批量完成：成功 {ok} 只（复用 {len(reused)} 只），跳过 {skipped} 只，"
               f"失败 {failed + invalid} 只，共 {row_count} 行")
+        # V 是**机构口径**（目标价 + 预测 PE + 预测增速）：没有机构覆盖的票
+        # 天然没有 V，这不是失败，但要在汇总里说清楚，免得看到「V —」以为出错。
+        no_v = sum(1 for r in results.values()
+                   if _row_fields(_payload(r.data) or r.payload or {}).get("v")
+                   is None)
+        if no_v:
+            print(f"  V 分留空 {no_v} 只（没有机构覆盖或缺少预测；Q 分照常算）")
         print(f"  名单    {source}")
         print("  结果    results.db（./run.py web 查看）")
     return 0 if failed == 0 else 1
