@@ -105,8 +105,33 @@ class PassthroughTest(unittest.TestCase):
 class ParserTest(unittest.TestCase):
     def test_subcommands_exist(self) -> None:
         p = run.build_parser()
-        for name in ("weekly", "select", "cycle", "quality", "top", "calendar"):
+        for name in ("all", "weekly", "select", "cycle", "quality", "top",
+                     "calendar", "menu"):
             self.assertIn(name, p._subparsers._group_actions[0].choices)
+
+    def test_all_is_full_pipeline(self) -> None:
+        a = run.build_parser().parse_args(["all"])
+        self.assertEqual(a.cycle_args, "--workers 2")
+        self.assertFalse(a.skip_cycle)
+
+    def test_weekly_still_works_as_alias(self) -> None:
+        """旧写法 ./run.py weekly 不能失效（README/脚本里可能还有）。"""
+        a = run.build_parser().parse_args(["weekly"])
+        self.assertFalse(a.skip_quality)
+
+    def test_bare_run_prints_help_and_runs_nothing(self) -> None:
+        """裸跑不能顺手跑流程：只出帮助，退出码 2。"""
+        import io
+        from contextlib import redirect_stdout
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = run.main([])
+        self.assertEqual(rc, 2)
+        text = buf.getvalue()
+        self.assertIn("run.py all", text)
+        self.assertIn("./run.py menu", text)
+        self.assertNotIn("① 选股", text)
 
     def test_top_requires_code(self) -> None:
         p = run.build_parser()

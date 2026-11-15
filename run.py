@@ -2,8 +2,9 @@
 # -*- coding: utf-8 -*-
 """四个功能模块的统一入口。
 
-    python3 run.py                 # 交互菜单（推荐，每周五盘后选「1」走全流程）
-    python3 run.py weekly          # 全流程：日历 → 选股 → 周期 → 质量
+    python3 run.py all             # 全流程：日历 → 选股 → 周期 → 质量（每周五盘后）
+    python3 run.py menu            # 交互菜单
+    python3 run.py -h              # 帮助
     python3 run.py select          # 只跑选股（stock_kline_screen）
     python3 run.py cycle           # 周期弹性批量（依赖当天的选股 CSV）
     python3 run.py cycle --stock 600519     # 周期弹性单只
@@ -28,6 +29,9 @@
 
 除此之外还有：逐步计时、全程日志（`output/logs/`）、盘前/盘中告警
 （收盘宽限 15:05 之前跑等于拿半天的数据算「站上 MA20」）。
+
+**不带参数运行时只打印帮助**，什么也不跑——全流程要三十多分钟，误敲一个回车就
+开跑太危险了；想跑什么必须显式说出来（`all` / `select` / `cycle` / …）。
 
 退出码：0 成功 / 1 某步失败 / 2 用法错误 / 130 用户中断。
 """
@@ -348,7 +352,7 @@ def summary(tee: Tee, day: str, steps: list[tuple[str, int, float]]) -> None:
 # 命令
 # ---------------------------------------------------------------------------
 
-def cmd_weekly(args, tee: Tee) -> int:
+def cmd_all(args, tee: Tee) -> int:
     day, rc = ensure_calendar(tee, args.date, auto=not args.no_calendar)
     if not day:
         return rc or 1
@@ -457,7 +461,7 @@ def interactive() -> int:
                                           quality_args=["--workers", "2"],
                                           skip_cycle=False, skip_quality=False,
                                           keep_going=False)
-                rc = cmd_weekly(args, tee)
+                rc = cmd_all(args, tee)
             elif choice == "2":
                 args = argparse.Namespace(date=day_hint, no_calendar=False, extra=[])
                 rc = cmd_single("select")(args, tee)
@@ -499,13 +503,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="run.py",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="四个功能模块的统一入口（不带参数运行 = 交互菜单）",
+        description="四个功能模块的统一入口。不带参数只打印帮助；"
+                    "跑全流程用 all，想选着跑用 menu。",
         epilog="""示例：
-  python3 run.py                          # 交互菜单
-  python3 run.py weekly                   # 周五盘后全流程
-  python3 run.py select --date 2026-11-20 # 只跑选股，指定基准日
-  python3 run.py quality                  # 用当天 CSV 跑质量初筛
-  python3 run.py top sh600519             # 判断这只股票是否到顶部
+  ./run.py all                            # 周五盘后全流程（日历→选股→周期→质量）
+  ./run.py menu                           # 交互菜单
+  ./run.py select --date 2026-11-20       # 只跑选股，指定基准日
+  ./run.py cycle   --stock 600519         # 周期弹性，单只
+  ./run.py quality --stock 600519         # 质量初筛，单只
+  ./run.py top     600519                 # 顶部判断
+
+不带参数只打印本帮助，不跑任何程序（全流程要三十多分钟，免得误敲回车就开跑）。
 
 下游（cycle/quality）认的是 output/kline-screen/选股_<基准日>.csv，
 所以它们的 --date 必须和那天的选股一致；不给就按「今天（过了 15:05）」算。""")
@@ -517,7 +525,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--no-calendar", action="store_true",
                         help="即使日历过期也不要自动更新")
 
-    sp = sub.add_parser("weekly", help="全流程：日历 → 选股 → 周期 → 质量")
+    sp = sub.add_parser("all", aliases=["weekly"],
+                        help="全流程：日历 → 选股 → 周期 → 质量")
     add_date(sp)
     sp.add_argument("--skip-cycle", action="store_true", help="跳过周期弹性")
     sp.add_argument("--skip-quality", action="store_true", help="跳过质量初筛")
@@ -545,6 +554,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("extra", nargs="*", default=[], help="透传给 stock_judge_top 的参数")
 
     sp = sub.add_parser("calendar", help="只更新交易日历")
+    sub.add_parser("menu", help="交互菜单（0-6 选择）")
     return p
 
 
@@ -555,10 +565,12 @@ def split_passthrough(text: str) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
-        if not sys.stdin.isatty():
-            build_parser().print_help()
-            return 2
-        return interactive()
+        # 裸跑只给帮助，**绝不**顺手跑点什么：全流程三十多分钟，误敲回车就开跑
+        # 比"少敲一个词"的代价大得多。
+        build_parser().print_help()
+        say("")
+        say("提示：跑全流程用 ./run.py all；想选着跑用 ./run.py menu。")
+        return 2
 
     # `parse_known_args`：单只/单模块模式下要能透传未知参数（--force、--workers…）。
     # 用 `nargs="*"` 接不住以 `-` 开头的参数，argparse 会直接报 unrecognized。
@@ -567,7 +579,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.cmd:
         parser.print_help()
         return 2
-    if args.cmd == "weekly":
+    if args.cmd in ("all", "weekly"):
         if unknown:
             say(f"❌ weekly 不认识这些参数：{' '.join(unknown)}")
             say("   透传请用 --select-args / --cycle-args / --quality-args。")
@@ -579,11 +591,14 @@ def main(argv: list[str] | None = None) -> int:
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     tee = Tee(LOG_DIR / f"run-{stamp}.log")
     try:
-        if args.cmd == "weekly":
+        if args.cmd == "menu":
+            tee.close()
+            return interactive()
+        if args.cmd in ("all", "weekly"):
             args.select_args = split_passthrough(getattr(args, "select_args", ""))
             args.cycle_args = split_passthrough(getattr(args, "cycle_args", ""))
             args.quality_args = split_passthrough(getattr(args, "quality_args", ""))
-            return cmd_weekly(args, tee)
+            return cmd_all(args, tee)
         if args.cmd == "calendar":
             return cmd_calendar(args, tee)
         handler = cmd_single(args.cmd)

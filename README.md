@@ -16,13 +16,16 @@
 
 ```bash
 cd /home/kevin/MyData/stock-value-invest-tool
-python3 run.py            # 交互菜单，选 1
+./run.py all
 ```
 
-或者一条命令跑完：
+`./run.py` 裸跑**只打印帮助，什么也不跑**——全流程要三十多分钟，误敲一个回车就
+开跑代价太大。想跑什么必须显式写出来；不记得写什么就 `./run.py -h`。
+
+想按菜单选着跑（比如今天只想重跑质量初筛）：
 
 ```bash
-python3 run.py weekly
+./run.py menu
 ```
 
 它会依次做四件事，并在最后打印汇总（每步耗时、退出码、四个产物目录）：
@@ -34,22 +37,22 @@ python3 run.py weekly
 ③ stock_quality_screen  质量初筛 → output/quality-screen/<日期>/
 ```
 
-`stock_judge_top` 不在全流程里：它是**买入之后**用来判断股价有没有到顶部区域的，
+`stock_judge_top`（顶部判断）不在全流程里：它是**买入之后**用来判断股价有没有到顶部区域的，
 单只、随时跑。
 
 ```bash
-python3 run.py top sh600519                # 基准日自动取「今天（过了 15:05）」
-python3 run.py top sh600519 --date 2026-11-13
-python3 run.py top sh600519 sz000001       # 一次多只
+./run.py top sh600519                      # 基准日自动取「今天（过了 15:05）」
+./run.py top sh600519 --date 2026-11-13
+./run.py top sh600519 sz000001             # 一次多只
 ```
 
 ## 单独跑某一步
 
 ```bash
-python3 run.py select  --date 2026-11-20   # 只选股（只能批量）
-python3 run.py cycle                       # 周期弹性批量（用当天的选股 CSV）
-python3 run.py quality                     # 质量初筛批量（用当天的选股 CSV）
-python3 run.py calendar                    # 只更新日历
+./run.py select  --date 2026-11-20         # 只选股（只能批量）
+./run.py cycle                             # 周期弹性批量（用当天的选股 CSV）
+./run.py quality                           # 质量初筛批量（用当天的选股 CSV）
+./run.py calendar                          # 只更新日历
 ```
 
 ### 单只也能跑
@@ -57,9 +60,9 @@ python3 run.py calendar                    # 只更新日历
 周期弹性和质量初筛都支持单只，不需要当天的选股 CSV：
 
 ```bash
-python3 run.py cycle   --stock 600519      # 周期弹性：这一只是不是周期股、位置在哪
-python3 run.py quality --stock 600519      # 质量初筛：Q/V 分数与风险检查
-python3 run.py top     600519              # 顶部判断
+./run.py cycle   --stock 600519            # 周期弹性：这一只是不是周期股、位置在哪
+./run.py quality --stock 600519            # 质量初筛：Q/V 分数与风险检查
+./run.py top     600519                    # 顶部判断
 ```
 
 菜单里也是同样的：选 3 或 4，股票代码处**直接回车 = 批量跑当天 CSV**，填代码 = 只跑那一只。
@@ -67,7 +70,7 @@ python3 run.py top     600519              # 顶部判断
 注意单只模式的基准日由程序自己决定（今天过了 15:05 就用今天，否则上一个交易日），
 **不接受 `--date`**——那两个程序没有日期参数。要按历史某天出报告只能走批量模式。
 
-子进程参数可以透传：`python3 run.py quality --stock 600519 --force`。
+子进程参数可以透传：`./run.py quality --stock 600519 --force`。
 
 下游（cycle/quality）认的是 `output/kline-screen/选股_<基准日>.csv`，所以它们的
 基准日必须和那天的选股一致；不给 `--date` 就按「今天（过了 15:05）」算，
