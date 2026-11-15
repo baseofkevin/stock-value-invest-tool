@@ -283,6 +283,44 @@ class TestFatal(unittest.TestCase):
         self.assertEqual(lev["status"], "hit")
         self.assertNotIn("字段不足", lev["detail"])
 
+    def test_loss_maker_gets_no_credit_on_leverage_item(self):
+        """亏损公司在 Q 的「净负债/EBIT」项上不能拿满分（2026-11-15 修）。
+
+        旧行为：净负债>0、EBIT<0 → 比值为负 → `inverse()` 判为「越小越好」的满分，
+        亏损加杠杆的公司白拿 8 分，能把 Q 顶过 45 的硬地板。
+        """
+        annual = helpers.annual_series(5, ebit=-13e8, debt=80e8, cash=10e8)
+        q = score._quality(helpers.data_with_annual(annual))
+        bal = [g for g in q["groups"] if g["key"] == "balance"][0]
+        item = [i for i in bal["items"] if i["label"] == "净负债/EBIT"][0]
+        self.assertEqual(item["score"], 0.0, f"不该给分，实际 {item['score']}")
+        self.assertIn("亏损", item["raw"])
+
+    def test_loss_maker_with_net_cash_also_gets_no_credit(self):
+        """净现金的亏损公司同样 0 分：这一项问的是「赚得到钱吗、靠不靠借钱」。
+
+        给满分会让一家亏损公司靠这一项顶过 Q=45（实测 sh603138 正好被顶到 45.0，
+        结论从「回避」松成「数据不足」）。亏损本身由 ROE/ROIC/毛利/现金等项扣。
+        """
+        annual = helpers.annual_series(5, ebit=-2e8, debt=1e8, cash=16e8)
+        q = score._quality(helpers.data_with_annual(annual))
+        bal = [g for g in q["groups"] if g["key"] == "balance"][0]
+        item = [i for i in bal["items"] if i["label"] == "净负债/EBIT"][0]
+        self.assertEqual(item["score"], 0.0)
+        self.assertIn("EBIT", item["raw"])
+
+    def test_profitable_company_still_scored_by_ratio(self):
+        """盈利公司的这一项一字不变：4.5 倍 → 0 分，−2.5 倍 → 满分。"""
+        for debt, cash, want_max in ((50e8, 5e8, False), (5e8, 30e8, True)):
+            annual = helpers.annual_series(5, ebit=10e8, debt=debt, cash=cash)
+            q = score._quality(helpers.data_with_annual(annual))
+            bal = [g for g in q["groups"] if g["key"] == "balance"][0]
+            item = [i for i in bal["items"] if i["label"] == "净负债/EBIT"][0]
+            if want_max:
+                self.assertEqual(item["score"], config.QUALITY_ITEM_MAX["balance"]["net_debt_ebit"])
+            else:
+                self.assertEqual(item["score"], 0.0)
+
     def test_low_interest_cover_is_fatal(self):
         """利息保障 < 1：经营利润不够付利息，直接否决。"""
         annual = helpers.annual_series(5, ebit=1e8, finance_expense=2e8)

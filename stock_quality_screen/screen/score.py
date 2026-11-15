@@ -160,9 +160,28 @@ def _quality(data: dict[str, Any]) -> dict[str, Any]:
               m["cash"]["fcf_margin"], f"{_p(fcf_margin_pct)}"),
     ], "cash")
     goodwill_pct = goodwill_ratio * 100 if goodwill_ratio is not None else None
+
+    # 「净负债/EBIT」在 EBIT ≤ 0 时没有意义（2026-11-15 修）：
+    # 净负债>0 → 比值为负 → `inverse()` 判为「越小越好」的满分，亏损加杠杆的
+    # 公司在这一项白拿 8 分，能把 Q 顶过 45 的硬地板；净负债<0 → 比值为正，
+    # 净现金公司反而被扣分。与 `_risk_checks` 的 leverage 用同一套判据。
+    nd_ebit_points = _band("balance", "net_debt_ebit", net_debt_ebit, m)
+    nd_ebit_raw = f"{_n(net_debt_ebit)}"
+    if net_debt is not None and latest.get("ebit") is not None and latest["ebit"] <= 0:
+        # 两个方向都给 0 分：
+        #   - 净负债 > 0：不赚钱还在借钱，杠杆项没有理由给分；
+        #   - 净现金：没杠杆是真的，但「分母是赚钱能力」这一项确实算不出来，
+        #     而亏损本身另有 ROE/ROIC/毛利/现金等项在扣。给满分会让一家亏损
+        #     公司靠这一项白拿 8 分顶过 Q=45 的硬地板（实测 sh603138 海量数据
+        #     正好被顶到 45.0，结论从「回避」松成「数据不足」）。
+        # 宁可两侧都不给分：这一项只奖励「赚得到钱且不靠借钱」。
+        nd_ebit_points = 0.0
+        nd_ebit_raw = (f"EBIT {_yi(latest['ebit'])}（亏损），比值不适用" if net_debt > 0
+                       else f"EBIT {_yi(latest['ebit'])}（亏损），杠杆项不适用")
+
     balance = _group([
-        _item("净负债/EBIT", _band("balance", "net_debt_ebit", net_debt_ebit, m),
-              m["balance"]["net_debt_ebit"], f"{_n(net_debt_ebit)}"),
+        _item("净负债/EBIT", nd_ebit_points,
+              m["balance"]["net_debt_ebit"], nd_ebit_raw),
         _item("利息保障", _band("balance", "interest", interest, m), m["balance"]["interest"],
               "净利息收入" if interest == 99.0 else f"{_n(interest)}x"),
         _item("商誉/净资产", _band("balance", "goodwill", goodwill_pct, m),
@@ -1380,7 +1399,12 @@ def _tracking(data: dict[str, Any], q: dict[str, Any]) -> list[dict[str, str]]:
     items.append({"metric": "CFO/净利润(TTM)", "current": _n(cash_ni),
                   "threshold": f"≥ {config.CASH_NI_OK:.1f}", "frequency": "每季"})
     nd = (latest.get("debt") - latest.get("cash")) if latest.get("debt") is not None and latest.get("cash") is not None else None
-    items.append({"metric": "净有息负债/EBIT", "current": _n(div(nd, latest.get("ebit"))),
+    nd_ebit_track = _n(div(nd, latest.get("ebit")))
+    if nd is not None and latest.get("ebit") is not None and latest["ebit"] <= 0:
+        # 亏损时比值符号会骗人，跟踪表也只写事实（与 Q 分、风险检查同一判据）
+        nd_ebit_track = (f"EBIT 为负（{_yi(latest['ebit'])}），不适用"
+                         if nd > 0 else f"EBIT 为负（{_yi(latest['ebit'])}），净现金")
+    items.append({"metric": "净有息负债/EBIT", "current": nd_ebit_track,
                   "threshold": f"≤ {config.NET_DEBT_EBIT_MAX:.0f}", "frequency": "每季"})
     items.append({"metric": "商誉/净资产", "current": _p(div(latest.get("goodwill"), latest.get("equity")) * 100 if latest.get("goodwill") is not None and latest.get("equity") else None),
                   "threshold": f"≤ {config.GOODWILL_EQUITY_WATCH * 100:.0f}%", "frequency": "每半年"})
