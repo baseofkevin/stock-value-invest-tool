@@ -37,13 +37,63 @@ def _save_demo(db_path: str, date: str = "2026-11-13", kind: str = "batch") -> N
         {"symbol": "sh600019", "name": "宝钢股份", "is_cycle": True,
          "gm_std_pp": 2.3, "gm_cv": 37.3, "elasticity": -1.17,
          "elastic_label": "weak", "position_pct": 63.7,
-         "position_label": "high"},
+         "position_label": "high",
+         "payload": {"detail": {
+             "industry": "钢铁",
+             "judge": [
+                 {"name": "判断① 是不是周期股", "result": "是", "metric": "毛利率标准差 σ",
+                  "value": "2.30 pp", "detail": "CV 37.3% · 中位 6.2%", "tone": "warn"},
+                 {"name": "判断② 弹性", "result": "弱", "metric": "增速比值",
+                  "value": "-1.17", "detail": "", "tone": "muted"},
+                 {"name": "判断③ 周期位置", "result": "高位", "metric": "产能周转率分位",
+                  "value": "63.7%", "detail": "", "tone": "warn"},
+             ],
+             "notes": ["判断① 走相对波动通道：σ 2.30pp 未到 5pp，但 CV 37% ≥ 20%"],
+             "badges": ["周期股", "相对波动", "弹性弱", "高位"],
+             "series": {"gross_margin": [{"date": "2026-06-30", "value": 5.41},
+                                         {"date": "2026-09-30", "value": 5.43}],
+                        "ratio": [{"date": "2026-09-30", "value": -1.17}],
+                        "turnover": [{"date": "2026-09-30", "value": 1.02}]},
+             "meta": {"quarters": 43, "latest": "2026-09-30"},
+         }}},
     ], date, argv="test", db=db_path, kind=kind)
     results_db.save("quality", [
         {"symbol": "sh600019", "name": "宝钢股份", "q": 54.4, "q_grade": "合格",
          "v": 67.0, "v_grade": "合理", "conclusion": "观察",
          "reason": "估值便宜，但现金流质量待观察", "risks_hit": 1,
-         "risks_watch": 2, "risks_known": 9},
+         "risks_watch": 2, "risks_known": 9,
+         "payload": {"detail": {
+             "meta": {"industry": "钢铁", "business": "钢铁业、贸易。",
+                      "price": 6.18, "price_basis": "2026-11-13 收盘", "mcap_yi": 1346},
+             "q": {"score": 54.4, "grade": "合格", "coverage": 100,
+                   "groups": [{"label": "资本回报", "score": 20.0, "max": 30,
+                               "coverage": 100,
+                               "subs": [{"label": "ROE 中位数", "score": 6.0,
+                                          "max": 6, "raw": "6.2%"}]}]},
+             "v": {"score": 67.0, "grade": "合理", "coverage": 100,
+                   "parts": [{"label": "机构目标价空间", "score": 26.8, "max": 40,
+                              "raw": "目标价 7.47 元（+20.9%）"}]},
+             "risks": [{"group": "安全", "name": "现金短债比", "status": "watch",
+                        "status_label": "提示", "severity": "中",
+                        "detail": "0.62（<0.8）"},
+                       {"group": "真伪", "name": "现金流质量", "status": "clear",
+                        "status_label": "通过", "severity": "高",
+                        "detail": "净现比(TTM) 3.25（优秀）"}],
+             "risk_counts": {"hit": 0, "watch": 1, "clear": 1},
+             "fatal": [],
+             "valuation": {"rows": [{"label": "PE(TTM)", "current": 14.75,
+                                     "percentile": 79, "min": 5.33, "max": 20.68}],
+                           "sample": "2018-01-05 至 2026-11-13 · 454 个周点"},
+             "forecast": {"available": True, "target_price": 7.47,
+                          "rows": [{"year": 2026, "eps": 0.44, "pe": 13.92,
+                                    "pb": 0.65, "profit_yi": 96.7,
+                                    "profit_yoy": -6.5}]},
+             "tracking": [{"metric": "CFO/净利润(TTM)", "current": "3.25",
+                           "threshold": "≥ 0.7", "frequency": "每季"}],
+             "data_quality": {"risks_known": 9, "risks_total": 9, "coverage": 100,
+                              "institution": 1, "blockers": []},
+             "decision": {"label": "观察", "reason": "估值便宜，但现金流质量待观察"},
+         }}},
     ], date, argv="test", db=db_path, kind=kind)
     results_db.save("top", [
         {"code": "sh600019", "name": "宝钢股份", "ok": True, "error": "",
@@ -397,8 +447,42 @@ class TestNavAndLinks(WebCase):
         for query, first in want.items():
             with self.subTest(query=query or "(默认)"):
                 html = self.client().get("/stock/sh600019" + query).get_data(as_text=True)
-                heads = re.findall(r"<h2>(.*?)<", html)
-                self.assertEqual(heads[0], first, heads)
+                # h2 后面可能跟一个 <span class="tag">，所以取到 </h2> 为止再 strip
+                # h2 里可能跟一个 <span class="tag">，去标签后再比
+                heads = [re.sub(r"<[^>]+>", "", h).strip()
+                         for h in re.findall(r"<h2>(.*?)</h2>", html, re.S)]
+                # 标题后面可能跟 <span class="tag">，所以只比前缀
+                self.assertTrue(heads[0].startswith(first), heads)
+
+
+
+class TestStockDetail(WebCase):
+    """个股页的质量/周期两块：有明细就摆明细，旧行降级成一句提示。"""
+
+    def test_quality_detail_sections(self):
+        html = self.client().get("/stock/sh600019?focus=quality").get_data(as_text=True)
+        for text in ("Q 分项", "V 分项", "风险检查", "估值分位", "机构预测",
+                     "跟踪清单", "ROE 中位数", "目标价 7.47", "净现比(TTM) 3.25"):
+            with self.subTest(text=text):
+                self.assertIn(text, html)
+
+    def test_cycle_detail_sections_and_charts(self):
+        html = self.client().get("/stock/sh600019?focus=cycle").get_data(as_text=True)
+        self.assertIn("判断① 是不是周期股", html)
+        self.assertIn("相对波动通道", html)          # notes
+        for canvas in ("cycGm", "cycRatio", "cycTurn"):
+            self.assertIn(canvas, html)              # 三条指标历史图
+        self.assertIn("5.41", html)                  # 序列进了 JSON
+
+    def test_old_rows_fall_back_with_hint(self):
+        """旧行没有 detail：给薄表 + "重跑一次就有"，不能 500 也不能空白。"""
+        results_db.save("quality", [{"symbol": "sz000002", "name": "旧行",
+                                     "q": 40.0, "v": 50.0, "conclusion": "回避",
+                                     "reason": "旧", "risks_hit": 2}],
+                        "2026-11-14", argv="test", db=self.db_path)
+        html = self.client().get("/stock/sz000002?focus=quality").get_data(as_text=True)
+        self.assertIn("没有明细", html)
+        self.assertIn("--force", html)
 
 
 class TestReadOnly(WebCase):

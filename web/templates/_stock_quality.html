@@ -1,59 +1,223 @@
-{# 质量初筛 + 旁证（旁证里大半是估值的旁证，跟质量一起看）。 #}
-<div class="two">
-  {% if extras %}
-  <section class="panel">
-    <h2>旁证</h2>
-    <p class="sub">估值分位 / 机构目标价 / 基本面反证 / 周期状态，各一句话，不参与结论。</p>
-    {% set val = (extras.valuation or {}).get('metrics') or {} %}
-    <table class="kv"><tbody>
-      <tr class="tone-info"><th>估值分位</th><td>
-        {% if val %}
-          {% for key, label in [('pe','PE(TTM)'), ('pb','PB'), ('ps','PS(TTM)')] %}
-            {% set item = val.get(key) or {} %}
-            {% if item.current is not none %}{{ label }} {{ item.current|num(2) }}（{% if item.percentile is not none %}P{{ item.percentile|num(0) }}{% else %}分位不足{% endif %}）{% if not loop.last %} · {% endif %}{% endif %}
-          {% endfor %}
-          <br><small style="color:#94a3b8">样本 {{ (extras.valuation or {}).get('sample_start') }} 起 {{ (extras.valuation or {}).get('weeks') }} 周</small>
-        {% else %}—{% endif %}
-      </td></tr>
-      <tr><th>机构目标价</th><td>
-        {% set con = extras.consensus or {} %}
-        {% if con.target %}{{ con.target|num(2) }}（距现价 {{ con.upside|pct }}，{{ con.forecasts }} 个预测年度）{% else %}无机构覆盖（上游一致预期为空表，不是取数故障）{% endif %}
-      </td></tr>
-      <tr class="{{ 'tone-warn' if (extras.risk or {}).get('hit') else 'tone-info' }}"><th>基本面反证</th><td>
-        {% set rk = extras.risk or {} %}
-        {% set rk_items = rk.get('items') or [] %}
-        {% if rk_items %}
-          {% for i in rk_items %}{{ i.label }} {{ i.text }}{% if not loop.last %}；{% endif %}{% endfor %}
-          <br><small style="color:#94a3b8">命中 {{ rk.hit }} / 提示 {{ rk.watch }}（命中项越多，"这波涨没有基本面"的证据越强）</small>
-        {% else %}—{% endif %}
-      </td></tr>
-      {% set cy = extras.cycle or {} %}
-      {% if cy %}
-      <tr><th>周期状态</th><td>
-        毛利率σ {{ cy.gm_std|num(2) }}pp、CV {% if cy.gm_cv is none %}—{% else %}{{ cy.gm_cv|num(0) }}%{% endif %}
-        → {{ '是周期股' if cy.is_cycle else '不是周期股' }}；弹性
-        {{ {'strong':'强','weak':'弱','unstable':'不稳定'}.get(cy.elastic_label, cy.elastic_label or '—') }}；
-        产能周转率 {% if cy.position_pct is none %}—{% else %}{{ cy.position_pct|num(0) }}% 分位{% endif %}
-        （{{ cy.position_label|poslabel }}）
-      </td></tr>
-      {% endif %}
-    </tbody></table>
-  </section>
+{# 质量初筛：有明细（payload.detail）就把 Q/V 分项、14 条风险检查、估值分位、
+   机构预测、跟踪清单全摆出来；旧行没有明细，退回一张四行表 + 一句提示。
+   数据来自质量工具写入的 `detail`（约 5KB），页面不做任何二次计算。 #}
+{% if qua %}
+{% set qd = qua|detail %}
+<section class="panel">
+  <h2>质量初筛
+    {% if qd %}<span class="tag">{{ qd.meta.industry or '—' }}{% if qd.meta.mcap_yi %} · 市值 {{ qd.meta.mcap_yi|num(0) }} 亿{% endif %}</span>{% endif %}
+  </h2>
+  <p class="sub">Q 越低要求 V 越高；Q &lt; 45 一律回避，命中致命风险一律回避。</p>
+
+  {% if not qd %}
+  <table class="kv"><tbody>
+    <tr><th>质量分 Q</th><td><b>{{ qua.q|num(1) }}</b>　{{ (qua.data.payload or {}).get('q_grade') or '' }}</td></tr>
+    <tr><th>估值分 V</th><td><b>{{ qua.v|num(1) }}</b>　{{ (qua.data.payload or {}).get('v_grade') or '' }}</td></tr>
+    <tr><th>结论</th><td><span class="chip {{ qua.conclusion|tone }}">{{ qua.conclusion }}</span></td></tr>
+    <tr><th>理由</th><td>{{ qua.reason or '—' }}</td></tr>
+    <tr><th>风险检查</th><td>命中 {{ qua.risks_hit if qua.risks_hit is not none else '—' }} / 提示 {{ qua.risks_watch if qua.risks_watch is not none else '—' }} / 已知 {{ qua.risks_known if qua.risks_known is not none else '—' }}</td></tr>
+  </tbody></table>
+  <p class="sub" style="margin:10px 0 0">这条结果没有明细（写入时还没存分项），重跑一次就有：
+    <code>./run.py quality --date {{ qua.target_date }} --force</code></p>
+
+  {% else %}
+  {# ---- 四个数字：Q / V / 结论 / 数据完整度 ---- #}
+  <div class="metrics">
+    <div class="metric">
+      <div class="k">质量分 Q</div>
+      <div class="v">{{ qd.q.score|num(1) }}</div>
+      <div class="s">{{ qd.q.grade or '—' }}{% if qd.q.coverage is not none %} · 覆盖 {{ qd.q.coverage|num(0) }}%{% endif %}</div>
+    </div>
+    <div class="metric">
+      <div class="k">估值分 V</div>
+      <div class="v">{{ qd.v.score|num(1) if qd.v.score is not none else '—' }}</div>
+      <div class="s">{{ qd.v.grade or ('无机构覆盖，V 不参与' if qd.v.score is none else '') }}</div>
+    </div>
+    <div class="metric">
+      <div class="k">结论</div>
+      <div class="v" style="font-size:17px"><span class="chip {{ qd.decision.label|tone }}">{{ qd.decision.label or '—' }}</span></div>
+      <div class="s">{{ qd.decision.reason or '—' }}</div>
+    </div>
+    <div class="metric">
+      <div class="k">数据完整度</div>
+      <div class="v">{{ qd.data_quality.risks_known if qd.data_quality.risks_known is not none else '—' }}<span style="font-size:13px;color:var(--muted)">/{{ qd.data_quality.risks_total if qd.data_quality.risks_total is not none else '—' }}</span></div>
+      <div class="s">风险检查可取 · 机构覆盖 {{ qd.data_quality.institution if qd.data_quality.institution is not none else '—' }} 家</div>
+    </div>
+  </div>
+
+  {% if qd.fatal or qd.data_quality.blockers %}
+  <ul class="notes" style="background:#fff7e6;border-color:#fcd9a4;color:#92400e">
+    {% for f in qd.fatal %}<li><b>致命项</b> {{ f }}</li>{% endfor %}
+    {% for b in qd.data_quality.blockers %}<li><b>买入阻断</b> {{ b }}</li>{% endfor %}
+  </ul>
   {% endif %}
 
-  <section class="panel">
-    <h2>质量初筛</h2>
-    <p class="sub">Q 越低要求 V 越高；Q &lt; 45 一律回避。</p>
-    {% if qua %}
-    <table class="kv"><tbody>
-      <tr><th>质量分 Q</th><td><b>{{ qua.q|num(1) }}</b>　{{ (qua.data.payload or {}).get('q_grade') or '' }}</td></tr>
-      <tr><th>估值分 V</th><td><b>{{ qua.v|num(1) }}</b>　{{ (qua.data.payload or {}).get('v_grade') or '' }}</td></tr>
-      <tr><th>结论</th><td><span class="chip {{ qua.conclusion|tone }}">{{ qua.conclusion }}</span></td></tr>
-      <tr><th>理由</th><td>{{ qua.reason or '—' }}</td></tr>
-      <tr><th>风险检查</th><td>命中 {{ qua.risks_hit if qua.risks_hit is not none else '—' }} / 提示 {{ qua.risks_watch if qua.risks_watch is not none else '—' }} / 已知 {{ qua.risks_known if qua.risks_known is not none else '—' }}</td></tr>
-    </tbody></table>
-    {% else %}
-    <div class="empty">这只票没有质量初筛结果。</div>
-    {% endif %}
-  </section>
-</div>
+  {# ---- Q 分项：五组，每组下面列子项（原始值 → 得分） ---- #}
+  <h3 class="h3">Q 分项 <span class="tag">满分 100</span></h3>
+  <div class="scroll">
+    <table class="grid tight">
+      <thead><tr><th>组 / 子项</th><th>原始值</th><th class="bar-cell">得分</th><th class="n">满分</th></tr></thead>
+      <tbody>
+      {% for g in qd.q.groups %}
+        <tr class="grouprow">
+          <td>{{ g.label }}</td>
+          <td>{% if g.coverage is not none %}数据覆盖 {{ g.coverage|num(0) }}%{% endif %}</td>
+          <td class="bar-cell">
+            {% set pct = (g.score / g.max * 100) if (g.score is not none and g.max) else 0 %}
+            <div class="scorecell">
+              <div class="scorebar {{ 'bad' if pct < 40 else ('warn' if pct < 70 else '') }}" style="flex:1"><i style="width:{{ pct|round(0) }}%"></i></div>
+              <b>{{ g.score|num(1) if g.score is not none else '—' }}</b>
+            </div>
+          </td>
+          <td class="n">{{ g.max|num(0) }}</td>
+        </tr>
+        {% for it in g.subs %}
+        <tr>
+          <td style="padding-left:22px;color:#475569">{{ it.label }}</td>
+          <td style="color:var(--muted)">{{ it.raw or '—' }}</td>
+          <td class="bar-cell">
+            {% set ipct = (it.score / it.max * 100) if (it.score is not none and it.max) else 0 %}
+            <div class="scorecell">
+              <div class="scorebar {{ 'bad' if ipct < 40 else ('warn' if ipct < 70 else '') }}" style="flex:1"><i style="width:{{ ipct|round(0) }}%"></i></div>
+              <b style="font-weight:400;color:#64748b">{{ it.score|num(1) if it.score is not none else '—' }}</b>
+            </div>
+          </td>
+          <td class="n" style="color:var(--muted)">{{ it.max|num(0) }}</td>
+        </tr>
+        {% endfor %}
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {# ---- V 分项 ---- #}
+  <h3 class="h3">V 分项 <span class="tag">越便宜越高</span></h3>
+  {% if qd.v.parts %}
+  <div class="scroll">
+    <table class="grid tight">
+      <thead><tr><th>子项</th><th>依据</th><th class="bar-cell">得分（百分制）</th><th class="n">权重</th></tr></thead>
+      <tbody>
+      {% for it in qd.v.parts %}
+        <tr>
+          <td>{{ it.label }}</td>
+          <td style="color:var(--muted)">{{ it.raw or '—' }}</td>
+          <td class="bar-cell">
+            {% set vpct = it.score if it.score is not none else 0 %}
+            <div class="scorecell">
+              <div class="scorebar {{ 'bad' if vpct < 40 else ('warn' if vpct < 70 else '') }}" style="flex:1"><i style="width:{{ vpct|round(0) }}%"></i></div>
+              <b>{{ it.score|num(1) if it.score is not none else '—' }}</b>
+            </div>
+          </td>
+          {# 2026-11-15 之前写入的行只有 max（同一个权重，键名不同） #}
+          <td class="n">{{ (it.get('weight') if it.get('weight') is not none else it.get('max'))|num(0) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="sub" style="margin:6px 0 0">V 总分 = Σ 得分 × 权重 ÷ 100。权重按「目标价空间 40 / 预测 PE 20 / 增速 40」分配。</p>
+  {% else %}
+  <div class="empty">V 分是机构口径（目标价 + 预测 PE + 增速）。这只票没有机构覆盖，V 不参与。</div>
+  {% endif %}
+
+  {# ---- 14 条风险检查：命中排最前面 ---- #}
+  <h3 class="h3">风险检查 <span class="tag">{{ qd.risks|length }} 条 · 命中 {{ qd.risk_counts.get('hit', 0) }} / 提示 {{ qd.risk_counts.get('watch', 0) }}</span></h3>
+  <div class="scroll">
+    <table class="grid tight">
+      <thead><tr><th style="width:1%">组</th><th style="width:1%">检查项</th><th style="width:1%">状态</th><th>说明</th></tr></thead>
+      <tbody>
+      {% for r in qd.risks %}
+        <tr>
+          <td style="color:var(--muted);white-space:nowrap">{{ r.group }}</td>
+          <td style="white-space:nowrap">{{ r.name }}</td>
+          <td class="st-{{ r.status }}" style="white-space:nowrap">
+            {{ r.status_label }}{% if r.severity and r.status in ('hit', 'watch') %}<span class="sev"> · {{ r.severity }}</span>{% endif %}
+          </td>
+          <td style="color:#475569">{{ r.detail }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {# ---- 估值分位 + 机构预测：两栏 ---- #}
+  <div class="two" style="margin-top:16px">
+    <div>
+      <h3 class="h3">估值分位 <span class="tag">自身历史</span></h3>
+      {% if qd.valuation.rows %}
+      <table class="grid tight">
+        <thead><tr><th>指标</th><th class="n">当前</th><th class="bar-cell">历史分位</th><th class="n">区间</th></tr></thead>
+        <tbody>
+        {% for v in qd.valuation.rows %}
+          <tr>
+            <td>{{ v.label }}</td>
+            <td class="n">{{ v.current|num(2) }}</td>
+            <td class="bar-cell">
+              <div class="scorecell">
+                <div class="scorebar {{ 'bad' if (v.percentile or 0) >= 80 else ('warn' if (v.percentile or 0) >= 60 else '') }}" style="flex:1"><i style="width:{{ (v.percentile or 0)|round(0) }}%"></i></div>
+                <b>P{{ v.percentile|num(0) }}</b>
+              </div>
+            </td>
+            <td class="n" style="color:var(--muted)">{{ v.min|num(2) }}–{{ v.max|num(2) }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <p class="sub" style="margin:6px 0 0">样本 {{ qd.valuation.sample }}。分位越低越便宜。</p>
+      {% else %}
+      <div class="empty">没有估值分位（上市时间不足或行情缺失）。</div>
+      {% endif %}
+    </div>
+    <div>
+      <h3 class="h3">机构预测 {% if qd.forecast.target_price %}<span class="tag">目标价 {{ qd.forecast.target_price|num(2) }} 元</span>{% endif %}</h3>
+      {% if qd.forecast.rows %}
+      <table class="grid tight">
+        <thead><tr><th class="n">年度</th><th class="n">EPS</th><th class="n">PE</th><th class="n">PB</th><th class="n">净利(亿)</th><th class="n">同比</th></tr></thead>
+        <tbody>
+        {% for f in qd.forecast.rows %}
+          <tr>
+            <td class="n">{{ f.year or '—' }}</td>
+            <td class="n">{{ f.eps|num(2) }}</td>
+            <td class="n">{{ f.pe|num(1) }}</td>
+            <td class="n">{{ f.pb|num(2) }}</td>
+            <td class="n">{{ f.profit_yi|num(1) }}</td>
+            <td class="n" style="color:{{ '#047857' if (f.profit_yoy or 0) > 0 else '#b91c1c' }}">{{ f.profit_yoy|num(1) }}%</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <p class="sub" style="margin:6px 0 0">V 分的「目标价空间」就是拿目标价比现价（{{ qd.meta.price|num(2) }} 元）。</p>
+      {% else %}
+      <div class="empty">无机构覆盖：上游一致预期为空表（不是取数故障），V 分因此留空。</div>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ---- 跟踪清单：以后每季/每年复核这几项 ---- #}
+  {% if qd.tracking %}
+  <h3 class="h3">跟踪清单 <span class="tag">复核这些就够</span></h3>
+  <div class="scroll">
+    <table class="grid tight">
+      <thead><tr><th>指标</th><th class="n">当前</th><th>阈值</th><th style="width:1%">频率</th></tr></thead>
+      <tbody>
+      {% for t in qd.tracking %}
+        <tr>
+          <td>{{ t.metric }}</td>
+          <td class="n">{{ t.current or '—' }}</td>
+          <td style="color:var(--muted)">{{ t.threshold }}</td>
+          <td style="color:var(--muted);white-space:nowrap">{{ t.frequency }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if qd.meta.business %}
+  <p class="sub" style="margin:12px 0 0">{{ qd.meta.business }}</p>
+  {% endif %}
+  {% endif %}
+</section>
+{% else %}
+<div class="empty">这只票没有质量初筛结果。</div>
+{% endif %}

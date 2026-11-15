@@ -165,6 +165,60 @@ td.gap-cell{max-width:360px}
 .foot{margin-top:26px;font-size:11.5px;color:var(--muted);line-height:1.7}
 .foot strong{color:#475569}
 
+/* ---------------------------------------------------------------- 个股页明细 */
+/* 个股页的质量/周期两块要摆明细（分项、14 条风险、指标历史），比列表页密。
+   这里的类只管那两块，别的页面不受影响。 */
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:0 0 14px}
+.metric{border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#fbfdff}
+.metric .k{font-size:11.5px;color:var(--muted)}
+.metric .v{font-size:20px;font-weight:700;margin-top:1px;font-variant-numeric:tabular-nums}
+.metric .s{font-size:11.5px;color:var(--muted);margin-top:2px}
+
+/* 分数条：分项得分 / 满分，宽 100% 按比例填 */
+.scorebar{height:8px;background:#eef2f7;border-radius:99px;overflow:hidden;min-width:64px}
+.scorebar>i{display:block;height:100%;border-radius:99px;
+  background:linear-gradient(90deg,#5eead4,#0f766e)}
+.scorebar.warn>i{background:linear-gradient(90deg,#fcd34d,#b45309)}
+.scorebar.bad>i{background:linear-gradient(90deg,#fca5a5,#b91c1c)}
+.scorecell{display:flex;align-items:center;gap:8px}
+.scorecell b{font-variant-numeric:tabular-nums;min-width:44px;text-align:right;font-size:12.5px}
+
+table.grid.tight th,table.grid.tight td{padding:6px 9px;font-size:12.5px}
+table.grid td.bar-cell{width:130px}
+table.grid tr.grouprow td{background:#f8fafc;font-weight:700;color:#334155;
+  font-size:11.5px;letter-spacing:.04em;padding:6px 9px}
+
+/* 风险检查的状态：命中要刺眼，通过要沉下去 */
+.st-hit{color:#b91c1c;font-weight:700}
+.st-watch{color:#b45309;font-weight:700}
+.st-clear{color:#047857}
+.st-unknown,.st-na{color:#94a3b8}
+.sev{font-size:11px;color:#94a3b8;white-space:nowrap}
+
+/* 周期三判断：三张并排的小卡 */
+.judge-3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:0 0 12px}
+.judge-3 .j{border:1px solid var(--line);border-radius:14px;padding:12px 14px;background:#fdfefe}
+.judge-3 .j .name{font-size:11.5px;color:var(--muted);letter-spacing:.03em}
+.judge-3 .j .res{font-size:19px;font-weight:700;margin:2px 0 3px}
+.judge-3 .j .meta{font-size:12px;color:#475569}
+.judge-3 .j .meta b{color:var(--ink);font-variant-numeric:tabular-nums}
+.judge-3 .j .note{font-size:11.5px;color:#94a3b8;margin-top:3px}
+
+.notes{margin:0;padding:9px 14px 9px 28px;background:#f8fafc;
+  border:1px dashed #dbe4f0;border-radius:10px;font-size:12px;color:#475569}
+.notes li{margin:2px 0}
+
+.mini-charts{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:12px;margin-top:14px}
+.mini-charts .chart-box .canvas-wrap{height:170px}
+
+@media (max-width:900px){
+  .metrics,.judge-3{grid-template-columns:1fr 1fr}
+  .mini-charts{grid-template-columns:1fr}
+}
+@media (max-width:600px){
+  .metrics,.judge-3{grid-template-columns:1fr}
+}
+
 /* ---------------------------------------------------------------- 小屏 */
 @media (max-width:900px){
   .cards{grid-template-columns:1fr 1fr}

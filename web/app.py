@@ -108,6 +108,16 @@ def _cycle_state(value):
     return _poslabel(text) if text else "—"
 
 
+def _detail(row):
+    """结果行 → 工具写进 payload 的那块「明细」（Q/V 分项、风险 14 条、指标序列…）。
+
+    旧行没有这个键，返回 None：模板据此降级成薄表 + 一句"重跑一次就有"。
+    """
+    if not row:
+        return None
+    return (db.inner(row) or {}).get("detail") or None
+
+
 def _date(value):
     return str(value or "")[:10]
 
@@ -143,7 +153,8 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     app.jinja_env.filters.update(pct=_fmt_pct, num=_fmt_num, ratio=_fmt_ratio,
                                  date=_date, clock=_clock, tone=tone,
                                  weekday=_weekday,
-                                 poslabel=_poslabel, cycle_state=_cycle_state)
+                                 poslabel=_poslabel, cycle_state=_cycle_state,
+                                 detail=_detail)
     app.jinja_env.globals.update(TOOLS=db.TOOLS, ORDER=db.ORDER, TODAY=dt.date.today,
                                  KIND_LABEL=db.KIND_LABEL)
 

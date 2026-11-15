@@ -20,7 +20,7 @@ import threading
 import config
 from cycle import build as build_mod
 from cycle import codes as codes_mod
-from cycle import decide, fetch, metrics
+from cycle import decide, detail, fetch, metrics
 
 #: 代码列的可能列名（小写比较）
 CODE_COLUMNS = ("代码", "股票代码", "证券代码", "code", "symbol", "secuCode")
@@ -143,6 +143,9 @@ def process_one(code, name_hint="", force=False):
     # 最近报告期挂进 decision：结果库要用它当基准日（各股未必同一期）
     decision.setdefault("meta", {})["latest"] = str(
         (stock["quarters"][-1] or {}).get("date") or "")[:10]
+    # 看板个股页要的明细（三个判断的文字 + 三条指标序列）。跟结论一起入库：
+    # 复用路径（不带 --force）读回来的 payload 里就带着它，不用重算。
+    decision["detail"] = detail.build(stock, m, decision, config)
     return True, decision, stock, ""
 
 

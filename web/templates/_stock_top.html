@@ -20,3 +20,47 @@
   </div>
 </section>
 {% endif %}
+
+{# 旁证：估值分位 / 机构目标价 / 基本面反证 / 周期状态。数据来自顶部工具写进
+   payload 的 extras，所以跟着顶部这一块走（原来挂在质量那块旁边，位置不对：
+   其中三项根本不是质量工具的产出）。 #}
+{% if extras %}
+<section class="panel">
+  <h2>旁证</h2>
+  <p class="sub">估值分位 / 机构目标价 / 基本面反证 / 周期状态，各一句话，不参与结论。</p>
+  {% set val = (extras.valuation or {}).get('metrics') or {} %}
+  <table class="kv"><tbody>
+    <tr class="tone-info"><th>估值分位</th><td>
+      {% if val %}
+        {% for key, label in [('pe','PE(TTM)'), ('pb','PB'), ('ps','PS(TTM)')] %}
+          {% set item = val.get(key) or {} %}
+          {% if item.current is not none %}{{ label }} {{ item.current|num(2) }}（{% if item.percentile is not none %}P{{ item.percentile|num(0) }}{% else %}分位不足{% endif %}）{% if not loop.last %} · {% endif %}{% endif %}
+        {% endfor %}
+        <br><small style="color:#94a3b8">样本 {{ (extras.valuation or {}).get('sample_start') }} 起 {{ (extras.valuation or {}).get('weeks') }} 周</small>
+      {% else %}—{% endif %}
+    </td></tr>
+    <tr><th>机构目标价</th><td>
+      {% set con = extras.consensus or {} %}
+      {% if con.target %}{{ con.target|num(2) }}（距现价 {{ con.upside|pct }}，{{ con.forecasts }} 个预测年度）{% else %}无机构覆盖（上游一致预期为空表，不是取数故障）{% endif %}
+    </td></tr>
+    <tr class="{{ 'tone-warn' if (extras.risk or {}).get('hit') else 'tone-info' }}"><th>基本面反证</th><td>
+      {% set rk = extras.risk or {} %}
+      {% set rk_items = rk.get('items') or [] %}
+      {% if rk_items %}
+        {% for i in rk_items %}{{ i.label }} {{ i.text }}{% if not loop.last %}；{% endif %}{% endfor %}
+        <br><small style="color:#94a3b8">命中 {{ rk.hit }} / 提示 {{ rk.watch }}（命中项越多，"这波涨没有基本面"的证据越强）</small>
+      {% else %}—{% endif %}
+    </td></tr>
+    {% set cy = extras.cycle or {} %}
+    {% if cy %}
+    <tr><th>周期状态</th><td>
+      毛利率σ {{ cy.gm_std|num(2) }}pp、CV {% if cy.gm_cv is none %}—{% else %}{{ cy.gm_cv|num(0) }}%{% endif %}
+      → {{ '是周期股' if cy.is_cycle else '不是周期股' }}；弹性
+      {{ {'strong':'强','weak':'弱','unstable':'不稳定'}.get(cy.elastic_label, cy.elastic_label or '—') }}；
+      产能周转率 {% if cy.position_pct is none %}—{% else %}{{ cy.position_pct|num(0) }}% 分位{% endif %}
+      （{{ cy.position_label|poslabel }}）
+    </td></tr>
+    {% endif %}
+  </tbody></table>
+</section>
+{% endif %}

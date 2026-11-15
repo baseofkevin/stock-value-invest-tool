@@ -1,8 +1,90 @@
-{# 周期弹性三判断。 #}
+{# 周期弹性三判断。有明细（payload.detail）就摆三张判断卡 + 三条指标历史折线；
+   旧行没有明细，退回三行表 + 一句"重跑一次就有"。
+   三个判断的措辞与终端报告（cycle_report.py --stock）完全一致。 #}
 {% if cyc %}
+{% set cd = cyc|detail %}
 <section class="panel">
-  <h2>周期弹性三判断</h2>
-  <p class="sub">三个判断分开看，程序不合并成一个"周期总分"。</p>
+  <h2>周期弹性三判断
+    {% if cd %}<span class="tag">{{ cd.industry or '非周期行业' }} · {{ cd.meta.quarters }} 个季度{% if cd.meta.latest %} · 最新 {{ cd.meta.latest }}{% endif %}</span>{% endif %}
+  </h2>
+  <p class="sub">
+    三个判断分开看，程序不合并成一个"周期总分"。
+    {% if cd and cd.badges %}标签：{% for b in cd.badges %}<span class="chip info" style="margin:0 4px 2px 0">{{ b }}</span>{% endfor %}{% endif %}
+  </p>
+
+  {% if cd %}
+  <div class="judge-3">
+    {% for j in cd.judge %}
+    <div class="j">
+      <div class="name">{{ j.name }}</div>
+      <div class="res" style="color:{{ '#b45309' if j.tone == 'warn' else ('#047857' if j.tone == 'good' else '#334155') }}">{{ j.result }}</div>
+      <div class="meta">{{ j.metric }} <b>{{ j.value }}</b></div>
+      {% if j.detail %}<div class="note">{{ j.detail }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if cd.notes %}
+  <ul class="notes">{% for n in cd.notes %}<li>{{ n }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  <div class="mini-charts">
+    <div class="chart-box">
+      <h3>毛利率（近 20 季）</h3>
+      <p class="sub">判断① 看这条线的波动幅度，不看高低。</p>
+      <div class="canvas-wrap"><canvas id="cycGm"></canvas></div>
+    </div>
+    <div class="chart-box">
+      <h3>利润/收入 增速比值</h3>
+      <p class="sub">判断② 近 8 季逐季比值，越大越敏感。</p>
+      <div class="canvas-wrap"><canvas id="cycRatio"></canvas></div>
+    </div>
+    <div class="chart-box">
+      <h3>产能周转率（近 40 季）</h3>
+      <p class="sub">判断③ 当前值在自身历史里的分位。</p>
+      <div class="canvas-wrap"><canvas id="cycTurn"></canvas></div>
+    </div>
+  </div>
+
+  <script>
+  // 三条序列各自独立（20 / 8 / 40 季），不做时间轴对齐——它们回答的是三个不同问题。
+  (function () {
+    const series = {{ cd.series|tojson }};
+    const shortDate = (d) => (d || '').slice(2, 7).replace('-', '/');
+    const mk = (id, points, unit, color) => {
+      const el = document.getElementById(id);
+      if (!el || !points || !points.length) return;
+      new Chart(el, {
+        type: 'line',
+        data: {
+          labels: points.map(p => shortDate(p.date)),
+          datasets: [{
+            data: points.map(p => (p.value == null ? null : +Number(p.value).toFixed(2))),
+            borderColor: color,
+            backgroundColor: 'rgba(15,118,110,.10)',
+            tension: .28, pointRadius: 2, pointHoverRadius: 4, spanGaps: false, borderWidth: 2
+          }]
+        },
+        options: {
+          maintainAspectRatio: false, animation: false,
+          plugins: {
+            legend: {display: false},
+            tooltip: {callbacks: {label: (c) => `${c.parsed.y}${unit}`}}
+          },
+          scales: {
+            x: {ticks: {maxTicksLimit: 6, font: {size: 9}}, grid: {display: false}},
+            y: {ticks: {font: {size: 9}, maxTicksLimit: 5}, grid: {color: '#eef2f7'}}
+          }
+        }
+      });
+    };
+    mk('cycGm', series.gross_margin, ' %', 'rgb(15,118,110)');
+    mk('cycRatio', series.ratio, '', 'rgb(29,78,216)');
+    mk('cycTurn', series.turnover, '', 'rgb(180,83,9)');
+  })();
+  </script>
+
+  {% else %}
   <table class="kv"><tbody>
     <tr><th>判断① 是不是周期股</th><td>{% if cyc.is_cycle %}<span class="chip warn">是周期股</span>{% else %}<span class="chip muted">不是</span>{% endif %}
       　毛利率 σ {{ cyc.gm_std_pp|num(2) }}pp，CV {% if cyc.gm_cv_pct is none %}—{% else %}{{ cyc.gm_cv_pct|num(1) }}%{% endif %}，中位 {{ cyc.gm_median_pct|num(1) }}%</td></tr>
@@ -11,5 +93,8 @@
     <tr><th>判断③ 周期位置</th><td>{{ cyc.position_label|poslabel }}
       　产能周转率分位 {{ cyc.position_pct|num(1) }}</td></tr>
   </tbody></table>
+  <p class="sub" style="margin:10px 0 0">这条结果没有明细（写入时还没存指标序列），重跑一次就有：
+    <code>./run.py cycle --date {{ cyc.target_date }} --force</code></p>
+  {% endif %}
 </section>
 {% endif %}

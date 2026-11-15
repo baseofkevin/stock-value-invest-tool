@@ -38,7 +38,8 @@ from screen.compute import build_report_data  # noqa: E402
 from screen.fetch import (DataError, close_hub, fetch_all, load_bundle,  # noqa: E402
                           normalize_code, set_quiet)
 from screen.score import compute_scores  # noqa: E402
-from screen.validate import ScreenError, SkipStock, validate  # noqa: E402
+from screen.validate import ScreenError, SkipStock, validate
+from screen.detail import build_detail  # noqa: E402
 
 SKIP_SCORE_TEXT = f"跳过：上市不足 {config.MIN_ANNUAL_YEARS} 年"
 
@@ -115,6 +116,9 @@ def _payload(data: dict | None) -> dict:
         "risks_hit": sum(1 for c in checks if c.get("status") == "hit"),
         "risks_watch": sum(1 for c in checks if c.get("status") == "watch"),
         "fatal": list(data.get("fatal") or []),
+        # 看板个股页要的明细（Q/V 分项、14 条风险、估值分位、机构预测）。
+        # 只放展示用的那一小块；原始序列不进库。
+        "detail": build_detail(data),
     }
 
 
