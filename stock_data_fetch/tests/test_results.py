@@ -185,6 +185,71 @@ class KindTest(unittest.TestCase):
             conn.close()
 
 
+class IncrementalTest(unittest.TestCase):
+    """结果库**只增不删**：每跑一次就是一条新的运行记录 + 一套新的结果行。
+
+    看板要能回答"上周那批"和"这周那批"，所以旧结果绝不能被覆盖；
+    同一只票跑两次也要留两条痕（个股页的「历次结果」就靠这个）。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / "results.db"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_two_runs_are_both_kept(self):
+        r1 = results.save("top", [{"code": "600019", "pos250": -0.21}],
+                          "2026-11-13", db=self.db)
+        r2 = results.save("top", [{"code": "600019", "pos250": -0.19}],
+                          "2026-11-13", db=self.db)
+        self.assertNotEqual(r1, r2)
+        conn = results.connect(self.db)
+        try:
+            self.assertEqual(
+                conn.execute("select count(*) from run").fetchone()[0], 2)
+            self.assertEqual(
+                conn.execute("select count(*) from top_result").fetchone()[0], 2,
+                "同一只票跑两次要留两条，别 upsert 掉")
+            rows = conn.execute(
+                "select run_id, pos250 from top_result order by run_id").fetchall()
+        finally:
+            conn.close()
+        self.assertEqual([x[0] for x in rows], [r1, r2])
+        # 读的时候取最新那一次（看板默认行为），旧的那条仍在库里
+        latest = results.latest("top", db=self.db)
+        self.assertAlmostEqual(latest[0]["pos250"], -0.19)
+
+    def test_new_batch_does_not_touch_old_batch(self):
+        results.save("select", [{"symbol": "600019"}], "2026-11-06", db=self.db)
+        results.save("select", [{"symbol": "000001"}], "2026-11-13", db=self.db)
+        # 代码入库时统一成带交易所前缀的形式（norm_symbol）
+        self.assertEqual(
+            [r["symbol"] for r in results.latest_for("select", "2026-11-06",
+                                                     db=self.db)], ["sh600019"])
+        self.assertEqual(
+            [r["symbol"] for r in results.latest_for("select", "2026-11-13",
+                                                     db=self.db)], ["sz000001"])
+
+    def test_rows_are_counted_across_tables(self):
+        """四张结果表各自累加，run 表是它们的总账。"""
+        for tool, row in (("select", {"symbol": "600019"}),
+                          ("cycle", {"symbol": "600019", "is_cycle": True}),
+                          ("quality", {"symbol": "600019", "q": 54.4}),
+                          ("top", {"code": "600019", "pos250": -0.21})):
+            results.save(tool, [row], "2026-11-13", db=self.db)
+        conn = results.connect(self.db)
+        try:
+            n_run = conn.execute("select count(*) from run").fetchone()[0]
+            counts = {t: conn.execute(f"select count(*) from {t}_result")
+                      .fetchone()[0] for t in ("select", "cycle", "quality", "top")}
+        finally:
+            conn.close()
+        self.assertEqual(n_run, 4)
+        self.assertEqual(counts, {t: 1 for t in counts})
+
+
 class TopRowMappingTest(unittest.TestCase):
     """顶部判断的 views 有两种形态（单只的 dict / 批量的元组），都要能落库。"""
 
