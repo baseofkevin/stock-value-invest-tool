@@ -280,6 +280,37 @@ def _kf(v) -> float | None:
         return None
 
 
+def _to_shares(vol: float | None, close: float | None, amount: float | None) -> float | None:
+    """把上游的成交量统一成**股**。
+
+    **单位按板块不一致**（2026-11-15 实测，同日同一请求）：
+
+    | 代码 | amount | volume(上游) | amount/(close×vol) | 单位 |
+    |---|---|---|---|---|
+    | sh600019 宝钢 | 627,110,000 | 1,025,530 | **98.9** | 手（×100 才是股） |
+    | sz300750 宁德 | 7,244,220,000 | 30,299,500 | **100.6** | 手 |
+    | sh688016 心脉 | 167,850,000 | 1,932,126 | **1.006** | **股**（再 ×100 就错 100 倍） |
+    | sh688552 南湖 | 402,490,000 | 11,162,580 | **1.01** | 股 |
+
+    科创板（688/689）给的是股，其余是手。原来一律 ×100，于是 **466 只科创板**
+    的成交量在库里放大 100 倍 —— `启动日量能倍数` 因为是比值不受影响，
+    但 `20日换手` = 均成交额 ÷ 流通市值 直接错 100 倍（实测 sh688016 记成 110%，
+    真值 1.1%），`--turn-pct` 一开就会把这些票全错杀或全错留。
+
+    判据用 `amount / (close × volume)`：这是唯一不依赖"板块→单位"硬编码的办法
+    （上游哪天统一了单位，这里自动跟上）。拿不到 amount 时退回 ×100（历史行为）：
+    tencent 通道没有成交额字段，那些行本来就是按手给的。
+    """
+    if vol is None:
+        return None
+    if vol > 0 and close and amount and amount > 0:
+        # `ratio` 用的是**上游原值**：是手时 amount ≈ close×vol×100（ratio≈100），
+        # 已经是股时 amount ≈ close×vol（ratio≈1）。
+        ratio = amount / (close * vol)
+        return vol * 100.0 if ratio > 10 else vol
+    return vol * 100.0
+
+
 def _kline(codes: list[str], need: Need) -> Got:
     """日 K（raw 口径），`codes` 批量多码。
 
@@ -292,8 +323,8 @@ def _kline(codes: list[str], need: Need) -> Got:
 
     - **价格**：不传 `fq` 返回的就是 raw（1439.1/1480/1446.44… 与库内同值），
       不作废任何旧数据；
-    - **volume 是手**（82691 vs 库内 8269100 股），这里 ×100 转股，与 tencent
-      适配器同款换算；
+    - **volume 单位按板块不一致**（主板/创业板是手，科创板 688/689 是股），
+      这里按 `amount/(close×volume)` 逐行判、统一成股，见 `_to_shares`；
     - **amount 有值**（tencent 通道没有、落库恒 0），正好补上这一列——
       judge_top 的换手折算、kline_screen 的 turnover20 都吃 amount；
     - **`last` 是收盘**（westock 列名），落库前改名 `close`；
@@ -344,13 +375,12 @@ def _kline(codes: list[str], need: Need) -> Got:
                 day = str(n.get("date") or "")[:10]
                 if len(day) != 10 or day[4] != "-":
                     continue
-                vol = _kf(n.get("volume"))
+                close, amt = _kf(n.get("last")), _kf(n.get("amount"))
                 rows.append({"date": day,
-                             "open": _kf(n.get("open")), "close": _kf(n.get("last")),
+                             "open": _kf(n.get("open")), "close": close,
                              "high": _kf(n.get("high")), "low": _kf(n.get("low")),
-                             # 手 → 股（上游 ×100，实测 82691 vs 库内 8269100）
-                             "volume": None if vol is None else vol * 100.0,
-                             "amount": _kf(n.get("amount"))})
+                             "volume": _to_shares(_kf(n.get("volume")), close, amt),
+                             "amount": amt})
             rows.sort(key=lambda r: r["date"])          # 上游倒序，排回升序
             if rows:
                 got.rows[sym] = rows
@@ -559,7 +589,19 @@ def _quote(codes: list[str], need: Need) -> Got:
         # 报成 SourceUnavailable 会让 router 直接降级、上层也拿不到重试信号，
         # 症状是"报告能出但少了行情"或"整只票失败"。
         if d is None:
-            raise EmptyResult("data_quote 上游多次未返回数据（call 重试耗尽）")
+            # **只判这一批失败，不要把整批拖下水**（2026-11-15 修）。
+            #
+            # 原来这里 `raise EmptyResult`：40 只一批里只要有一批抽风，整次
+            # `data_quote` 调用就抛出去——而调用方一次可能递进来 3000+ 只
+            # （kline_screen 的 [6/6] 要给整个粗筛池取流通市值），于是一批坏掉
+            # 就全军覆没（真跑实测：3271 只全失败，换手率算不出来，整跑终止）。
+            #
+            # 记进 `got.errors` 之后，router 的组级重试只会重取这 40 只
+            # （`_fetch_with_retry` 按 `failed_symbols` 再发一次），失败面从
+            # "整批"缩到"这一批"。
+            got.errors.append(BatchError(
+                chunk, message="data_quote 上游多次未返回数据（call 重试耗尽）"))
+            continue
         if not isinstance(d, dict):
             # 真·结构变更（比如哪天改成返回 list）：这时重试也没用，必须报上去。
             raise SourceUnavailable(

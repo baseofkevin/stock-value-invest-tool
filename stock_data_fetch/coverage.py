@@ -234,7 +234,9 @@ def verdict(cov: Coverage | None, need: Need) -> Coverage:
 # ---------------------------------------------------------------- 缺口重算
 
 def recount_holes(cal: TradingCalendar, have: set[str], start: str | None,
-                  end: str | None, old: list[Hole] | None = None
+                  end: str | None, old: list[Hole] | None = None,
+                  fetched: tuple[str | None, str | None] | None = None,
+                  now: dt.datetime | None = None
                   ) -> tuple[int, list[Hole]]:
     """用交易日历重算缺口：应有一天都没少，少了就按**连续段**合并。
 
@@ -243,6 +245,15 @@ def recount_holes(cal: TradingCalendar, have: set[str], start: str | None,
 
     保留旧缺口的重试计数：同一段（起止相同）沿用 `retry` / `next_try_at`，
     否则退避永远从头开始，等于没有退避。
+
+    `fetched`：这一次**实际向上游要过**的区间 `(start, end)`。落在这个区间里的缺口
+    说明"刚重取过、还是没有"，于是 `bump()` 一次（退避 1h→6h→24h→72h→168h，
+    第 6 次标 `permanent`）。
+
+    **这一条以前没人调用**（2026-11-15 修）：`Hole.bump` 只在测试里出现过，
+    生产路径上一次都没走过，于是缺口永远停在 `retry=0`、永远 `due`、永远阻塞
+    `hit()` —— 实测 278 只票的 351 个缺口（绝大多数是停牌日，上游根本没有那些 bar）
+    在**每次运行**都要重取一遍整段 300 根，一次 34,500 行，且永远收敛不了。
     """
     if not start or not end or start > end:
         return 0, []
@@ -263,10 +274,16 @@ def recount_holes(cal: TradingCalendar, have: set[str], start: str | None,
             segs.append([d, d])
 
     old_by_key = {(h.start, h.end): h for h in (old or [])}
+    fs, fe = fetched if fetched else (None, None)
     detail: list[Hole] = []
     for a, b in segs:
         prev = old_by_key.get((a, b))
-        detail.append(prev if prev else Hole(a, b, n=cal.count(a, b)))
+        if prev is None:
+            detail.append(Hole(a, b, n=cal.count(a, b)))
+        elif fs and fe and fs <= a and b <= fe and not prev.permanent:
+            detail.append(prev.bump(now or dt.datetime.now()))   # 刚要过这一段，还是缺
+        else:
+            detail.append(prev)
     return len(detail), detail
 
 
@@ -340,7 +357,8 @@ def missing_segments(cov: Coverage | None, need: Need, cal: TradingCalendar,
 # ---------------------------------------------------------------- 写回
 
 def merge(conn: sqlite3.Connection, *, cal: TradingCalendar, need: Need, symbol: str,
-          src: str | None, now: dt.datetime | None = None) -> Coverage:
+          src: str | None, now: dt.datetime | None = None,
+          fetched: tuple[str | None, str | None] | None = None) -> Coverage:
     """重算并写回覆盖记录。**必须在调用方的事务里**（数据与覆盖同进同出，`SCHEMA` §1 不变式 3）。
 
     `n` 与 `holes` 一律重数 / 重算，不做增量。
@@ -375,7 +393,8 @@ def merge(conn: sqlite3.Connection, *, cal: TradingCalendar, need: Need, symbol:
         end = _latest(end, old.end if old else None)
 
     if cadence == "day":
-        holes, detail = recount_holes(cal, dates, start, end, old.detail if old else None)
+        holes, detail = recount_holes(cal, dates, start, end, old.detail if old else None,
+                                      fetched=fetched, now=now)
     else:
         # 非日频域不按日历算洞（理由见 DOMAIN_SPEC 上面的注释）。
         # 完整性交给两条硬判据：`end` 推到 need.end，`n >= min_points`。

@@ -41,6 +41,7 @@ from stock_data_fetch.errors import (InsufficientDepth, MarketOpenError,       #
 from stock_data_fetch.hub import preflight                                     # noqa: E402
 from stock_data_fetch.need import Need, want                                  # noqa: E402
 from stock_data_fetch.sources import eastmoney as em, westock as W            # noqa: E402
+from stock_data_fetch.sources.westock import _to_shares                       # noqa: E402
 from stock_data_fetch.sources.base import BatchError, Got                      # noqa: E402
 
 PASS = 0
@@ -1173,7 +1174,31 @@ def test_live() -> None:
 
 # ================================================================ main
 
+def test_volume_unit() -> None:
+    """成交量的单位按板块不一致：主板是手，科创板是股（2026-11-15 实测）。"""
+    section("_to_shares：按 amount/(close×volume) 判单位")
+    # 主板：amount ≈ close×vol×100 → 手 → ×100
+    check("主板（手）→ ×100",
+          _to_shares(1_025_530, 6.18, 627_110_000) == 102_553_000,
+          str(_to_shares(1_025_530, 6.18, 627_110_000)))
+    # 科创板：amount ≈ close×vol → 已经是股 → 原样
+    check("科创板（股）→ 不乘",
+          _to_shares(1_932_126, 86.34, 167_850_000) == 1_932_126,
+          str(_to_shares(1_932_126, 86.34, 167_850_000)))
+    # 创业板同样是手
+    # 注意传的是**上游原值** 302,995 手（不是落库后的 30,299,500 股）
+    check("创业板（手）→ ×100",
+          _to_shares(302_995, 237.70, 7_244_220_000) == 30_299_500,
+          str(_to_shares(302_995, 237.70, 7_244_220_000)))
+    # 没有 amount（tencent 通道）：无从判断，保持历史行为 ×100
+    check("无 amount → 退回 ×100",
+          _to_shares(1000, 10.0, None) == 100_000,
+          str(_to_shares(1000, 10.0, None)))
+    check("volume 缺失 → None", _to_shares(None, 10.0, 1e6) is None, "")
+
+
 def main() -> int:
+    test_volume_unit()
     print("=" * 60)
     print("第 5 步：域适配器与写库")
     print("=" * 60)

@@ -80,14 +80,17 @@ class RecordingRouter:
     `drop_first`：第一次调用故意只回一半，用来触发拆半重取。
     """
 
-    def __init__(self, bar_for, drop_first=False):
+    def __init__(self, bar_for, drop_first=False, raise_on=None):
         self.calls: list[tuple[list[str], object]] = []
         self.bar_for = bar_for
         self.drop_first = drop_first
+        self.raise_on = raise_on or (lambda syms: False)
         self.spec = sources.get("westock")
 
     def fetch(self, domain, codes, need):
         self.calls.append((list(codes), need))
+        if self.raise_on(codes):
+            raise RuntimeError("假装上游这次没回（偶发）")
         got = sources.Got()
         use = list(codes)
         if self.drop_first and len(self.calls) == 1:
@@ -95,7 +98,7 @@ class RecordingRouter:
         for sym in use:
             row = self.bar_for(sym, need.end)
             if row:
-                got.rows[sym] = [row]
+                got.rows[sym] = row if isinstance(row, list) else [row]
         return got, self.spec
 
 
@@ -195,6 +198,111 @@ def main() -> int:
           str(len(rows4.calls)))
     check("7 只成功、1 只进 failed", len(out4.ok) == 7 and len(out4.failed) == 1,
           f"ok={len(out4.ok)} failed={len(out4.failed)}")
+
+    # ---------------------------------------------------------------- 用例 5
+    print("\n用例 5：某一组上游抛异常 → 只把该组记失败，不许打断整跑")
+    # 两组要落在**不同的缺段**上，否则会合并成一组、一起成败：
+    #   好组覆盖到 11-06 → 缺 (11-09, 11-13)
+    #   坏组覆盖到 11-05 → 缺 (11-06, 11-13)
+    batch5 = ["sh605000", "sh605001"]
+    bad5 = ["sh605002", "sh605003"]
+    for sym5 in batch5:
+        seed_bars(conn, cal, sym5, "2026-11-06", 300)
+        with db.tx(conn):
+            C.merge(conn, cal=cal, need=dataclasses.replace(
+                need, end="2026-11-06", start="2025-08-18"), symbol=sym5, src="eastmoney")
+    for sym5 in bad5:
+        seed_bars(conn, cal, sym5, "2026-11-05", 300)
+        with db.tx(conn):
+            C.merge(conn, cal=cal, need=dataclasses.replace(
+                need, end="2026-11-05", start="2025-08-18"), symbol=sym5, src="eastmoney")
+    rows5 = RecordingRouter(lambda s, e: {"date": e, "open": 6.0, "high": 6.5, "low": 5.5,
+                                          "close": 6.2, "volume": 1e6, "amount": 1e7},
+                            raise_on=lambda syms: "sh605002" in syms)
+    api._router = lambda hub, throttle: rows5
+    try:
+        out5 = api.ensure_bulk(hub, "kline", batch5 + bad5, need)
+        raised = None
+    except Exception as exc:                     # noqa: BLE001
+        raised, out5 = exc, None
+    check("没有把异常抛给调用方", raised is None, repr(raised))
+    if out5 is not None:
+        check("坏组进了 failed", set(bad5) <= set(out5.failed), str(list(out5.failed)))
+        check("好组照样落库", set(batch5) <= set(out5.ok), str(list(out5.ok)))
+        check("两组确实分成两批取", len(rows5.calls) == 2, str(len(rows5.calls)))
+
+    # ---------------------------------------------------------------- 用例 6
+    print("\n用例 6：覆盖已到末端但根数不够（次新股）→ 不打上游，直接判深度不足")
+    newbie = "sh605100"
+    seed_bars(conn, cal, newbie, "2026-11-13", 40)        # 只有 40 根，永远到不了 71
+    with db.tx(conn):
+        C.merge(conn, cal=cal, need=need, symbol=newbie, src="eastmoney")
+    cov_nb = C.read(conn, "kline", newbie, need.fp)
+    check("种下的次新股 n=40 且不命中", cov_nb.n == 40 and C.hit(cov_nb, need) is False,
+          f"n={cov_nb.n}")
+    rows6 = RecordingRouter(lambda s, e: None)
+    api._router = lambda hub, throttle: rows6
+    out6 = api.ensure_bulk(hub, "kline", [newbie], need)
+    check("一次上游都没打", len(rows6.calls) == 0, str(len(rows6.calls)))
+    check("记的是 InsufficientDepth 而不是「取数失败」",
+          isinstance(out6.failed.get(newbie), api.InsufficientDepth),
+          type(out6.failed.get(newbie)).__name__)
+
+    # ---------------------------------------------------------------- 用例 7
+    print("\n用例 7：成片历史缺口 → 小分组并成 1 个整段批次，别打成上百次请求")
+    hole_syms = [f"sh6052{i:02d}" for i in range(10)]
+    for i, sym7 in enumerate(hole_syms):
+        seed_bars(conn, cal, sym7, "2026-11-06", 300)
+        with db.tx(conn):
+            C.merge(conn, cal=cal, need=dataclasses.replace(
+                need, end="2026-11-06", start="2025-08-18"), symbol=sym7, src="eastmoney")
+        gone = conn.execute("SELECT date FROM kline WHERE symbol=? ORDER BY date LIMIT 1 OFFSET ?",
+                            (sym7, 100 + i * 7)).fetchone()[0]
+        with db.tx(conn):
+            conn.execute("DELETE FROM kline WHERE symbol=? AND date=?", (sym7, gone))
+            C.merge(conn, cal=cal, need=dataclasses.replace(
+                need, end="2026-11-06", start="2025-08-18"), symbol=sym7, src="eastmoney")
+    blocked = [s for s in hole_syms if not C.hit(C.read(conn, "kline", s, need.fp), need)]
+    check("10 只都被缺口挡住（各自的缺口日期不同）", len(blocked) == 10, str(blocked))
+    rows7 = RecordingRouter(lambda sym, e: {"date": e, "open": 7.0, "high": 7.5, "low": 6.5,
+                                            "close": 7.2, "volume": 1e6, "amount": 1e7})
+    api._router = lambda hub, throttle: rows7
+    api.ensure_bulk(hub, "kline", hole_syms, need)
+    # 两组：① 10 只共用的末端段 (11-09..11-13)；② 10 个缺口合并成的整段批次。
+    # 并批前这里是 11 组、11 次请求——正是把 westock 打成限频的那个形状。
+    check("请求数从 11 降到 2（并批生效）", len(rows7.calls) == 2,
+          f"{len(rows7.calls)} 次：{[(len(c), str(n.start), str(n.end)) for c, n in rows7.calls]}")
+    whole7 = [n for c, n in rows7.calls if n.start == "2025-08-18"]
+    check("缺口被并成一个整段批次（10 只一起）",
+          len(whole7) == 1 and whole7[0].points >= 250, str([n.points for n in whole7]))
+
+    # ---------------------------------------------------------------- 用例 8
+    print("\n用例 8：缺口重取过还是缺 → 记一次退避，下一轮不再白打（原来永不收敛）")
+    holed8 = "sh605300"
+    # 覆盖要到 need.end（否则"末端不足"本身就该重取，测不出退避的效果）
+    seed_bars(conn, cal, holed8, "2026-11-13", 300)
+    gone8 = conn.execute("SELECT date FROM kline WHERE symbol=? ORDER BY date LIMIT 1 OFFSET 120",
+                         (holed8,)).fetchone()[0]
+    with db.tx(conn):
+        conn.execute("DELETE FROM kline WHERE symbol=? AND date=?", (holed8, gone8))
+        C.merge(conn, cal=cal, need=need, symbol=holed8, src="eastmoney")
+    check("缺口存在且阻塞命中",
+          C.read(conn, "kline", holed8, need.fp).blocking == 1,
+          str(C.read(conn, "kline", holed8, need.fp).detail))
+
+    # 上游"重取一遍还是缺那一天"：直接把库里现有的 299 根再回一遍。
+    same8 = [r for r in api.read(hub, "kline", holed8, need).rows]
+    rows8 = RecordingRouter(lambda sym, e: same8)
+    api._router = lambda hub, throttle: rows8
+    api.ensure_bulk(hub, "kline", [holed8], need)
+    cov8 = C.read(conn, "kline", holed8, need.fp)
+    check("重取过这一段仍缺 → retry 记到 1", cov8.detail and cov8.detail[0].retry == 1,
+          str(cov8.detail))
+    check("记了下次再试的时间（不再每轮都打）",
+          bool(cov8.detail and cov8.detail[0].next_try_at), str(cov8.detail))
+    n8 = len(rows8.calls)
+    api.ensure_bulk(hub, "kline", [holed8], need)
+    check("紧接着再跑一次不再打上游", len(rows8.calls) == n8, str(len(rows8.calls) - n8))
 
     conn.close()
     print("\n" + "=" * 50)

@@ -145,6 +145,13 @@ class FakeHub:
                                 end=rows[-1].get("date") if rows else None)
         return b
 
+    def read(self, domain, s, need):
+        """只读：`ensure_bulk` 之后 pipeline 靠它把已命中的那份读回来。"""
+        rows = self._rows(domain, s) or []
+        return Range(domain=domain, symbol=s, rows=rows, n=len(rows),
+                     start=rows[0].get("date") if rows else None,
+                     end=rows[-1].get("date") if rows else None)
+
     def ensure_bulk(self, domain, symbols, need, **_):
         """真实链路里它是"组级批量预取"；测试里直接退化为逐只 ensure_many——
         行为等价（成功进 ok、其余进 failed），只是没有批量收益。"""
@@ -206,10 +213,16 @@ def args(n: int = 4) -> argparse.Namespace:
         turn_min=5, turn_max=30, ma60_gap=0.0, db=None)
 
 
-def run_quiet(hub, a):
+def run_quiet(hub, a, st=None):
+    """跑一次，捕获输出。`st` 传一个 dict 就把内部状态回填进去。
+
+    原来这些断言都是读 `output/kline-screen/result_<S>.json` 验的；2026-11-15
+    按要求删掉了那份 JSON（产物只留 CSV），改为直接拿 `run(..., into=st)`
+    回填的内存状态——比读盘更直接，也不会出现"盘上的和跑出来的不一致"。
+    """
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-        rc = P.run(a, hub)
+        rc = P.run(a, hub, into=st)
     return rc, buf.getvalue()
 
 
@@ -218,66 +231,63 @@ def run_quiet(hub, a):
 def test_happy_path() -> None:
     section("正常链路：一只票走完全部 9 步并写盘")
     hub, S, codes = make_market(mkdtemp())
-    rc, out = run_quiet(hub, args())
+    st = {}
+    rc, out = run_quiet(hub, args(), st)
     check("退出码 0", rc == 0, str(rc))
     outdir = Path(str(hub.cfg.state_dir.parent)) / "output" / "kline-screen"
     csv = outdir / f"选股_{S}.csv"
-    js = outdir / f"result_{S}.json"
     check("CSV 写出来了", csv.exists(), str(csv))
-    check("result JSON 写出来了", js.exists(), str(js))
+    check("目录里只有 CSV（不再有 result JSON）",
+          sorted(p.suffix for p in outdir.iterdir()) == [".csv"],
+          str(sorted(p.name for p in outdir.iterdir())))
 
-    import json
-    res = json.loads(js.read_text(encoding="utf-8"))
+    final = st["final"]
     check("粗筛池 = 入选 + 剔除（计数自洽）",
-          res["粗筛池"] == res["入选数"] + sum(res["剔除明细"].values()),
-          f'{res["粗筛池"]} vs {res["入选数"]}+{sum(res["剔除明细"].values())}')
+          st["pool_n"] == len(final) + sum(st["rej_raw"].values()),
+          f'{st["pool_n"]} vs {len(final)}+{sum(st["rej_raw"].values())}')
     check("每只股票都有去向（剔除代码 ∪ 名单 = 粗筛池）",
-          set(res["剔除代码"]) | {x["code"] for x in res["名单"]}
-          == set(res["剔除代码"]) | {x["code"] for x in res["名单"]})
+          set(st["rej_code"]) | {x["code"] for x in final} == set(st["pool"]),
+          f'{len(set(st["rej_code"]) | {x["code"] for x in final})} vs {len(st["pool"])}')
     check("CSV 行数 = 名单只数",
-          len(csv.read_text(encoding="utf-8-sig").strip().splitlines()) - 1 == res["入选数"],
-          res["入选数"])
+          len(csv.read_text(encoding="utf-8-sig").strip().splitlines()) - 1 == len(final),
+          str(len(final)))
     check("好票入选了（规则链真的能选出票）",
-          codes["good"] in {x["code"] for x in res["名单"]},
-          str([x["code"] for x in res["名单"]]))
-    check("金融/行业标注落地", res["名单"] and res["名单"][0]["sw1"] != "未分类",
-          str(res["名单"][:1]))
+          codes["good"] in {x["code"] for x in final},
+          str([x["code"] for x in final]))
+    check("金融/行业标注落地", final and final[0]["sw1"] != "未分类",
+          str(final[:1]))
     check("财务取数失败时毛利率列留空、不影响选股",
-          res["名单"] and res["名单"][0]["turn_p1"] == "",
-          str(res["名单"][:1]) if res["名单"] else "无名单")
+          final and final[0]["turn_p1"] == "",
+          str(final[:1]) if final else "无名单")
     check("横截面只查了 5 天（不重复扫）", all(c[0] != "scan" for c in hub.calls), str(hub.calls))
 
 
 def test_st_excluded() -> None:
     section("排除集：*ST 按名称剔除，且不影响别的票")
     hub, _, codes = make_market(mkdtemp())
-    rc, out = run_quiet(hub, args())
-    import json
-    res = json.loads((Path(str(hub.cfg.state_dir.parent)) / "output"
-                      / "kline-screen" / f"result_{hub.target}.json").read_text("utf-8"))
-    st_rej = [k for k in res["剔除明细"] if "ST" in k]
-    check("*ST 被剔除且原因写明 ST", bool(st_rej), str(res["剔除明细"]))
+    st = {}
+    rc, out = run_quiet(hub, args(), st)
+    st_rej = [k for k in st["rej_raw"] if "ST" in k]
+    check("*ST 被剔除且原因写明 ST", bool(st_rej), str(st["rej_raw"]))
     check("剔除代码里 ST 票的去向是 judge 阶段",
-          res["剔除代码"].get(codes["st"], ["", ""])[0] in ("JD", "FS"),
-          str(res["剔除代码"].get(codes["st"])))
+          st["rej_code"].get(codes["st"], ["", ""])[0] in ("JD", "FS"),
+          str(st["rej_code"].get(codes["st"])))
 
 
 def test_depth_not_fatal() -> None:
     section("历史不足（次新）→ 剔除，不中止整跑")
     hub, S, codes = make_market(mkdtemp(), deep="sh600003")
-    rc, out = run_quiet(hub, args())
-    import json
-    res = json.loads((Path(str(hub.cfg.state_dir.parent)) / "output"
-                      / "kline-screen" / f"result_{S}.json").read_text("utf-8"))
-    key = [k for k in res["剔除明细"] if "历史不足" in k]
+    st = {}
+    rc, out = run_quiet(hub, args(), st)
+    key = [k for k in st["rej_raw"] if "历史不足" in k]
     check("没有抛异常（rc=0）", rc == 0, str(rc))
     check("剔除原因写的是「K线历史不足」而不是「取数失败」", bool(key),
-          str(res["剔除明细"]))
+          str(st["rej_raw"]))
     check("这只票的去向是 FS 阶段",
-          res["剔除代码"].get(codes["new"], ["", ""])[0] == "FS",
-          str(res["剔除代码"].get(codes["new"])))
-    check("计数仍然自洽", res["粗筛池"] == res["入选数"] + sum(res["剔除明细"].values()),
-          str(res["粗筛池"]))
+          st["rej_code"].get(codes["new"], ["", ""])[0] == "FS",
+          str(st["rej_code"].get(codes["new"])))
+    check("计数仍然自洽", st["pool_n"] == len(st["final"]) + sum(st["rej_raw"].values()),
+          str(st["pool_n"]))
     check("终端里明确说了「历史不足」", "历史不足" in out, out[-300:])
 
 
@@ -379,22 +389,18 @@ def make_wide_market(tmp: Path, pool_n: int, *, good_hot: bool = False):
 def test_turnover_denominator_is_pool() -> None:
     section("换手分位：分母是整个粗筛池，不是入选名单")
     hub, S, good = make_wide_market(mkdtemp(), pool_n=25)
-    rc, out = run_quiet(hub, args())
+    st = {}
+    rc, out = run_quiet(hub, args(), st)
     check("跑通", rc == 0, str(rc))
 
-    import json
-    res = json.loads((Path(str(hub.cfg.state_dir.parent)) / "output"
-                      / "kline-screen" / f"result_{S}.json").read_text("utf-8"))
-    n = res["参数"]["换手过滤"]["池内样本"]
+    n = st["turn_meta"]["池内样本"]
     check("池内样本 = 25（粗筛池全体），不是入选数 1", n == 25,
-          f"池内样本={n}，入选={res['入选数']}")
-    check("result 里写明了分位口径", "粗筛池" in res["参数"].get("换手分位口径", ""),
-          res["参数"].get("换手分位口径"))
+          f"池内样本={n}，入选={len(st['final'])}")
     qcalls = [c for c in hub.calls if c[0] == "quote"]
     check("quote 是对整个池取的，不只是入选股",
           any(n_ >= 20 for _, n_ in qcalls), str(qcalls))
 
-    row = res["名单"][0] if res["名单"] else {}
+    row = st["final"][0] if st["final"] else {}
     # 好票 20 日均量 ≈ 1.04e6（含一根 1.6e6），换手 0.104%；池内第 0 只 0.10% 比它更低，
     # 所以分位 = 1/25 = 4.0。关键是它**不再是 0 或空**：分母里真有别的票在比。
     rank = row.get("turn20_rank")
@@ -410,13 +416,11 @@ def test_hard_filter_can_fire() -> None:
     hub, S, good = make_wide_market(mkdtemp(), pool_n=25, good_hot=True)
     a = args()
     a.turn_pct = 0.02
-    rc, out = run_quiet(hub, a)
+    st = {}
+    rc, out = run_quiet(hub, a, st)
     check("跑通", rc == 0, str(rc))
 
-    import json
-    res = json.loads((Path(str(hub.cfg.state_dir.parent)) / "output"
-                      / "kline-screen" / f"result_{S}.json").read_text("utf-8"))
-    meta = res["参数"]["换手过滤"]
+    meta = st["turn_meta"]
     check("换手过滤标记为启用", meta.get("启用") is True, str(meta))
     # 2% 档只留 0~1 只、少于 --turn-min=5，规则按设计放宽到 60%。
     # 这也是修复前的盲区所在：`池内样本 < 20 → 直接退化为只标注`，
@@ -424,11 +428,11 @@ def test_hard_filter_can_fire() -> None:
     # 只有分母真是整个池，60% 这条线才会落在好票身上。
     check("自适应逻辑照常工作（2% 档不足 → 放宽到 60%）",
           "放宽" in (meta.get("自适应") or ""), str(meta))
-    tn = {k: v for k, v in res["剔除代码"].items() if v[0] == "TN"}
+    tn = {k: v for k, v in st["rej_code"].items() if v[0] == "TN"}
     check("有人被 TN 剔除（不再「永不触发」）", bool(tn), str(tn))
     check("被 TN 剔的正是最热的那只好票", good in tn, str(list(tn)[:5]))
-    check("计数仍自洽", res["粗筛池"] == res["入选数"] + sum(res["剔除明细"].values()),
-          str(res["粗筛池"]))
+    check("计数仍自洽", st["pool_n"] == len(st["final"]) + sum(st["rej_raw"].values()),
+          str(st["pool_n"]))
 
 
 def main() -> int:

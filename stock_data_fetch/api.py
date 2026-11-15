@@ -33,7 +33,7 @@ from typing import Iterator
 from . import coverage as C
 from . import db, router as R
 from .config import KLINE_KEEP_BARS, SCAN_RETENTION_DAYS
-from .errors import EmptyResult, MarketOpenError, PartialData
+from .errors import EmptyResult, InsufficientDepth, MarketOpenError, PartialData
 from .need import Need, want
 from .throttle import Throttle
 
@@ -225,6 +225,12 @@ def _pull(hub, rtr: R.Router, domain: str, symbol: str, need: Need,
                           as_of=_as_of(domain, rows, sub), src=spec.upstream,
                           fp=need.fp, n=len(rows))
         else:
+            # 这里**不传 `fetched`**：单只路径有自己的收敛机制——同一段在同一次
+            # `ensure` 里取两次仍空就 `settle()` 成永久洞（见 `coverage.settle`
+            # 的说明）。在这里 bump 会把洞推入退避窗口，第二次取数被跳过，
+            # 于是 `attempts` 到不了 2、永远 settle 不了，反而退化成"每次运行都
+            # 报 InsufficientDepth"。批量路径（`ensure_bulk`）没有这个重试环，
+            # 才需要靠 bump 收敛。
             C.merge(hub.conn, cal=hub.cal, need=need, symbol=symbol, src=spec.upstream)
         _watermark(hub.conn, domain, rows)
     R.remember_source(hub.conn, domain, spec.upstream)
@@ -351,12 +357,52 @@ def ensure_bulk(hub, domain: str, symbols: list[str], need: Need, *,
         cov = C.read(conn, domain, sym, need.fp)
         segs = C.missing_segments(cov, need, hub.cal, now)
         if not segs:
-            # 覆盖到 `end` 却仍不命中（点数不足 / 口径刚被换源作废）→ 整段重取，
-            # 与 `ensure()` 的兜底（api.py 里 `if not segs:` 那段）保持一致。
+            # **覆盖已到末端、只是根数不够** → 直接判深度不足，不打上游。
+            #
+            # 这是次新股（上市才 40 个交易日）和长期停牌股。它们缺的是"上市之前
+            # 的 K 线"，再取一遍 300 根，上游还是只给那 40 根，`n` 一点不变，
+            # 下一轮照样不命中 —— 于是**每次运行都白打一遍**（实测 24 只 × 300 根）。
+            # 更糟的是这类请求会把整批拖成一次大调用，上游偶发不回就整跑失败。
+            #
+            # 为什么不会误伤"被 GC 裁浅了、其实能补回来"的票：只有 `n < min_points`
+            # 才会走到这里，而 `prune_kline` 的默认保留深度（`KLINE_KEEP_BARS=400`）
+            # 远大于任何工具的 `min_points`（最严 250），裁完也仍然命中。
+            if cov and cov.end and need.end and cov.end >= need.end:
+                out.failed[sym] = InsufficientDepth(
+                    f"{sym} 的 {domain} 只有 {cov.n} 根，达不到 {need.min_points} 根"
+                    f"（次新股 / 长期停牌，上游给不出更多）",
+                    domain=domain, symbol=sym, n=cov.n, need=need.min_points)
+                continue
+            # 其余情形（覆盖记录缺失 / 口径刚被换源作废）→ 整段重取，
+            # 与 `ensure()` 的兜底（`if not segs:` 那段）保持一致。
             groups.setdefault((need.start, need.end), []).append(sym)
             continue
         for seg in segs:                             # 可能多段：末端延伸 + 到期缺口
             groups.setdefault(seg, []).append(sym)
+
+    # ---- 小分组并批：**服务端按「每分钟请求数」限频，不是按行数** ----
+    #
+    # 缺口（`holes`）是按 symbol 记的，每只票缺的日期段各不相同，于是天然一个 symbol
+    # 一组、一次请求。历史上被截断过的一批票（本次实测 117 只）就会变成 117 次
+    # 连续的 1 只请求——结果是 westock 直接回"限频"，冷却 30s → 60s → 120s 递增，
+    # 一次运行卡在重试里出不来（2026-11-15 真跑撞到）。
+    #
+    # 而一次 **40 只 × 300 根** 的请求（实测 24 只 1077 行）完全不会被限。
+    # 所以当"小分组"多起来时，把这些票并进一个整段批次：行数多花（本地令牌桶按
+    # 行限流，会自己等够配额），请求数从上百次降到个位数。一次并批把历史缺口全补上，
+    # 之后就不会再出现。
+    #
+    # 阈值 8：正常运行只有零星几只缺口，不该为它们整段重取；只有"成片缺"才值得换。
+    small = [k for k, v in groups.items() if len(v) <= 2]
+    if len(small) > 8:
+        merged: list[str] = []
+        for k in small:
+            merged.extend(groups.pop(k))
+        whole = (need.start, need.end)
+        merged.extend(groups.get(whole, []))
+        groups[whole] = sorted(set(merged))
+        log.info("%s 小分组 %d 个 → 并成 1 个整段批次（%d 只），省 %d 次请求",
+                 domain, len(small), len(groups[whole]), len(small) - 1)
 
     used: str | None = None
     src_names: list[str] = []
@@ -372,7 +418,18 @@ def ensure_bulk(hub, domain: str, symbols: list[str], need: Need, *,
                           points=_span_bars(hub.cal, seg_start, seg_end, need))
         else:
             sub = replace(need, start=seg_start, end=seg_end)
-        got, spec = _fetch_split(rtr, domain, codes, sub)
+        try:
+            got, spec = _fetch_split(rtr, domain, codes, sub)
+        except Exception as e:                       # noqa: BLE001 - 单组失败收进 failed
+            # **不能让它抛出去**（2026-11-15 踩到）：`ensure_bulk` 的契约是
+            # "能取多少取多少"，调用方（kline_screen 的 [4/6] 阶段）靠 `failed`
+            # 分类，不接异常。上游一次偶发不回码就会让 4304 只的整跑直接中止——
+            # 实测就这么失败过一次，而同一批重试立刻成功。
+            log.warning("%s 批量取数失败（%d 只，%s..%s）：%s",
+                        domain, len(codes), seg_start, seg_end, e)
+            for s in codes:
+                out.failed[s] = e
+            continue
         used = used or spec.upstream
         if spec.name not in src_names:
             src_names.append(spec.name)
@@ -390,7 +447,8 @@ def ensure_bulk(hub, domain: str, symbols: list[str], need: Need, *,
                                   as_of=_as_of(domain, rows, need), src=spec.upstream,
                                   fp=need.fp, n=len(rows))
                 else:
-                    C.merge(conn, cal=hub.cal, need=need, symbol=sym, src=spec.upstream)
+                    C.merge(conn, cal=hub.cal, need=need, symbol=sym, src=spec.upstream,
+                            fetched=(seg_start, seg_end))
                 _watermark(conn, domain, rows)
             out.ok[sym] = _range(conn, domain, sym, need, fetched=True)
 

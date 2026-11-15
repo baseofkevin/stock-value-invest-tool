@@ -218,6 +218,11 @@ class Router:
                "finance": (need.extra.get("periods") or 43) * 3,
                "valuation": need.points or 520,
                "scan": need.points or 5400,
+               # `quote` 是"一只一行"的快照：按默认的 100 行/只估，
+               # 4300 只的池子会被算成 43 万行，一次就把 12000 行的桶打穿
+               # → `throttle.take()` 按桶容量计费并整桶冷却（实测报了
+               # "单次申请 327100 行 > 桶容量 12000"），白白等一分钟。
+               "quote": 1,
                "dividend": 20}.get(need.domain, 100)
         return float(per) * max(1, len(codes))
 

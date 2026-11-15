@@ -21,7 +21,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import json
 import os
 import sys
 
@@ -33,7 +32,7 @@ from .params import (C2_TOL, C3_RATIO, KLINE_BARS,
                      OUT_DIR_NAME, TURN_WINDOW)
 from .rules import find_start, judge, reason_cat
 from .turnover import apply_turnover
-from .output import build_result, csv_row, print_summary
+from .output import csv_row, print_summary
 from .turnaround import compute_turnaround
 
 
@@ -43,8 +42,14 @@ class CliError(Exception):
 
 # ---------------------------------------------------------------- 入口
 
-def run(a, hub) -> int:
-    """执行一次选股；返回进程退出码。`hub` 由 cli.py 的 preflight 给出。"""
+def run(a, hub, *, into: dict | None = None) -> int:
+    """执行一次选股；返回进程退出码。`hub` 由 cli.py 的 preflight 给出。
+
+    `into`：把这一次运行的内部状态（粗筛池、剔除账本、名单……）回填给调用方。
+    原来是靠 `result_<S>.json` 把这些东西落盘再读回来验的，JSON 删掉之后
+    测试与复盘都改成从这里拿——**不落盘也能看**，而且拿到的是同一份内存对象，
+    不存在"盘上的和跑出来的不一致"。
+    """
     st = {"a": a, "hub": hub}
     _prepare(st)
     _load_cross(st)
@@ -59,6 +64,8 @@ def run(a, hub) -> int:
     print_summary(st)
     hub.prune_scan()                       # 收尾顺手清过期的横截面，失败不抛
     hub.prune_kline()                      # 同上：K 线只留最近 N 根，失败不抛
+    if into is not None:
+        into.update(st)
     return 0
 
 
@@ -320,9 +327,24 @@ def _enrich_market(st) -> None:
         #
         # 代价是请求数从「入选数/40」变成「池内股票数/40」（566 只 ≈ 15 批）；
         # quote 的批次已经由 hub 的适配器一次 40 只聚合，不是每股一个请求。
+        # **必须走 ensure_bulk，不能 ensure_many**（2026-11-15 修）：
+        # `ensure_many` 是"逐只 ensure"的循环，而 quote 的适配器本身支持 40 只/请求
+        # （`westock._quote` 里有 `for i in range(0, len(codes), BATCH)`）——逐只
+        # 调用等于把这个能力整个丢掉：4304 只 = 4304 次单码请求，必然把服务端打成
+        # 限频（真跑实测："quote sh603130 失败：data_quote 上游多次未返回数据"连刷）。
+        # `ensure_bulk` 把整批交给适配器，请求数降到 ⌈4304/40⌉ ≈ 83 次。
         pool_codes = list(st["pool"])
-        batch = hub.ensure_many("quote", pool_codes, want.quote(S))
-        q = {sym: r.rows[0] for sym, r in batch.ok.items() if r.rows}
+        need_q = want.quote(S)
+        hub.ensure_bulk("quote", pool_codes, need_q)   # 只负责"把缺的补进库"
+        # 再从库里统一读一遍：`ensure_bulk` 的 `Batch.ok` **只含本次真去抓的那些**，
+        # 命中的一只也不返回（它没有 `ensure` 那种"从库里读出来"的语义）。
+        # 直接拿 `ok` 当结果，会让"库里已有 1035 只"这批凭空消失——
+        # 实测症状是"入选股流通市值缺失 38/38 只"，而库里明明存着。
+        q = {}
+        for sym in pool_codes:
+            rows = hub.read("quote", sym, need_q).rows
+            if rows:
+                q[sym] = rows[0]
 
         # 入选股缺市值 → 中止（名单里的换手列会错）。
         # 池内非入选股缺市值 → 只让它退出分位分母，不中止：它不影响任何入选股
@@ -483,12 +505,10 @@ def _write(st) -> None:
     outdir = _out_dir(hub)
     S = st["S"]
     # 展示顺序：池内换手分位升序（最冷在前）；分位 None 的排最后。
-    # 原地排序：CSV 行与 result JSON 的「名单」共用同一个 list。
     final.sort(key=lambda x: (x.get("turn20_rank") is None,
                               x.get("turn20_rank") or 0.0, x["code"]))
 
     csv_path = os.path.join(outdir, f"选股_{S}.csv")
-    res_path = os.path.join(outdir, f"result_{S}.json")
     import csv as _csv
     rows = [csv_row(x) for x in final]
     tmp = csv_path + ".tmp"
@@ -501,12 +521,9 @@ def _write(st) -> None:
     if n_csv != len(final):
         raise RuntimeError(f"CSV 行数 {n_csv} ≠ 名单 {len(final)}")
 
-    st.update({"csv_path": csv_path, "res_path": res_path, "n_csv": n_csv})
-    result = build_result(st)
-    with open(res_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=1)
-    if not os.path.exists(csv_path) or not os.path.exists(res_path):
-        raise RuntimeError("产物缺失：CSV 或 result JSON 没写上盘")
+    st.update({"csv_path": csv_path, "n_csv": n_csv})
+    if not os.path.exists(csv_path):
+        raise RuntimeError("产物缺失：CSV 没写上盘")
 
 
 def _out_dir(hub) -> str:
