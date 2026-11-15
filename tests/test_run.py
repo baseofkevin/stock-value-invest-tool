@@ -111,6 +111,75 @@ class SelectCountTest(unittest.TestCase):
         self.assertLessEqual(run.select_count("2020-01-02"), 0)
 
 
+class AllFlowTest(unittest.TestCase):
+    """`cmd_all` 的接线：六步都跑到、顺序对、最后一步是看板。
+
+    真跑一遍要三十多分钟还会打上游，所以这里把六个 step 换成假的，
+    只验"谁被调用、以什么参数、先后顺序"——这几种错（漏一步、顺序乱、
+    把 --no-web 忘了传）恰恰是改代码时最容易犯又最难在真跑前发现的。
+    """
+
+    def _run(self, **over):
+        import io
+        import tempfile
+        from contextlib import redirect_stdout
+
+        calls = []
+
+        def fake(name):
+            def step(*a, **kw):
+                calls.append((name, a, kw))
+                run.LAST_SPENT["s"] = 0.1
+                return 0
+            return step
+
+        patch = {name: fake(name) for name in
+                 ("step_select", "step_cycle", "step_quality", "step_top", "step_web")}
+        originals = {k: getattr(run, k) for k in patch}
+        namespace = dict(
+            date="2026-11-13", no_calendar=True, select_args=[], cycle_args=[],
+            quality_args=[], top_args=[], top_workers=2, skip_cycle=False,
+            skip_quality=False, skip_top=False, keep_going=False, no_web=False,
+            host="127.0.0.1", port=5000)
+        namespace.update(over)
+        args = type("A", (), namespace)()
+        with tempfile.TemporaryDirectory() as tmp:
+            tee = run.Tee(Path(tmp) / "t.log")
+            try:
+                for k, v in patch.items():
+                    setattr(run, k, v)
+                run.ensure_calendar = lambda *a, **kw: ("2026-11-13", 0)
+                with redirect_stdout(io.StringIO()):
+                    rc = run.cmd_all(args, tee)
+            finally:
+                for k, v in originals.items():
+                    setattr(run, k, v)
+                tee.close()
+        return rc, [c[0] for c in calls], calls
+
+    def test_six_steps_in_order(self):
+        rc, names, _ = self._run()
+        self.assertEqual(rc, 0)
+        self.assertEqual(names, ["step_select", "step_cycle", "step_quality",
+                                 "step_top", "step_web"])
+
+    def test_top_is_batch_mode(self):
+        """全流程里的顶部判断走批量（读库里的名单），不是单只。"""
+        _rc, _names, calls = self._run()
+        top = dict((c[0], c) for c in calls)["step_top"]
+        self.assertEqual(top[2].get("csv_path"), "results")
+
+    def test_no_web_skips_server(self):
+        rc, names, _ = self._run(no_web=True)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("step_web", names)
+
+    def test_web_gets_host_and_port(self):
+        _rc, _names, calls = self._run(port=8081)
+        web = dict((c[0], c) for c in calls)["step_web"]
+        self.assertEqual(web[1][0].port, 8081)
+
+
 class PassthroughTest(unittest.TestCase):
     def test_split(self) -> None:
         self.assertEqual(run.split_passthrough("--workers 2"), ["--workers", "2"])
@@ -122,13 +191,39 @@ class ParserTest(unittest.TestCase):
     def test_subcommands_exist(self) -> None:
         p = run.build_parser()
         for name in ("all", "weekly", "select", "cycle", "quality", "top",
-                     "calendar", "menu"):
+                     "backup", "web", "menu"):
             self.assertIn(name, p._subparsers._group_actions[0].choices)
 
+    def test_calendar_is_not_a_subcommand(self) -> None:
+        """日历不再单列：它只是全流程的第 0 步，单列只会让人不知道怎么用。
+
+        真要单独更新，用 `python3 -m stock_data_fetch.build_calendar`
+        （`ensure_calendar` 也会在过期时自动跑它）。
+        """
+        p = run.build_parser()
+        self.assertNotIn("calendar", p._subparsers._group_actions[0].choices)
+
     def test_all_is_full_pipeline(self) -> None:
+        """全流程 = 日历 → 选股 → 周期 → 质量 → 顶部 → 看板，一步不缺。"""
         a = run.build_parser().parse_args(["all"])
         self.assertEqual(a.cycle_args, "--workers 2")
-        self.assertFalse(a.skip_cycle)
+        self.assertEqual(a.quality_args, "--workers 2")
+        self.assertEqual(a.top_workers, 4)
+        self.assertFalse(a.no_web, "默认要起看板")
+        self.assertFalse(a.skip_top)
+        self.assertEqual(a.port, 5000)
+
+    def test_all_no_web_is_opt_out(self) -> None:
+        """无头环境要能只跑流程不起服务。"""
+        self.assertTrue(run.build_parser().parse_args(["all", "--no-web"]).no_web)
+
+    def test_all_flow_steps_in_order(self) -> None:
+        """照着源码里的调用顺序核对，别让某一步被后来的人悄悄删掉。"""
+        import inspect
+        src = inspect.getsource(run.cmd_all)
+        order = ["step_select", "step_cycle", "step_quality", "step_top", "step_web"]
+        positions = [src.index(name) for name in order]
+        self.assertEqual(positions, sorted(positions), "步骤顺序变了：应从小到大")
 
     def test_weekly_still_works_as_alias(self) -> None:
         """旧写法 ./run.py weekly 不能失效（README/脚本里可能还有）。"""

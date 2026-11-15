@@ -186,8 +186,13 @@ def _existing(target_date: str | None) -> dict[str, dict]:
     return out
 
 
-def _save_results(results: dict[str, ReportResult], target_date: str | None) -> None:
-    """把这一批写进 results.db（失败只 warn，绝不影响报告本身）。"""
+def _save_results(results: dict[str, ReportResult], target_date: str | None,
+                  kind: str = "batch") -> None:
+    """把这一次写进 results.db（失败只 warn，绝不影响报告本身）。
+
+    `kind` 区分"整份名单"和"单只盯着看"：看板的批次页只统计 batch，
+    单只的结果出现在个股页的时间线里。
+    """
     try:
         from stock_data_fetch import results as results_db
     except Exception:                            # noqa: BLE001
@@ -215,7 +220,7 @@ def _save_results(results: dict[str, ReportResult], target_date: str | None) -> 
         return
     results_db.save("quality", rows,
                     target_date or datetime.now().date().isoformat(),
-                    argv="stock_quality_screen")
+                    argv="stock_quality_screen", kind=kind)
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +244,7 @@ def _run_single(args: argparse.Namespace) -> int:
         print(f"未预期错误：{exc}", file=sys.stderr)
         return 3
 
-    _save_results({result.code: result}, None)
+    _save_results({result.code: result}, None, kind="single")
 
     if not args.quiet:
         data = result.data or {}

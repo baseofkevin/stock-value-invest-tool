@@ -1,0 +1,27 @@
+{# 批次选择器 + 本次运行信息。
+   放在每个数据页的顶部：先确认"我在看哪一批"，再往下看数字。
+   切换用 GET 表单，不写 JS 也能用（`noscript` 里有按钮）。 #}
+{% if batches %}
+<form class="picker" method="get">
+  <span class="pick-label">批次</span>
+  <select name="date" onchange="this.form.submit()">
+    {% for b in batches %}
+    <option value="{{ b.date }}" {{ 'selected' if b.date == cur_date }}>
+      {{ b.date }}（{{ b.date|weekday }}）· {{ b.n_tools }}/4 步{{ ' · 最新' if loop.first }}
+    </option>
+    {% endfor %}
+  </select>
+  <noscript><button type="submit">切换</button></noscript>
+  {% if meta %}
+  <span class="pick-meta">
+    <span class="chip {{ 'good' if meta.kind == 'batch' else 'info' }}">{{ meta.kind_label }}</span>
+    第 #{{ meta.id }} 次运行 · {{ meta.started_at|clock }} · 成功 {{ meta.n_ok }}{% if meta.n_fail %} · 失败 {{ meta.n_fail }}{% endif %}
+  </span>
+  {% elif cur_date %}
+  <span class="pick-meta">基准日 {{ cur_date }}</span>
+  {% endif %}
+  {% if cur_date and cur_date != batches[0].date %}
+  <a class="pick-latest" href="{{ request.path }}">回到最新批次</a>
+  {% endif %}
+</form>
+{% endif %}

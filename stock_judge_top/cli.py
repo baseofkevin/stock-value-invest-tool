@@ -154,7 +154,8 @@ def main(argv=None):
     try:
         from stock_data_fetch import results as results_db
         results_db.save("top", [{**r, "code": code, "name": r.get("name"),
-                                 "ok": True}], end, argv="stock_judge_top")
+                                 "ok": True}], end, argv="stock_judge_top",
+                        kind="single")
     except Exception:                            # noqa: BLE001 - 落库失败绝不影响出报告
         pass
 

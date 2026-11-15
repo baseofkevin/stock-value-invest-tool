@@ -19,7 +19,7 @@
 
 表结构（每工具一张表 + 一张 run 台账）
 --------------------------------------
-    run            每次运行一行：工具、基准日、起止时间、命令行、成功/失败数
+    run            每次运行一行：工具、基准日、起止时间、命令行、批量/单只、成功/失败数
     select_result  选股：启动日、量能倍数、距 MA%、换手分位、星级、收盘、市值
     cycle_result   周期弹性：是否周期股、毛利率 σ/CV/中位、弹性比值与档位、产能分位
     quality_result 质量初筛：Q/V 与档位、结论、风险命中/提示/已知
@@ -27,6 +27,17 @@
 
 每张表都带 `payload`（该工具的完整结果 JSON）：加字段不必改表，
 但常用字段单独成列，方便直接 SQL 查。
+
+批量 / 单只（`run.kind`）
+-----------------------
+看板要回答两种问题："这周五那批票怎么样"和"我刚才单跑的那只现在什么结论"。
+两者都写进同一张表，靠 `kind` 区分：
+
+* `batch` —— 一次覆盖整份名单（`--from-select` / `--csv` / 选股全池）
+* `single` —— 单只模式（`--stock` / `--stock-code` / 一个代码）
+
+没有这一列时只能拿"行数 == 1"去猜，而季报期前后单只跑出来 1 行、
+批量也可能只选出 1 只，猜错就会把单只结果混进周五那一批的统计里。
 
 写入约定
 --------
@@ -56,6 +67,7 @@ create table if not exists run(
     started_at  text not null,
     finished_at text,
     argv        text,
+    kind        text not null default 'batch',
     n_ok        integer not null default 0,
     n_fail      integer not null default 0,
     note        text
@@ -158,11 +170,31 @@ def connect(db: str | Path | None = None) -> sqlite3.Connection:
     conn.execute("pragma journal_mode=wal")
     conn.execute("pragma foreign_keys=on")
     conn.executescript(SCHEMA)
-    # v1：一次性的库版本号。以后改表结构时靠它判断要不要迁移——
-    # 与 shared.db 的 user_version 是两套编号，互不相干。
-    conn.execute("pragma user_version=1")
+    _migrate(conn)
     conn.commit()
     return conn
+
+
+#: 结果库当前 schema 版本。与 shared.db 的 user_version 是两套编号，互不相干。
+SCHEMA_VERSION = 2
+
+
+def _migrate(conn) -> None:
+    """把老库补到当前 schema。
+
+    v1 → v2：`run` 加 `kind`（批量/单只）。这个库可以整库删掉重跑，
+    但"删库"不该是升级的默认要求——手上正好有一批想对比的历史时，
+    让人为了看板丢掉它不合适。加列是 additive 的，老行按 'batch' 算。
+    """
+    ver = conn.execute("pragma user_version").fetchone()[0]
+    if ver >= SCHEMA_VERSION:
+        return
+    if ver < 2:
+        cols = {r[1] for r in conn.execute("pragma table_info(run)")}
+        if "kind" not in cols:
+            conn.execute("alter table run add column kind text not null default 'batch'")
+    conn.execute(f"pragma user_version={SCHEMA_VERSION}")
+    conn.commit()
 
 
 def norm_symbol(code) -> str:
@@ -203,13 +235,19 @@ def _num(v):
     return f if f == f and f not in (float("inf"), float("-inf")) else None
 
 
+#: `run.kind` 的合法值。`batch` = 覆盖整份名单，`single` = 单只模式。
+KINDS = ("batch", "single")
+
+
 def start_run(conn, tool: str, target_date: str, argv: str | None = None,
-              note: str | None = None) -> int:
+              note: str | None = None, kind: str = "batch") -> int:
+    if kind not in KINDS:
+        raise ValueError(f"未知 kind {kind!r}，只支持 {KINDS}")
     cur = conn.execute(
-        "insert into run(tool, target_date, started_at, argv, note) "
-        "values(?,?,?,?,?)",
+        "insert into run(tool, target_date, started_at, argv, kind, note) "
+        "values(?,?,?,?,?,?)",
         (tool, target_date, dt.datetime.now().isoformat(timespec="seconds"),
-         argv, note))
+         argv, kind, note))
     conn.commit()
     return int(cur.lastrowid)
 
@@ -322,13 +360,18 @@ _MAPPER = {"select": _select_row, "cycle": _cycle_row,
 
 
 def save(tool: str, rows: list[dict], target_date: str, *, argv: str | None = None,
-         db: str | Path | None = None, note: str | None = None) -> int:
+         db: str | Path | None = None, note: str | None = None,
+         kind: str = "batch") -> int:
     """把一次运行的结果写进结果库，返回 run_id。
 
     **不抛异常**：任何失败都只在 stderr 留一行，主流程照常结束。
     """
     if tool not in TOOLS:
         raise ValueError(f"未知工具 {tool!r}，只支持 {TOOLS}")
+    # kind 写错是调用方的编程错误，不是"落库偶发失败"：必须抛出来，
+    # 别被下面那个 `except Exception: warn` 吞掉，否则全库都变成 batch。
+    if kind not in KINDS:
+        raise ValueError(f"未知 kind {kind!r}，只支持 {KINDS}")
     if not rows:
         return 0
     try:
@@ -337,7 +380,7 @@ def save(tool: str, rows: list[dict], target_date: str, *, argv: str | None = No
         _warn(f"结果库打不开（{e}），本次结果未落库")
         return 0
     try:
-        run_id = start_run(conn, tool, target_date, argv, note)
+        run_id = start_run(conn, tool, target_date, argv, note, kind)
         mapper = _MAPPER[tool]
         cols = _COLUMNS[tool]
         sql = (f"insert or replace into {TABLE[tool]}(run_id,{cols}) "

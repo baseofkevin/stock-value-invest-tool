@@ -8,30 +8,34 @@
   <p>
     四个工具的结论并排。
     {% set sel = rows.select %}{% set cyc = rows.cycle %}{% set qua = rows.quality %}{% set top = rows.top %}
-    {% if top %}最近基准日 {{ top.data.date or '' }}　收盘 {{ top.close|num(2) }}　距 250 日高点 {{ top.pos250|pct }}。{% else %}这只票不在最近一批顶部判断里。{% endif %}
+    {% if top %}
+      最近一次 {{ top.started_at|clock }}（{{ top.kind_label }}，基准日 {{ top.target_date }}）　
+      收盘 {{ top.close|num(2) }}　距 250 日高点 {{ top.pos250|pct }}。
+    {% else %}这只票还没有跑过顶部判断。{% endif %}
+    <br><small style="color:#94a3b8">每张卡片都是该工具<b>最近一次</b>的结果；下面「历次结果」列出全部时间点。</small>
   </p>
 </section>
 
 <div class="cards">
-  <a class="card" href="/select">
+  <a class="card" href="/select{% if sel %}?run={{ sel.run_id }}{% endif %}">
     <div class="k">选股</div>
     <div class="v">{{ '入选' if sel else '不在名单' }}</div>
-    <div class="s">{% if sel %}池内换手分位 {{ sel.pool_turnover_rank|num(1) }} · {{ sel.stars or '' }}{% else %}—{% endif %}</div>
+    <div class="s">{% if sel %}池内换手分位 {{ sel.pool_turnover_rank|num(1) }} · {{ sel.stars or '' }}<br>{{ sel.kind_label }} {{ sel.started_at|clock }}{% else %}—{% endif %}</div>
   </a>
-  <a class="card" href="/cycle">
+  <a class="card" href="/cycle{% if cyc %}?run={{ cyc.run_id }}{% endif %}">
     <div class="k">周期</div>
     <div class="v">{{ '周期股' if cyc and cyc.is_cycle else ('非周期' if cyc else '—') }}</div>
-    <div class="s">{% if cyc %}σ {{ cyc.gm_std_pp|num(2) }}pp · 弹性 {{ {'strong':'强','weak':'弱','unstable':'不稳定'}.get(cyc.elastic_label, cyc.elastic_label or '—') }} · {{ cyc.position_label|poslabel }}{% else %}—{% endif %}</div>
+    <div class="s">{% if cyc %}σ {{ cyc.gm_std_pp|num(2) }}pp · 弹性 {{ {'strong':'强','weak':'弱','unstable':'不稳定'}.get(cyc.elastic_label, cyc.elastic_label or '—') }} · {{ cyc.position_label|poslabel }}<br>{{ cyc.kind_label }} {{ cyc.started_at|clock }}{% else %}—{% endif %}</div>
   </a>
-  <a class="card" href="/quality">
+  <a class="card" href="/quality{% if qua %}?run={{ qua.run_id }}{% endif %}">
     <div class="k">质量 / 估值</div>
     <div class="v">{{ qua.q|num(1) if qua else '—' }} / {{ qua.v|num(1) if qua else '—' }}</div>
-    <div class="s">{% if qua %}<span class="chip {{ qua.conclusion|tone }}">{{ qua.conclusion }}</span>{% else %}—{% endif %}</div>
+    <div class="s">{% if qua %}<span class="chip {{ qua.conclusion|tone }}">{{ qua.conclusion }}</span><br>{{ qua.kind_label }} {{ qua.started_at|clock }}{% else %}—{% endif %}</div>
   </a>
-  <a class="card" href="/top">
+  <a class="card" href="/top{% if top %}?run={{ top.run_id }}{% endif %}">
     <div class="k">顶部·动量</div>
     <div class="v">{{ top.momentum_state if top else '—' }}</div>
-    <div class="s">{% if top %}换手 {{ top.turnover_state }} · 业绩 {{ top.earnings_state }} · 量价 {{ top.volume_state }}{% endif %}</div>
+    <div class="s">{% if top %}换手 {{ top.turnover_state }} · 业绩 {{ top.earnings_state }} · 量价 {{ top.volume_state }}<br>{{ top.kind_label }} {{ top.started_at|clock }}{% endif %}</div>
   </a>
 </div>
 
@@ -142,10 +146,39 @@
 </section>
 {% endif %}
 
+{% if timeline %}
+<section class="panel">
+  <h2>历次结果 <span class="tag">共 {{ timeline|length }} 条</span></h2>
+  <p class="sub">
+    按<b>跑的时刻</b>倒序。同一只票可能被周五批量算过、又被单独重算过——
+    每条都留着，并标明它属于哪一批、是批量还是单只。
+  </p>
+  <div class="scroll">
+    <table class="grid">
+      <thead><tr>
+        <th>跑于</th><th>基准日</th><th>来源</th><th>工具</th><th>结论</th><th class="n">#</th>
+      </tr></thead>
+      <tbody>
+        {% for e in timeline %}
+        <tr>
+          <td class="date">{{ e.started_at|clock }}</td>
+          <td class="date">{{ e.target_date }}</td>
+          <td><span class="chip {{ 'good' if e.kind == 'batch' else 'info' }}">{{ e.kind_label }}</span></td>
+          <td>{{ e.tool_label }}</td>
+          <td>{{ e.brief }}</td>
+          <td class="n"><a href="{{ e.href }}?run={{ e.run_id }}">{{ e.run_id }}</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
 {% if hist and (hist.top|length > 1 or hist.quality|length > 1) %}
 <section class="panel">
-  <h2>历史</h2>
-  <p class="sub">每次运行各留一条记录（旧→新）。只画有值的点，断点表示那次没跑这只票。</p>
+  <h2>结论怎么变的</h2>
+  <p class="sub">横轴是跑的时刻（旧→新）。只画有值的点，断点表示那次没跑这只票。</p>
   <div class="chart-box tall" style="border:0;padding:0">
     <div class="canvas-wrap"><canvas id="hist"></canvas></div>
   </div>
@@ -157,17 +190,28 @@
 {% block scripts %}
 {% if hist %}
 <script>
-const posHist = {{ hist.top|map(attribute='pos250')|list|tojson }};
-const qHist   = {{ hist.quality|map(attribute='q')|list|tojson }};
-const labels  = [...Array(Math.max(posHist.length, qHist.length)).keys()].map(i => '第' + (i + 1) + '次');
+// 两条序列各自有各自的时间点（顶部和质量不一定同时跑过），
+// 所以先取"时间点并集"当横轴，再按时间把值放进去，缺的留 null。
+const posSeries = {{ hist.top|map(attribute='run_id')|list|tojson }}.map((id, i) => ({
+  t: {{ hist.top|map(attribute='started_at')|list|tojson }}[i],
+  v: {{ hist.top|map(attribute='pos250')|list|tojson }}[i]}));
+const qSeries = {{ hist.quality|map(attribute='run_id')|list|tojson }}.map((id, i) => ({
+  t: {{ hist.quality|map(attribute='started_at')|list|tojson }}[i],
+  v: {{ hist.quality|map(attribute='q')|list|tojson }}[i]}));
+const clock = t => (t || '').slice(5, 16).replace('T', ' ');
+const labels = [...new Set([...posSeries, ...qSeries].map(p => p.t))].sort();
+const align = (series, conv) => labels.map(l => {
+  const hit = series.find(p => p.t === l);
+  return hit && hit.v != null ? conv(hit.v) : null;
+});
 const datasets = [];
-if (posHist.length) datasets.push({label: '距250日高点 %', data: posHist.map(v => v == null ? null : +(v * 100).toFixed(2)),
+if (posSeries.length) datasets.push({label: '距250日高点 %', data: align(posSeries, v => +(v * 100).toFixed(2)),
   borderColor: '#0f766e', backgroundColor: 'rgba(15,118,110,.12)', tension: .25, spanGaps: true});
-if (qHist.length) datasets.push({label: '质量分 Q', data: qHist, yAxisID: 'y2',
+if (qSeries.length) datasets.push({label: '质量分 Q', data: align(qSeries, v => v), yAxisID: 'y2',
   borderColor: '#1d4ed8', backgroundColor: 'rgba(29,78,216,.1)', tension: .25, spanGaps: true});
 new Chart(document.getElementById('hist'), {
   type: 'line',
-  data: {labels, datasets},
+  data: {labels: labels.map(clock), datasets},
   options: {maintainAspectRatio: false, interaction: {mode: 'index', intersect: false},
     scales: {y: {title: {display: true, text: '距高点 %'}, grid: {color: '#eef2f7'}},
              y2: {position: 'right', title: {display: true, text: 'Q'}, grid: {display: false}}}}

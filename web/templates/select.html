@@ -2,11 +2,14 @@
 {% block title %}选股{% endblock %}
 {% block body %}
 
+
 <section class="hero">
   <div class="eyebrow">stock_kline_screen</div>
   <h1>选股名单</h1>
   <p>5 日涨幅池 → K 线形态 → 板块/财务过滤。名单按<b style="color:#fff">池内换手分位升序</b>排列：最冷门的在前。</p>
 </section>
+
+{% include "_bar.html" %}
 
 {% if rows %}
 <div class="charts">

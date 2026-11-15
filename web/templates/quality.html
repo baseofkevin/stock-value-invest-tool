@@ -2,11 +2,14 @@
 {% block title %}质量{% endblock %}
 {% block body %}
 
+
 <section class="hero">
   <div class="eyebrow">stock_quality_screen</div>
   <h1>质量初筛 &amp; 估值</h1>
   <p>质量分 Q（五个维度）＋ 估值分 V（机构口径）。<b style="color:#fff">Q &lt; 45 一律回避</b>；Q 越低要求 V 越高。</p>
 </section>
+
+{% include "_bar.html" %}
 
 {% if rows %}
 <div class="charts">

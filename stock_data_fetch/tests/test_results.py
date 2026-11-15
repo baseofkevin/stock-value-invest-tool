@@ -100,6 +100,67 @@ class SaveAndReadTest(unittest.TestCase):
         self.assertFalse(self.db.exists())
 
 
+class KindTest(unittest.TestCase):
+    """`run.kind`：批量还是单只。
+
+    看板要回答两种问题——"这周五那批票怎么样"和"我刚才单跑的那只呢"。
+    没有这一列时只能拿"行数 == 1"去猜，而批量也可能只选出 1 只。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / "results.db"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_default_is_batch(self):
+        results.save("select", [{"symbol": "600519"}], "2026-11-13", db=self.db)
+        self.assertEqual(self._kinds(), ["batch"])
+
+    def test_single_is_recorded(self):
+        results.save("top", [{"code": "600519"}], "2026-11-13", db=self.db,
+                     kind="single")
+        self.assertEqual(self._kinds(), ["single"])
+
+    def test_unknown_kind_is_rejected(self):
+        with self.assertRaises(ValueError):
+            results.save("top", [{"code": "600519"}], "2026-11-13", db=self.db,
+                         kind="weekly")
+
+    def test_old_db_gets_the_column(self):
+        """schema v1 的库要能原地升级：老行按 batch 算，不逼人删库。"""
+        import sqlite3
+        conn = sqlite3.connect(self.db)
+        conn.executescript("""
+            create table run(
+                id integer primary key autoincrement, tool text not null,
+                target_date text not null, started_at text not null,
+                finished_at text, argv text,
+                n_ok integer not null default 0, n_fail integer not null default 0,
+                note text);
+            insert into run(tool,target_date,started_at,n_ok) values
+                ('select','2026-11-06','2026-11-06T15:10:00',3);
+            pragma user_version=1;
+        """)
+        conn.commit()
+        conn.close()
+
+        results.connect(self.db)                     # 触发迁移
+        self.assertEqual(self._kinds(), ["batch"], "老行按批量算")
+        conn = sqlite3.connect(self.db)
+        self.assertEqual(conn.execute("pragma user_version").fetchone()[0],
+                         results.SCHEMA_VERSION)
+        conn.close()
+
+    def _kinds(self):
+        conn = results.connect(self.db)
+        try:
+            return [r[0] for r in conn.execute("select kind from run order by id")]
+        finally:
+            conn.close()
+
+
 class TopRowMappingTest(unittest.TestCase):
     """顶部判断的 views 有两种形态（单只的 dict / 批量的元组），都要能落库。"""
 

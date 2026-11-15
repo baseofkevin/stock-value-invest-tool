@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}批次{% endblock %}
+{% block body %}
+
+<section class="hero">
+  <div class="eyebrow">BATCHES</div>
+  <h1>批次</h1>
+  <p>
+    每个基准日算一批：周五盘后跑完，这一天的选股 → 周期 → 质量 → 顶部就是同一批票。
+    这里看每批的四步齐不齐；点某一格进那一批的对应页面。
+  </p>
+</section>
+
+<section class="panel">
+  <h2>最近 {{ batches|length }} 个批次</h2>
+  <p class="sub">
+    批次只统计<b>批量运行</b>。单只随手的结论（<code>--stock</code>）不进批次统计，
+    它们出现在个股页的历次记录里。同一批重跑会在同一格里留下最新那次。
+  </p>
+  <div class="scroll">
+    <table class="grid batch">
+      <thead>
+        <tr>
+          <th>基准日</th>
+          {% for t in ORDER %}<th>{{ TOOLS[t][1] }}</th>{% endfor %}
+          <th class="n">完整度</th>
+          <th class="n">本批运行</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for b in batches %}
+        <tr>
+          <td class="name">
+            <a href="/?date={{ b.date }}">{{ b.date }}</a>
+            <small style="color:#94a3b8;margin-left:4px">{{ b.date|weekday }}</small>
+            {% if loop.first %}<span class="chip info" style="margin-left:6px">最新</span>{% endif %}
+          </td>
+          {% for t in ORDER %}
+          {% set run = b.tools[t] %}
+          <td>
+            {% if run %}
+            <a class="cellrun" href="{{ TOOLS[t][3] }}?date={{ b.date }}">
+              {{ run.n_ok }} 只
+              <small>{{ run.started_at|clock }}{% if run.n_fail %} · 失败 {{ run.n_fail }}{% endif %}</small>
+            </a>
+            {% else %}
+            <span class="miss">未跑</span>
+            {% endif %}
+          </td>
+          {% endfor %}
+          <td class="n">{{ b.n_tools }}/4</td>
+          <td class="n" title="这一批一共跑了几次（重跑也计入）">{{ b.runs }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7"><div class="empty">还没有批次：先跑 <code>./run.py all</code>。</div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>两种记录别混着看</h2>
+  <div class="two">
+    <div class="tile">
+      <h3>批次<span class="chip info" style="margin-left:8px">{{ batches|length }} 个</span></h3>
+      <p class="sub">按<b>基准日</b>归档。同一批里四个工具的口径一致（同一个收盘、同一份名单），
+      跨批次比才有意义——比如"上周那批现在怎么样了"。</p>
+    </div>
+    <div class="tile">
+      <h3>单只运行<span class="chip muted" style="margin-left:8px">不占批次</span></h3>
+      <p class="sub">按<b>跑的时刻</b>归档。随时想看某只票就单跑一次，结论进个股页的历次记录；
+      它不改变任何一批的统计，也不会被当成那天的批量结果。</p>
+    </div>
+  </div>
+</section>
+
+{% endblock %}

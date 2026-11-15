@@ -2,11 +2,14 @@
 {% block title %}周期{% endblock %}
 {% block body %}
 
+
 <section class="hero">
   <div class="eyebrow">stock_cycle_elastic</div>
   <h1>周期弹性</h1>
   <p>三个判断各自出档位、程序不合并：是不是周期股 → 弹性强弱 → 在周期的哪个位置。</p>
 </section>
+
+{% include "_bar.html" %}
 
 {% if rows %}
 <div class="charts">

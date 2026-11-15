@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """四个功能模块的统一入口。
 
-    python3 run.py all             # 全流程：日历 → 选股 → 周期 → 质量（每周五盘后）
+    python3 run.py all             # 全流程：日历 → 选股 → 周期 → 质量 → 顶部 → 看板
     python3 run.py menu            # 交互菜单
     python3 run.py -h              # 帮助
     python3 run.py select          # 只跑选股（stock_kline_screen）
@@ -25,15 +25,20 @@
    按「今天是交易日且过了 15:05」决定，而它先在日历里查今天；日历只到上周五时，
    `is_trading(今天)` 为假 → 回落到上周五 → 三件套安安静静再产一份上周的报告，
    文件名、目录名都看不出来。所以每一步之前都先**校验目标日在日历里**，
-   不在就停下来并提示先跑 `build_calendar`（`--with-calendar` 可以自动更新）。
+   不在就停下来并提示先跑 `build_calendar`（`all` 默认会自动更新）。
 3. **下游依赖选股名单**。选股 0 只时下游没有输入，脚本在交接处就拦下来，
    不让它带着空表跑到一半才炸。
 
-除此之外还有：逐步计时、全程日志（`output/logs/`）、盘前/盘中告警
+除此之外还有：逐步计时、全程日志（`logs/`）、盘前/盘中告警
 （收盘宽限 15:05 之前跑等于拿半天的数据算「站上 MA20」）。
 
 **不带参数运行时只打印帮助**，什么也不跑——全流程要三十多分钟，误敲一个回车就
 开跑太危险了；想跑什么必须显式说出来（`all` / `select` / `cycle` / …）。
+
+日历没有单独的子命令：它只是全流程的第 0 步，`all` 会自己按需更新
+（日历最后一天早于今天就先跑 `build_calendar`）。真需要单独更新时，直接用
+`python3 -m stock_data_fetch.build_calendar`——这条命令四个工具和 README 里都写着，
+比在入口再挂一个 `calendar` 子命令少一处迷惑。
 
 退出码：0 成功 / 1 某步失败 / 2 用法错误 / 130 用户中断。
 """
@@ -52,8 +57,9 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-OUTPUT = ROOT / "output"
-LOG_DIR = OUTPUT / "logs"
+#: 运行日志。原来放在 `output/logs/`，而 `output/` 下只剩这一个用处，
+#: 于是把目录本身删掉、日志直接落在仓库根的 `logs/`（文件名带时间戳，好翻）。
+LOG_DIR = ROOT / "logs"
 DB_PATH = ROOT / "results.db"
 """派生结果库：四个工具的结论落在这里，看板也读它。"""
 
@@ -158,10 +164,15 @@ class Tee:
         self.fh.flush()
 
     def close(self) -> None:
+        """可重复调用：`all` 起看板前要先把日志收掉（后面是长驻进程）。"""
+        fh = getattr(self, "fh", None)
+        if fh is None:
+            return
         try:
-            self.fh.close()
+            fh.close()
         except OSError:
             pass
+        self.fh = None
 
 
 LAST_SPENT = {"s": 0.0}
@@ -399,8 +410,25 @@ def cmd_all(args, tee: Tee) -> int:
             summary(tee, day, steps)
             return rc
 
+    if args.skip_top:
+        tee.line("（按 --skip-top 跳过顶部判断）")
+    else:
+        rc = step_top(tee, day, [], args.top_args,
+                      csv_path="results", workers=args.top_workers)
+        steps.append(("④ 顶部判断", rc, LAST_SPENT["s"]))
+        if rc != 0 and not args.keep_going:
+            summary(tee, day, steps)
+            return rc
+
     summary(tee, day, steps)
-    return 0
+
+    # 最后一步是"看结果"：起看板。它是长驻进程，所以放在最后、也是唯一
+    # 需要人按 Ctrl-C 才结束的一步。自动化里用 --no-web 跳过。
+    if args.no_web:
+        tee.line("")
+        tee.line("（按 --no-web 不起看板；随时用 ./run.py web 打开）")
+        return 0
+    return step_web(args, tee)
 
 
 def cmd_single(action: str):
@@ -432,14 +460,6 @@ def cmd_single(action: str):
                             csv_path=csv_path, workers=getattr(args, "workers", 4))
         raise AssertionError(action)
     return run
-
-
-def cmd_calendar(args, tee: Tee) -> int:
-    rc = step_calendar(tee)
-    days = load_calendar()
-    if days:
-        tee.line(f"日历：{days[0]} .. {days[-1]}（{len(days)} 个交易日）")
-    return rc
 
 
 # ---------------------------------------------------------------------------
@@ -589,17 +609,41 @@ def cmd_backup(args, tee: Tee) -> int:
     return rc
 
 
+def step_web(args, tee: Tee) -> int:
+    """全流程的最后一步：把看板起起来（阻塞，Ctrl-C 退出）。
+
+    为什么要放在流程里：跑完六步之后人想看的正是"这一批结果"，而看板的
+    默认页就是最新批次。省掉"再敲一条命令、再记一次端口"。
+    """
+    hr("⑥ 看板 ./run.py web（Ctrl-C 退出，退出后本次流程结束）")
+    host = getattr(args, "host", "127.0.0.1")
+    port = getattr(args, "port", 5000)
+    tee.line(f"打开 http://{host}:{port} 看这一批（{db_hint()}）")
+    # 先把日志收掉：后面是长驻进程，它的访问日志写进本文件只会把有用的几行冲散。
+    tee.close()
+    say("")
+    try:
+        return cmd_web(argparse.Namespace(host=host, port=port, debug=False))
+    except KeyboardInterrupt:
+        say("")
+        say("看板已关闭。")
+        return 0
+
+
+def db_hint() -> str:
+    return DB_PATH.name
+
+
 # ---------------------------------------------------------------------------
 # 交互菜单
 # ---------------------------------------------------------------------------
 
 MENU = """
-  1) 全流程：日历 → 选股 → 周期弹性 → 质量初筛     ← 每周五盘后
+  1) 全流程：日历 → 选股 → 周期弹性 → 质量初筛 → 顶部判断 → 看板  ← 每周五盘后
   2) 只跑选股            stock_kline_screen
   3) 周期弹性            stock_cycle_elastic     （回车=批量，或填单只代码）
   4) 质量初筛            stock_quality_screen    （回车=批量，或填单只代码）
   5) 顶部判断            stock_judge_top         （单只/多只；回车=当天选股批量）
-  6) 只更新交易日历      build_calendar
   0) 退出
 """
 
@@ -612,14 +656,14 @@ def interactive() -> int:
     while True:
         say(MENU)
         try:
-            choice = input("选择 [0-6]: ").strip()
+            choice = input("选择 [0-5]: ").strip()
         except (EOFError, KeyboardInterrupt):
             say("")
             return 130
         if choice in ("0", "q", ""):
             return 0
-        if choice not in {"1", "2", "3", "4", "5", "6"}:
-            say("请输入 0-6。")
+        if choice not in {"1", "2", "3", "4", "5"}:
+            say("请输入 0-5。")
             continue
 
         day_hint = input(f"基准日（回车=自动，今天 {dt.date.today()}）: ").strip() or None
@@ -628,11 +672,13 @@ def interactive() -> int:
         tee = Tee(LOG_DIR / f"run-{stamp}.log")
         try:
             if choice == "1":
-                args = argparse.Namespace(date=day_hint, no_calendar=False,
-                                          select_args=[], cycle_args=["--workers", "2"],
-                                          quality_args=["--workers", "2"],
-                                          skip_cycle=False, skip_quality=False,
-                                          keep_going=False)
+                args = argparse.Namespace(
+                    date=day_hint, no_calendar=False,
+                    select_args=[], cycle_args=["--workers", "2"],
+                    quality_args=["--workers", "2"], top_args=[],
+                    top_workers=4, skip_cycle=False, skip_quality=False,
+                    skip_top=False, keep_going=False, no_web=False,
+                    host="127.0.0.1", port=5000)
                 rc = cmd_all(args, tee)
             elif choice == "2":
                 args = argparse.Namespace(date=day_hint, no_calendar=False, extra=[])
@@ -644,15 +690,12 @@ def interactive() -> int:
                                           stock=code or None,
                                           extra=[] if code else ["--workers", "2"])
                 rc = cmd_single("cycle" if choice == "3" else "quality")(args, tee)
-            elif choice == "5":
+            else:
                 raw = input("股票代码（可多个，空格分隔；回车=用当天选股结果批量跑）: ").split()
                 args = argparse.Namespace(date=day_hint, no_calendar=False,
                                           codes=raw, csv=None,
                                           from_select=not raw, workers=4, extra=[])
                 rc = cmd_single("top")(args, tee)
-            else:
-                args = argparse.Namespace()
-                rc = cmd_calendar(args, tee)
         except KeyboardInterrupt:
             say("\n已中断。")
             return 130
@@ -679,14 +722,15 @@ def build_parser() -> argparse.ArgumentParser:
         description="四个功能模块的统一入口。不带参数只打印帮助；"
                     "跑全流程用 all，想选着跑用 menu。",
         epilog="""示例：
-  ./run.py all                            # 周五盘后全流程（日历→选股→周期→质量）
+  ./run.py all                            # 周五盘后全流程（日历→选股→周期→质量→顶部→看板）
   ./run.py menu                           # 交互菜单
   ./run.py select --date 2026-11-20       # 只跑选股，指定基准日
   ./run.py cycle   --stock 600519         # 周期弹性，单只
   ./run.py quality --stock 600519         # 质量初筛，单只
   ./run.py top     600519                 # 顶部判断
-  ./run.py web                            # 打开看板（读 results.db，只读）
+  ./run.py web                            # 只打开看板（读 results.db，只读）
   ./run.py backup                         # 备份数据库（VACUUM INTO + 保留 7 份）
+  ./run.py all --no-web                   # 跑完不起看板（放进定时任务时用）
 
 不带参数只打印本帮助，不跑任何程序（全流程要三十多分钟，免得误敲回车就开跑）。
 
@@ -702,14 +746,21 @@ def build_parser() -> argparse.ArgumentParser:
                         help="即使日历过期也不要自动更新")
 
     sp = sub.add_parser("all", aliases=["weekly"],
-                        help="全流程：日历 → 选股 → 周期 → 质量")
+                        help="全流程：日历 → 选股 → 周期 → 质量 → 顶部 → 看板")
     add_date(sp)
     sp.add_argument("--skip-cycle", action="store_true", help="跳过周期弹性")
     sp.add_argument("--skip-quality", action="store_true", help="跳过质量初筛")
+    sp.add_argument("--skip-top", action="store_true", help="跳过顶部判断")
     sp.add_argument("--keep-going", action="store_true", help="某一步失败也继续往下跑")
     sp.add_argument("--select-args", default="", help="透传给 stock_kline_screen 的参数")
     sp.add_argument("--cycle-args", default="--workers 2", help="透传给 cycle_report.py")
     sp.add_argument("--quality-args", default="--workers 2", help="透传给 stock_report.py")
+    sp.add_argument("--top-args", default="", help="透传给 stock_judge_top 的参数")
+    sp.add_argument("--top-workers", type=int, default=4, help="顶部判断并发数，默认 4")
+    sp.add_argument("--no-web", action="store_true",
+                    help="跑完不起看板（无头/自动化环境用）")
+    sp.add_argument("--host", default="127.0.0.1", help="看板监听地址，默认只本机")
+    sp.add_argument("--port", type=int, default=5000, help="看板端口，默认 5000")
 
     sp = sub.add_parser("select", help="只跑选股 stock_kline_screen（只能批量）")
     add_date(sp)
@@ -735,8 +786,6 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--workers", type=int, default=4, help="批量并发线程数，默认 4")
     sp.add_argument("extra", nargs="*", default=[], help="透传给 stock_judge_top 的参数")
 
-    sp = sub.add_parser("calendar", help="只更新交易日历")
-
     sp = sub.add_parser("backup", help="备份 shared.db / results.db 到 backup/（VACUUM INTO）")
     sp.add_argument("--dir", default=None,
                     help="备份目录，默认 backup/（可用绝对路径，如 ~/MyData/backups）")
@@ -752,7 +801,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--host", default="127.0.0.1", help="监听地址，默认只本机")
     sp.add_argument("--debug", action="store_true", help="Flask 调试模式（改模板自动重载）")
 
-    sub.add_parser("menu", help="交互菜单（0-6 选择）")
+    sub.add_parser("menu", help="交互菜单（0-5 选择）")
     return p
 
 
@@ -782,7 +831,7 @@ def main(argv: list[str] | None = None) -> int:
             say(f"❌ weekly 不认识这些参数：{' '.join(unknown)}")
             say("   透传请用 --select-args / --cycle-args / --quality-args。")
             return 2
-    elif args.cmd in ("backup", "calendar", "menu", "web"):
+    elif args.cmd in ("backup", "menu", "web"):
         # 这三个不接受透传参数：未知参数直接报错，别让 `--dry-run` 这种
         # 打错/臆想的开关被静默吞掉（人会以为它生效了）。
         if unknown:
@@ -802,12 +851,11 @@ def main(argv: list[str] | None = None) -> int:
             args.select_args = split_passthrough(getattr(args, "select_args", ""))
             args.cycle_args = split_passthrough(getattr(args, "cycle_args", ""))
             args.quality_args = split_passthrough(getattr(args, "quality_args", ""))
+            args.top_args = split_passthrough(getattr(args, "top_args", ""))
             return cmd_all(args, tee)
         if args.cmd == "web":
             tee.close()
             return cmd_web(args)
-        if args.cmd == "calendar":
-            return cmd_calendar(args, tee)
         if args.cmd == "backup":
             return cmd_backup(args, tee)
         handler = cmd_single(args.cmd)

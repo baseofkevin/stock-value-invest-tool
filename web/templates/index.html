@@ -4,24 +4,26 @@
 
 <section class="hero">
   <div class="eyebrow">Dashboard</div>
-  <h1>四个工具的最新结论，一张表看完</h1>
+  <h1>这一批票，四个工具一张表看完</h1>
   <p>
-    选股 → 周期 → 质量 → 顶部，全部读自 <code>results.db</code>。
-    {% if summary and summary[0].target_date %}最近一批基准日 <strong style="color:#fff">{{ summary[0].target_date }}</strong>。{% endif %}
+    选股 → 周期 → 质量 → 顶部，读自 <code>results.db</code>，按<b style="color:#fff">批次</b>对齐。
+    {% if cur_date %}当前批次 <strong style="color:#fff">{{ cur_date }}</strong>{% if cur_date != batches[0].date %}（历史批次）{% endif %}。{% endif %}
   </p>
 </section>
 
+{% include "_bar.html" %}
+
 <div class="cards">
   {% for s in summary %}
-  <a class="card" href="{{ s.href }}">
+  <a class="card" href="{{ s.href }}{% if cur_date %}?date={{ cur_date }}{% endif %}">
     <div class="k">{{ s.label }}</div>
     <div class="v">{{ counts[s.tool] }} 只</div>
     <div class="s">
       {% if s.run_id %}
-        {{ s.target_date }} · {{ s.started_at|clock }}
+        {{ s.started_at|clock }}
         {% if s.n_fail %} · 失败 {{ s.n_fail }}{% endif %}
       {% else %}
-        还没有运行记录
+        这一批没跑
       {% endif %}
     </div>
   </a>
@@ -29,8 +31,11 @@
 </div>
 
 <section class="panel">
-  <h2>合并表</h2>
-  <p class="sub">一只票一行，四边的结论并排。点名称进入个股页。空白表示该工具这次没算这只票。</p>
+  <h2>合并表 <span class="tag">{{ cur_date or '—' }}</span></h2>
+  <p class="sub">
+    一只票一行，四边的结论并排，全部取自同一个批次。点名称进入个股页（那里能看到这只票
+    被跑过的每一次）。空白表示该工具这一批没算这只票。
+  </p>
   <div class="scroll">
     <table class="grid" id="merged">
       <thead>
@@ -57,7 +62,10 @@
           <td>{% if r.top and r.top.cycle_state %}<span class="chip {{ r.top.cycle_state|tone }}">{{ r.top.cycle_state|cycle_state }}</span>{% else %}—{% endif %}</td>
         </tr>
         {% else %}
-        <tr><td colspan="10"><div class="empty">结果库还是空的：先跑 <code>./run.py all</code>，四个工具会把结论写进来。</div></td></tr>
+        <tr><td colspan="10"><div class="empty">
+          {% if cur_date %}这一批（{{ cur_date }}）还取不到结果行{% else %}结果库还是空的{% endif %}：
+          先跑 <code>./run.py all</code>，四个工具会把结论写进来。
+        </div></td></tr>
         {% endfor %}
       </tbody>
     </table>

@@ -8,15 +8,24 @@
 
 页面分工
 --------
-    /            概览：四个工具的状态 + 一张合并表（谁入选了、四边结论并排）
+    /            概览：**某个批次**的四工具状态 + 合并表（谁入选了、四边并排）
+    /batches     批次：每周五盘后那一批票，四步齐不齐一目了然
     /select      选股：池内换手分位（排序依据）+ 行业分布
     /cycle       周期：三个判断的分布 + 毛利率波动 × 弹性散点
     /quality     质量：Q × V 散点（结论用颜色区分）+ 结论分布
     /top         顶部：距 250 日高点的横条（谁在高位）+ 四因子状态矩阵
-    /stock/<code> 个股：四个工具的结论并排 + 顶部四因子/旁证/周期 + 历史
-    /runs        运行台账：每次运行的时间、基准日、成功失败数
+    /stock/<code> 个股：四边结论并排 + 旁证/周期 + **历次结果（按时间）**
+    /runs        运行台账：每次运行的时间、基准日、批量/单只、成功失败数
 
-页面之间靠股票代码串联（合并表每行点得进去），没有登录、没有写操作。
+两种"时间"要分开看
+------------------
+* **批次**（`run.target_date`）= 那个周五。四个工具同一天的结果是一批，
+  页面上永远整批看，不把周三单跑的一只票掺进周五的统计。
+* **运行**（`run.started_at`）= 实际跑的时刻。同一只票可能被跑过很多次，
+  个股页按时间逐条列出来。
+
+工具页都接受两个参数：`?date=YYYY-MM-DD` 看指定批次，`?run=<id>` 看那一次运行；
+不给就停在最新批次。页面之间靠股票代码串联，没有登录、没有写操作。
 """
 from __future__ import annotations
 
@@ -24,7 +33,7 @@ import datetime as dt
 import os
 from pathlib import Path
 
-from flask import Flask, abort, render_template
+from flask import Flask, abort, render_template, request
 
 from . import db
 
@@ -101,6 +110,18 @@ def _date(value):
     return str(value or "")[:10]
 
 
+#: 星期几。批次基本都在周五跑，把"周五"写出来比让人自己数日子直观。
+_WEEK = "一二三四五六日"
+
+
+def _weekday(value):
+    """`2026-11-13` → `周五`；解析不了就给空串（不猜）。"""
+    try:
+        return "周" + _WEEK[dt.date.fromisoformat(str(value)[:10]).weekday()]
+    except (TypeError, ValueError):
+        return ""
+
+
 def _clock(value):
     """ISO 时间戳 → 顺手看的 `11-15 15:23`。"""
     text = str(value or "")
@@ -119,8 +140,10 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     # Jinja 里要用的格式化/配色工具，一次性注入，模板里不用 import
     app.jinja_env.filters.update(pct=_fmt_pct, num=_fmt_num, ratio=_fmt_ratio,
                                  date=_date, clock=_clock, tone=tone,
+                                 weekday=_weekday,
                                  poslabel=_poslabel, cycle_state=_cycle_state)
-    app.jinja_env.globals.update(TOOLS=db.TOOLS, ORDER=db.ORDER, TODAY=dt.date.today)
+    app.jinja_env.globals.update(TOOLS=db.TOOLS, ORDER=db.ORDER, TODAY=dt.date.today,
+                                 KIND_LABEL=db.KIND_LABEL)
 
     def conn():
         return db.connect(app.config["DB_PATH"])
@@ -128,9 +151,37 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     @app.context_processor
     def inject_globals():
         return {"nav": [
-            ("/", "概览"), ("/select", "选股"), ("/cycle", "周期"),
-            ("/quality", "质量"), ("/top", "顶部"), ("/runs", "运行记录"),
+            ("/", "概览"), ("/batches", "批次"), ("/select", "选股"),
+            ("/cycle", "周期"), ("/quality", "质量"), ("/top", "顶部"),
+            ("/runs", "运行记录"),
         ]}
+
+    def _pick(conn):
+        """页面当前的批次与运行：`?date=` 看批次，`?run=` 看某一次运行。"""
+        date = (request.args.get("date") or "").strip() or None
+        try:
+            run_id = int(request.args.get("run") or 0) or None
+        except ValueError:
+            run_id = None
+        if run_id:
+            meta = db.run_row(conn, run_id)
+            if meta:
+                date = date or meta["target_date"]
+        return date, run_id
+
+    def _page(template: str, tool: str | None = None):
+        """工具页的公共壳：批次选择器 + 运行信息 + 结果行。"""
+        with conn() as c:
+            date, run_id = _pick(c)
+            meta, rows = (db.scope(c, tool, date=date, run_id=run_id)
+                          if tool else (None, []))
+            if meta:
+                date = meta["target_date"]
+            date = date or db.batch_date(c)
+            return render_template(
+                template, rows=rows, meta=meta,
+                batches=db.batches(c), cur_date=date,
+                summary=db.summary(c, date), counts=db.counts(c, date))
 
     @app.errorhandler(404)
     def not_found(_e):
@@ -147,42 +198,47 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     @app.route("/")
     def index():
         with conn() as c:
-            return render_template("index.html",
-                                   summary=db.summary(c),
-                                   merged=db.merged(c),
-                                   counts=db.counts(c))
+            date, _run_id = _pick(c)
+            date = date or db.batch_date(c)
+            return render_template("index.html", cur_date=date,
+                                   batches=db.batches(c),
+                                   summary=db.summary(c, date),
+                                   merged=db.merged(c, date),
+                                   counts=db.counts(c, date))
+
+    @app.route("/batches")
+    def batches():
+        with conn() as c:
+            return render_template("batches.html", batches=db.batches(c),
+                                   cur_date=db.batch_date(c), meta=None,
+                                   summary=db.summary(c), counts=db.counts(c))
 
     @app.route("/select")
     def select():
-        with conn() as c:
-            rows = db.select_rows(c)
-            return render_template("select.html", rows=rows,
-                                   summary=db.summary(c), counts=db.counts(c))
+        return _page("select.html", "select")
 
     @app.route("/cycle")
     def cycle():
-        with conn() as c:
-            rows = db.cycle_rows(c)
-            return render_template("cycle.html", rows=rows,
-                                   summary=db.summary(c), counts=db.counts(c))
+        return _page("cycle.html", "cycle")
 
     @app.route("/quality")
     def quality():
-        with conn() as c:
-            rows = db.quality_rows(c)
-            return render_template("quality.html", rows=rows,
-                                   summary=db.summary(c), counts=db.counts(c))
+        return _page("quality.html", "quality")
 
     @app.route("/top")
     def top():
         with conn() as c:
-            rows = db.top_rows(c)
+            date, run_id = _pick(c)
+            meta, rows = db.scope(c, "top", date=date, run_id=run_id)
             for r in rows:
                 r["extras"] = (r.get("data") or {}).get("extras") or {}
                 r["gaps"] = (r.get("data") or {}).get("gaps") or []
                 r["views"] = (r.get("data") or {}).get("views") or []
-            return render_template("top.html", rows=rows,
-                                   summary=db.summary(c), counts=db.counts(c))
+            date = (meta or {}).get("target_date") or date or db.batch_date(c)
+            return render_template("top.html", rows=rows, meta=meta,
+                                   batches=db.batches(c), cur_date=date,
+                                   summary=db.summary(c, date),
+                                   counts=db.counts(c, date))
 
     @app.route("/stock/<symbol>")
     def stock(symbol):
@@ -190,12 +246,14 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             rows = {t: db.symbol_row(c, t, symbol) for t in db.ORDER}
             if not any(rows.values()):
                 abort(404)
-            hist = {t: db.symbol_history(c, t, symbol) for t in db.ORDER}
+            hist = db.symbol_histories(c, symbol)
+            timeline = db.symbol_timeline(c, symbol)
             name = next((r.get("name") for r in rows.values() if r and r.get("name")), symbol)
             top_row = rows.get("top") or {}
             top_data = top_row.get("data") or {}
             return render_template(
                 "stock.html", symbol=symbol, name=name, rows=rows, hist=hist,
+                timeline=timeline,
                 # views_full 比 views 多出 headline / metrics：单只页那张卡要能
                 # 说清楚"为什么是这个结论"，只有状态词是不够的。
                 views=top_data.get("views_full") or top_data.get("views") or [],
@@ -207,8 +265,11 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     @app.route("/runs")
     def runs():
         with conn() as c:
-            return render_template("runs.html", rows=db.runs(c),
-                                   summary=db.summary(c))
+            return render_template("runs.html", rows=db.runs(c), meta=None,
+                                   batches=db.batches(c),
+                                   cur_date=db.batch_date(c),
+                                   summary=db.summary(c),
+                                   counts=db.counts(c))
 
     return app
 

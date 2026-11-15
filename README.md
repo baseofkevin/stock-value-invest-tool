@@ -29,25 +29,28 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ./run.py menu
 ```
 
-它会依次做三件事，并在最后打印汇总（每步耗时、退出码、写进了哪张表）：
+它会依次做完六步，最后**直接把看板起起来**（`./run.py all` 一个命令走到底）：
 
 ```
-⓪ build_calendar        更新交易日历（日历不更新会让下游静默产出上一周的报告）
-① stock_kline_screen    选股 → results.db / select_result
-② stock_cycle_elastic   周期弹性 → results.db / cycle_result
-③ stock_quality_screen  质量初筛 → results.db / quality_result
+⓪ build_calendar        更新交易日历（日历过期会让下游静默产出上一周的报告）
+① stock_kline_screen    选股       → results.db / select_result
+② stock_cycle_elastic   周期弹性   → results.db / cycle_result
+③ stock_quality_screen  质量初筛   → results.db / quality_result
+④ stock_judge_top       顶部判断   → results.db / top_result
+⑤ ./run.py web          看板       → http://127.0.0.1:5000（Ctrl-C 结束）
 ```
 
-**四个工具不再产出 CSV 和 HTML**（2026-11-15 起）。结论只有一处：
-`results.db`。要看结果：
+中间会打印汇总（每步耗时、退出码、写进了哪张表），日志在 `logs/run-<时间戳>.log`。
+不想起看板（放进定时任务、或在没有浏览器的机器上跑）：
 
 ```bash
-./run.py web                     # http://127.0.0.1:5000，只读，不需要登录
-./run.py web --port 8080
+./run.py all --no-web
+./run.py all --port 8080          # 换端口
 ```
 
-`stock_judge_top`（顶部判断）不在全流程里：它是**买入之后**用来判断股价有没有到顶部区域的，
-单只、随时跑。
+**四个工具不再产出 CSV 和 HTML**（2026-11-15 起）。结论只有一处：`results.db`。
+
+顶部判断单独跑（买入之后用来判断股价有没有到顶部区域的，单只、随时跑）：
 
 ```bash
 ./run.py top sh600519                      # 基准日自动取「今天（过了 15:05）」
@@ -68,7 +71,14 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ./run.py select  --date 2026-11-20         # 只选股（只能批量）
 ./run.py cycle                             # 周期弹性批量（用库里的选股名单）
 ./run.py quality                           # 质量初筛批量（用库里的选股名单）
-./run.py calendar                          # 只更新日历
+./run.py web                               # 只打开看板
+```
+
+日历没有单独的子命令——它只是全流程的第 0 步，`all` 会在过期时自己更新。
+真要单独更新（比如换了数据源想重生成），直接：
+
+```bash
+python3 -m stock_data_fetch.build_calendar
 ```
 
 ### 单只也能跑
@@ -106,8 +116,8 @@ cd /home/kevin/MyData/stock-value-invest-tool
    `run.py` 已经把 cwd 切好。
 4. **选股 0 只时下游没有输入**，脚本在交接处停下，不会带着空名单跑到一半才炸。
 
-日志：每次运行写 `output/logs/run-<时间戳>.log`（完整子进程输出，事后可查）。
-`output/` 里现在只剩这一个日志目录——报告和 CSV 都不再落盘。
+日志：每次运行写 `logs/run-<时间戳>.log`（完整子进程输出，事后可查）。
+仓库里已经没有 `output/` 了——报告、CSV、HTML 都不再落盘，结论只进 `results.db`。
 
 ## 两个数据库
 
@@ -148,16 +158,27 @@ Flask + Chart.js，单进程、只读、无登录。默认只监听 `127.0.0.1:5
 
 | 页面 | 看什么 |
 |---|---|
-| `/` 概览 | 四个工具的最新批次（数量 + 时间）+ 一张合并表：一只票一行，选股 / 周期 / 质量 / 顶部并排 |
+| `/` 概览 | 当前批次（可切换）+ 一张合并表：一只票一行，选股 / 周期 / 质量 / 顶部并排 |
+| `/batches` 批次 | 每个基准日一行，四个工具各跑没跑、跑了几只、几点跑的；点一格进那一批 |
 | `/select` 选股 | 换手分位 × 20 日换手散点，行业分布 |
 | `/cycle` 周期 | 毛利率 σ × 弹性散点，产能分位 |
 | `/quality` 质量 | Q × V 散点，结论分布 |
 | `/top` 顶部 | 距 250 日高点（最接近的 20 只）、动量状态、四因子矩阵 |
-| `/stock/<代码>` | 单只票：四张卡 + 四因子 + 旁证 + 周期三判断 + 数据缺口 |
-| `/runs` 运行记录 | 每次运行的批次日、行数、耗时、命令行 |
+| `/stock/<代码>` | 单只票：四张卡 + 四因子 + 旁证 + 周期三判断 + **历次结果（按跑的时刻）** |
+| `/runs` 运行记录 | 每次运行的基准日、批量/单只、行数、耗时、命令行 |
 
 页面上的每个数字都来自 `results.db`，没有第二份缓存；把库删掉重跑一遍，
 页面自然就更新了。`--db` 可以指向别的库（比如一份备份）用来对比。
+
+### 批次和单只是两回事
+
+库里的运行记录带 `kind`：`batch` = 一次覆盖整份名单（每周五那批），
+`single` = 单只随手跑一次（`--stock`）。看板据此分开显示：
+
+* **批次页 / 工具页**只统计 `batch`。周五那一批就是四个工具 `target_date`
+  相同的那些运行；`?date=2026-11-06` 看上周那批，`?run=12` 看某一次具体运行。
+* **个股页的「历次结果」**两种都列，按跑的时刻倒序，每条都标着它属于哪一批、
+  是批量还是单只。同一只票被批量算过又被单只重算过时，一眼能看到两次的差别。
 
 Flask 只在这个看板上用得到，四个工具本身仍然只用标准库：
 

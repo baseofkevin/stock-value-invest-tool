@@ -254,7 +254,7 @@ def run_single(args):
     # 单只也入库：不落库的话"跑一只看看"就成了看板里看不到的黑数。
     item = batch.ItemResult(code, stock.get("name") or "")
     item.ok, item.decision, item.stock = True, decision, stock
-    batch._save_results([item])
+    batch._save_results([item], kind="single")
 
     if not args.quiet:
         _print_decision(stock, decision, m, "results.db")

@@ -262,7 +262,7 @@ def _existing(target_date):
     return out
 
 
-def _save_results(results, target_date=None) -> None:
+def _save_results(results, target_date=None, kind="batch") -> None:
     """把批量结果写进 results.db（派生数据，失败只 warn）。
 
     `decision` 是 decide() 的三档结构；字段名对齐 results.cycle_result。
@@ -293,7 +293,7 @@ def _save_results(results, target_date=None) -> None:
     if not rows:
         return
     results_db.save("cycle", rows, target_date or _latest_quarter(results) or _today(),
-                    argv="stock_cycle_elastic")
+                    argv="stock_cycle_elastic", kind=kind)
 
 
 def _latest_quarter(results) -> str:

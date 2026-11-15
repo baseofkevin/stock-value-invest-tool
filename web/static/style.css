@@ -131,6 +131,29 @@ table.grid tr.dim td{opacity:.55}
 .kv tr.tone-warn td{color:#9a3412}.kv tr.tone-warn th{color:#c2410c}
 .kv tr.tone-good td{color:#166534}.kv tr.tone-muted td,.kv tr.tone-muted th{color:#94a3b8}
 
+/* ---------------------------------------------------------------- 批次条 */
+/* 每个数据页顶部那一条：先确认"我在看哪一批"，再看数字。
+   做得比正文轻（浅底、细边框），避免和 hero 抢视线。 */
+.picker{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  margin:0 0 14px;padding:9px 12px;background:#f8fafc;
+  border:1px solid var(--line);border-radius:12px;font-size:12.5px}
+.picker select{font:inherit;padding:4px 8px;border:1px solid #cbd5e1;border-radius:8px;
+  background:#fff;color:var(--ink);font-variant-numeric:tabular-nums}
+.picker .pick-label{color:var(--muted);font-weight:600}
+.picker .pick-meta{color:#475569;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.picker .pick-latest{margin-left:auto;color:#0f766e;font-weight:600;text-decoration:none}
+.picker .pick-latest:hover{text-decoration:underline}
+
+/* 批次表：一格一次运行，"未跑"要一眼看出来 */
+table.grid.batch td{vertical-align:top}
+table.grid .cellrun{display:block;text-decoration:none;color:inherit}
+table.grid .cellrun small{display:block;color:var(--muted);font-size:11px;font-weight:400}
+table.grid .cellrun:hover{color:#0f766e}
+table.grid .miss{color:#cbd5e1;font-size:12px}
+.tag{font-size:11px;font-weight:600;color:#475569;background:#eef2f7;
+  border-radius:6px;padding:2px 7px;vertical-align:middle;margin-left:6px}
+tr.dim td{color:#94a3b8}
+
 .empty{padding:26px;text-align:center;color:var(--muted);font-size:13px;
   background:#f8fafc;border:1px dashed #dbe4f0;border-radius:12px}
 .foot{margin-top:26px;font-size:11.5px;color:var(--muted);line-height:1.7}
