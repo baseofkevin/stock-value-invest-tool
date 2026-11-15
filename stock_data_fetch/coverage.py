@@ -273,8 +273,19 @@ def recount_holes(cal: TradingCalendar, have: set[str], start: str | None,
 # ---------------------------------------------------------------- 待补区间
 
 def _next_trading(cal: TradingCalendar, day: str) -> str | None:
+    """`day` 之后的下一个交易日。
+
+    **日历末端不够时退回"自然日 +1"**（2026-11-15 修）。原写法 `return cal.on_or_after(nxt)`
+    在日历没更新（`cal.end` 正好等于库里最后一天）时返回 `None`，于是 `missing_segments`
+    返回空列表 → `ensure()` 的兜底退化成"整段重取 300 根"（每只票、每一天），
+    而 `ensure_bulk()` 更是一律取整段 —— 这是"每天重下 129 万行"的一个隐藏放大器。
+
+    退回落成自然日为什么安全：段的两端是 `(nxt, need.end)`，适配器会按区间取；
+    非交易日上游本来就不返回数据，多带一天周六/周日是无害的空区间，
+    而真正的交易日（哪怕日历还不知道）照样能取到。
+    """
     nxt = (dt.date.fromisoformat(day) + dt.timedelta(days=1)).isoformat()
-    return cal.on_or_after(nxt)
+    return cal.on_or_after(nxt) or nxt
 
 
 def _prev_trading(cal: TradingCalendar, day: str) -> str | None:

@@ -59,7 +59,7 @@ def available() -> tuple[bool, str]:
     if token():
         return True, ""
     return False, ("缺 OAuth 令牌（该端点 401）。设 STOCKHUB_TDX_TOKEN 后自动启用；"
-                   "当前 kline 走 eastmoney 备源")
+                   "kline 现在走 westock，东财是第一备源")
 
 
 def client() -> McpClient:

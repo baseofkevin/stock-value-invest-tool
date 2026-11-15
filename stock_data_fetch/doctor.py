@@ -44,7 +44,7 @@ from . import db
 from .calendar import TradingCalendar
 from .config import Config, SCHEMA_VERSION
 from .errors import HubNotReady
-from .need import MIN_VALUATION_WEEKS
+from .need import MIN_VALUATION_WEEKS, fingerprint
 
 KLINE_MIN_BARS = 250
 """kline 的使用门槛。kline-screen 要 71、judge-top 要 250，取最严的报。"""
@@ -232,12 +232,23 @@ def check_invariants(conn: sqlite3.Connection, rep: Report) -> None:
     for domain, (table, dcol, _cadence) in C.DOMAIN_SPEC.items():
         if not _has_table(conn, table):
             continue
+        # **必须按 `fp` 过滤到"当前口径"**（2026-11-15 修）。
+        #
+        # 原来这里不过滤 fp，把所有历史口径的 coverage 行都拿来跟同一个 `USING(symbol)`
+        # 聚合结果比。而老版本写 K 线覆盖时 `fp` 还是空串，于是同一个 symbol 有两行
+        # （`fp=''` 与 `fp='fq=raw'`），一行对得上、一行对不上——`sh688635` 就报
+        # "覆盖 n=116 实际 117"，而库里 `fq=raw` 那行恰好是 117，完全一致。
+        # 后果不只是噪音：这是一条 **ERROR**，`doctor` 的退出码因此恒为 1，
+        # 拿它当发布/启动闸的人只能选择忽略它——那等于把整个不变式 3 关掉。
+        #
+        # 口径由 `need.fingerprint(domain)` 给（工具就是用它查库的），空串表示该域没有口径。
+        fp = fingerprint(domain)
         rows = conn.execute(
             f"SELECT c.symbol, c.fp, c.n, c.end_date, c.start_date, "
             f"       x.real_n, x.real_end "
             f"FROM coverage c LEFT JOIN (SELECT symbol, COUNT(*) real_n, MAX({dcol}) real_end "
             f"                          FROM {table} GROUP BY symbol) x USING(symbol) "
-            f"WHERE c.domain = ?", (domain,)).fetchall()
+            f"WHERE c.domain = ? AND c.fp = ?", (domain, fp)).fetchall()
         bad_n, bad_end, no_data = [], [], []
         for r in rows:
             real_n = r["real_n"] or 0
@@ -268,7 +279,8 @@ def check_invariants(conn: sqlite3.Connection, rep: Report) -> None:
         orphans = [r[0] for r in conn.execute(
             f"SELECT DISTINCT t.symbol FROM {table} t "
             f"WHERE NOT EXISTS (SELECT 1 FROM coverage c "
-            f"                  WHERE c.domain = ? AND c.symbol = t.symbol)", (domain,))]
+            f"                  WHERE c.domain = ? AND c.fp = ? AND c.symbol = t.symbol)",
+            (domain, fp))]
         if orphans:
             rep.warn(f"inv.{domain}.orphan",
                      f"{domain}：{len(orphans)} 只有数据但没有覆盖记录",

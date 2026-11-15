@@ -58,6 +58,7 @@ def run(a, hub) -> int:
     _write(st)
     print_summary(st)
     hub.prune_scan()                       # 收尾顺手清过期的横截面，失败不抛
+    hub.prune_kline()                      # 同上：K 线只留最近 N 根，失败不抛
     return 0
 
 

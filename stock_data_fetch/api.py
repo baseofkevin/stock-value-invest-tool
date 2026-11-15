@@ -32,6 +32,7 @@ from typing import Iterator
 
 from . import coverage as C
 from . import db, router as R
+from .config import KLINE_KEEP_BARS, SCAN_RETENTION_DAYS
 from .errors import EmptyResult, MarketOpenError, PartialData
 from .need import Need, want
 from .throttle import Throttle
@@ -307,6 +308,11 @@ def ensure_bulk(hub, domain: str, symbols: list[str], need: Need, *,
     - 不做补洞重试、不做点数门槛判定、不加单只锁——就是"能取多少取多少，
       逐只独立事务落库并写 coverage"；
     - 已命中 coverage 的股票直接跳过（不浪费上游配额）；
+    - **按「每只缺哪一段」分组取**（2026-11-15 修）：与 `_pull` 一致地走
+      `missing_segments()`，所以"只缺最新一天"的票只请求那一天，不是整段 300 根。
+      改之前这里直接拿 `need` 整段去取，日增量因此放大 300 倍
+      （4304 行 → 1,291,200 行），顺带把 `router._expect` 的配额估算也放大 300 倍，
+      一次批量就打穿 12000 行的桶。回归测试见 `tests/test_bulk.py`；
     - 返回 `Batch`：`ok` = 本次取到数据的（`Range`，与 `ensure` 同形状）；
       `failed` = 上游这次没给的。**`failed` 不是错误**——停牌/次新/限频都在
       里面，调用方应把剩余的再走一遍 `ensure_many` 拿正式的异常分类
@@ -332,34 +338,118 @@ def ensure_bulk(hub, domain: str, symbols: list[str], need: Need, *,
     if callable(check):
         check(domain, todo[0], need)                 # 盘中闸：一次，整批共用
 
-    try:
-        got, spec = rtr.fetch(domain, todo, need)
-    except Exception as e:                           # noqa: BLE001 - 整批失败收进 failed
-        for s in todo:
-            out.failed[s] = e
-        return out
-
+    # ---- 按「每只缺哪一段」分组，而不是整批共用同一个 `need` ----
+    #
+    # 这是本函数与 `_pull`（单只路径）的语义差异所在，2026-11-15 补齐：
+    # 原来直接 `rtr.fetch(domain, todo, need)`，于是「只缺今天一根」的票也按
+    # `need.start..need.end`（300 根）请求。实测 4304 只的日增量因此要回
+    # 129 万行，而实际只需要 4304 行 —— 放大 300 倍，且 `router._expect` 按
+    # `need.points` 计配额，一次批量就把配额桶（12000 行）打穿。
+    # 原版 kline-screen-tool 快的原因正是这条：每只只补「最后一根 + 1 天」。
+    groups: dict[tuple[str | None, str | None], list[str]] = {}
     for sym in todo:
-        rows = got.rows.get(sym) or []
-        if not rows:
-            out.failed[sym] = EmptyResult(
-                f"批量预取未返回 {sym} 的 {domain} 数据（停牌/次新/限频均可能）",
-                domain=domain, symbol=sym)
+        cov = C.read(conn, domain, sym, need.fp)
+        segs = C.missing_segments(cov, need, hub.cal, now)
+        if not segs:
+            # 覆盖到 `end` 却仍不命中（点数不足 / 口径刚被换源作废）→ 整段重取，
+            # 与 `ensure()` 的兜底（api.py 里 `if not segs:` 那段）保持一致。
+            groups.setdefault((need.start, need.end), []).append(sym)
             continue
-        with db.tx(conn):
-            _write_rows(conn, domain, sym, rows, spec.upstream)
-            if domain in C.POINT_DOMAINS:
-                C.merge_point(conn, domain=domain, symbol=sym,
-                              as_of=_as_of(domain, rows, need), src=spec.upstream,
-                              fp=need.fp, n=len(rows))
-            else:
-                C.merge(conn, cal=hub.cal, need=need, symbol=sym, src=spec.upstream)
-            _watermark(conn, domain, rows)
-        out.ok[sym] = _range(conn, domain, sym, need, fetched=True)
-    R.remember_source(conn, domain, spec.upstream)
-    log.info("%s 批量预取：%d/%d 只落库（%s）", domain, len(out.ok), len(todo),
-             spec.name)
+        for seg in segs:                             # 可能多段：末端延伸 + 到期缺口
+            groups.setdefault(seg, []).append(sym)
+
+    used: str | None = None
+    src_names: list[str] = []
+    for (seg_start, seg_end), codes in groups.items():
+        # `sub` 只用于**取数**：`points` 改成这一段真正要回的根数，配额估算才诚实。
+        # 落库后的覆盖重算仍用原始 `need`（`merge()` 按库里的实际范围重数，不看 need.start）。
+        #
+        # 只有 `kline`/`valuation` 的 `points` 是"行数"，可以按段缩；
+        # `scan`/`quote`/`snapshot` 的 `points` 是"整份多少行"（scan 一天 5000 行），
+        # 缩了会让 `_expect` 少算三个数量级的配额 —— 那几个域保持原值。
+        if domain in ("kline", "valuation"):
+            sub = replace(need, start=seg_start, end=seg_end,
+                          points=_span_bars(hub.cal, seg_start, seg_end, need))
+        else:
+            sub = replace(need, start=seg_start, end=seg_end)
+        got, spec = _fetch_split(rtr, domain, codes, sub)
+        used = used or spec.upstream
+        if spec.name not in src_names:
+            src_names.append(spec.name)
+        for sym in codes:
+            rows = got.rows.get(sym) or []
+            if not rows:
+                out.failed[sym] = EmptyResult(
+                    f"批量预取未返回 {sym} 的 {domain} 数据（停牌/次新/限频均可能）",
+                    domain=domain, symbol=sym)
+                continue
+            with db.tx(conn):
+                _write_rows(conn, domain, sym, rows, spec.upstream)
+                if domain in C.POINT_DOMAINS:
+                    C.merge_point(conn, domain=domain, symbol=sym,
+                                  as_of=_as_of(domain, rows, need), src=spec.upstream,
+                                  fp=need.fp, n=len(rows))
+                else:
+                    C.merge(conn, cal=hub.cal, need=need, symbol=sym, src=spec.upstream)
+                _watermark(conn, domain, rows)
+            out.ok[sym] = _range(conn, domain, sym, need, fetched=True)
+
+    if used:
+        R.remember_source(conn, domain, used)
+    # 日志里要打**源**的名字。注意别打 `spec.upstream`：`westock` 的上游数据商恰好
+    # 也叫 `tencent`（`SourceSpec("westock","tencent","mcp",...)`），而 `src` 列记的是
+    # 数据商、不是源——两者同名会让人以为"跑的是腾讯 HTTP 备源"，把整条改动看反。
+    log.info("%s 批量预取：%d/%d 只落库（%d 组，源=%s）", domain, len(out.ok), len(todo),
+             len(groups), src_names or "-")
     return out
+
+
+def _span_bars(cal, start, end, need: Need) -> int:
+    """这一段真正要回多少根 —— 给 `router._expect` 算配额，也给适配器算 `limit`。
+
+    **不能"数不出来就退回 `need.points`"**（第一版就是那么写的，然后在本函数最主要的
+    使用场景上失效）：日历末端不足时 `cal.between(start, end)` 返回空列表，而那恰好是
+    "日历没更新、只补最后一两天"的常态——退回去就等于又按 300 根算配额，一次 4304 只的
+    批量照样申请 129 万行，前面所有增量改动全部白做（实测被 `test_bulk` 抓出来）。
+
+    所以：日历数不出来就按**周内工作日**估（非交易日上游本来也不返回数据，周末多估
+    一两根无害），连日期都解析不了才退回 `need.points`。
+    """
+    if not start or not end or start > end:
+        return int(need.points or 300)
+    days = cal.between(start, end)
+    if days:
+        return max(1, len(days))
+    try:
+        d0 = dt.date.fromisoformat(start)
+        d1 = dt.date.fromisoformat(end)
+    except ValueError:
+        return int(need.points or 300)
+    n = sum(1 for i in range((d1 - d0).days + 1)
+            if (d0 + dt.timedelta(days=i)).weekday() < 5)
+    return max(1, n)
+
+
+def _fetch_split(rtr: R.Router, domain: str, codes: list[str], need: Need,
+                 *, depth: int = 0):
+    """整批取一次；**大面积丢码**时把缺的拆半再取（最多 2 层）。
+
+    为什么不是"整批重试 + 冷却"（`router._fetch_with_retry` 的做法）：服务端限频的
+    表现不是整批失败，而是「60 只只回 10 只」——此时把**同一批**再发一次，往往还是
+    回 10 只；而拆成 30/15 只一批，一次就全回（原版 `_kline_fetch` 的实测结论）。
+
+    为什么只对"大面积"拆：少数几只没回多半是停牌/次新，再问一次还是空。
+    不设比例阈值的话，3000 只停牌股会变成 3000 次重取，比不重试更糟。
+    """
+    got, spec = rtr.fetch(domain, codes, need)
+    missing = [c for c in codes if c not in got.rows]
+    if not missing or depth >= 2 or len(missing) * 2 < len(codes):
+        return got, spec
+    half = max(1, len(missing) // 2)
+    for i in range(0, len(missing), half):
+        part, _ = _fetch_split(rtr, domain, missing[i:i + half], need, depth=depth + 1)
+        got.extend(part)
+    return got, spec
 
 
 # ---------------------------------------------------------------- 横截面快捷入口
@@ -411,15 +501,15 @@ def prune_scan(hub, keep_days: int | None = None,
     **只有这张表需要例行清理**：其余域都是"按股票、滚动 300 根"，天然有界；
     `scan` 是"按日、全市场"，不清理就是每年 +130 万行 / +130MB。
 
-    保留期从 `meta['scan_retention_days']` 取（默认 120 天），`today` 用
-    `hub.target` 而不是 `date.today()`——补跑历史时"今天是哪天"是相对的，
-    用真实今天会把补跑的窗口一起清掉。
+    保留期从 `meta['scan_retention_days']` 取，缺省用 `config.SCAN_RETENTION_DAYS`
+    （30 天）。`today` 用 `hub.target` 而不是 `date.today()`——补跑历史时
+    "今天是哪天"是相对的，用真实今天会把补跑的窗口一起清掉。
 
     失败不抛：清理是运维动作，不该让一次选股因为删不掉旧行而失败。
     """
     keep = keep_days
     if keep is None:
-        keep = int(db.meta_get(hub.conn, "scan_retention_days") or "120")
+        keep = int(db.meta_get(hub.conn, "scan_retention_days") or SCAN_RETENTION_DAYS)
     if keep <= 0:
         return 0
     base = today or hub.target or dt.date.today().isoformat()
@@ -436,6 +526,62 @@ def prune_scan(hub, keep_days: int | None = None,
         return 0
     if n:
         log.info("scan 清理：删掉 %s 之前的 %d 行", cutoff, n)
+    return n
+
+
+def prune_kline(hub, keep_bars: int | None = None,
+                today: str | None = None) -> int:
+    """每只股票只留最近 `keep_bars` 根日 K，返回删了多少行。
+
+    **为什么需要它（2026-11-15）**：`kline` 是唯一一张"股票 × 交易日"双维度的表，
+    而全仓**没有任何地方删过它**（`grep "DELETE FROM kline"` 零命中）。
+    `coverage.merge()` 的注释写着"K 线是会滚动删除的"，但那个"会"从来没兑现——
+    实测已经是 122 万行 / 104 MB（占库 68%），再跑一年就是 +140 MB。
+    共享层的初衷是"按需取、不要囤"，没有裁剪的"按需"迟早变成"全量囤"。
+
+    **按全市场统一日期切，不按每只票各自的第 N 根**：同一只票停牌会让"第 N 根"
+    对应的日期跳变，逐票计算要 5000 次查询、而且 `DELETE` 会退化成逐行删。
+    统一日期只有一条 `DELETE ... WHERE date < ?`，一次扫表就完事（这操作一天最多一次，
+    而且 `date` 上现在**故意没有索引**——常驻索引的代价是每次写入都要维护它）。
+
+    **覆盖记录跟着改**：删掉旧 bar 后 `cov.start` 会指向一个已经不存在的日期。
+    不处理的话，`missing_segments` 的"到期缺口"分支（读 `hole_detail`）还会去补
+    那些刚被删掉的日期，天天白打上游。所以同一事务里把 `start_date` / `n` 按实际
+    重数，并把 `hole_detail` 清空——真的缺口会在下一次 `merge()` 里被 `recount_holes`
+    重新发现，不需要我们在这里维护。
+
+    `keep_bars` 缺省用 `config.KLINE_KEEP_BARS`（400）。`today` 用 `hub.target`：
+    补跑历史时"保留最近 N 根"是相对那个日期的，用真实今天会误删补跑窗口。
+
+    失败不抛，理由同 `prune_scan`。
+    """
+    keep = keep_bars if keep_bars is not None else KLINE_KEEP_BARS
+    if keep <= 0:
+        return 0
+    cal = getattr(hub, "cal", None)
+    if cal is None:
+        return 0
+    base = today or hub.target or cal.end
+    days = [d for d in cal.days if not base or d <= base]
+    if len(days) <= keep:
+        return 0                               # 还没有攒够 keep 根，不用裁
+    cutoff = days[-keep]
+    try:
+        with db.tx(hub.conn):
+            cur = hub.conn.execute("DELETE FROM kline WHERE date < ?", (cutoff,))
+            hub.conn.execute(
+                "UPDATE coverage SET "
+                "  start_date = (SELECT MIN(date) FROM kline k WHERE k.symbol = coverage.symbol),"
+                "  n          = (SELECT COUNT(*)   FROM kline k WHERE k.symbol = coverage.symbol),"
+                "  holes      = 0, hole_detail = '[]' "
+                "WHERE domain = 'kline' AND start_date IS NOT NULL AND start_date < ?",
+                (cutoff,))
+        n = cur.rowcount or 0
+    except Exception as e:                   # noqa: BLE001 - 清理失败不该阻断运行
+        log.warning("kline 清理失败（不影响本次结果）：%s", e)
+        return 0
+    if n:
+        log.info("kline 清理：删掉 %s 之前的 %d 行（每只保留最近 %d 根）", cutoff, n, keep)
     return n
 
 

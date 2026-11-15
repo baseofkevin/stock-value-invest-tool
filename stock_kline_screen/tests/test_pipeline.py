@@ -126,6 +126,9 @@ class FakeHub:
     def prune_scan(self):
         return None
 
+    def prune_kline(self):
+        return None
+
     def ensure_many(self, domain, symbols, need, **_):
         self.calls.append((domain, len(symbols)))
         b = Batch()

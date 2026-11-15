@@ -62,7 +62,7 @@ def main() -> int:
 
     # ---------------- 表结构 ----------------
     print("\n表结构")
-    check("user_version 是 5", db.schema_version(conn) == SCHEMA_VERSION == 5,
+    check(f"user_version 是 {SCHEMA_VERSION}", db.schema_version(conn) == SCHEMA_VERSION,
           str(db.schema_version(conn)))
     cols = {r[1] for r in conn.execute("PRAGMA table_info(annotation)")}
     check("annotation 表存在且有 9 列", len(cols) == 9, str(sorted(cols)))
@@ -197,9 +197,10 @@ def main() -> int:
     conn.close()
 
     # ---------------- 迁移：v4 → v5 ----------------
-    print("\n迁移 v4 → v5")
-    check("can_upgrade(4,5) 为 True", db.can_upgrade(4, 5))
-    check("can_upgrade(1,5) 为 True（逐跳）", db.can_upgrade(1, 5))
+    print(f"\n迁移 v4 → v{SCHEMA_VERSION}")
+    check(f"can_upgrade(4,{SCHEMA_VERSION}) 为 True", db.can_upgrade(4, SCHEMA_VERSION))
+    check(f"can_upgrade(1,{SCHEMA_VERSION}) 为 True（逐跳）",
+          db.can_upgrade(1, SCHEMA_VERSION))
     v4 = tmp / "v4.db"
     db.create_db(v4, schema)
     c2 = db.connect(v4)
@@ -209,7 +210,8 @@ def main() -> int:
     check("造出 v4 库（无 annotation 表）",
           not c2.execute("SELECT 1 FROM sqlite_master WHERE name='annotation'").fetchone())
     db.upgrade(c2, schema, from_version=4)
-    check("迁移后 user_version=5", db.schema_version(c2) == 5)
+    check(f"迁移后 user_version={SCHEMA_VERSION}",
+          db.schema_version(c2) == SCHEMA_VERSION)
     check("迁移后 annotation 表已建",
           c2.execute("SELECT 1 FROM sqlite_master WHERE name='annotation'").fetchone() is not None)
     c2.close()

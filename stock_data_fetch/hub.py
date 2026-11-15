@@ -162,9 +162,14 @@ class Hub:
         return api.read(self, "scan", api.SCAN_SYMBOL, N.want.scan(day)).rows
 
     def prune_scan(self, keep_days: int | None = None) -> int:
-        """清掉过期的横截面（默认留 120 天）。返回删了多少行。"""
+        """清掉过期的横截面（默认留 30 天）。返回删了多少行。"""
         from . import api
         return api.prune_scan(self, keep_days)
+
+    def prune_kline(self, keep_bars: int | None = None) -> int:
+        """每只股票只留最近 `keep_bars` 根日 K（默认 400）。返回删了多少行。"""
+        from . import api
+        return api.prune_kline(self, keep_bars)
 
     def check_online(self, domain: str, symbol: str, need=None) -> None:
         """联网前的最后一道闸。盘中（且未放行）→ 抛 `MarketOpenError`。
@@ -232,6 +237,20 @@ def preflight(*, allow_intraday: bool | None = None,
 
     # ---- 闸 5 的前半：日历必须能加载（闸 1 依赖它）----
     cal = TradingCalendar.load(cfg.calendar_path)
+
+    # ---- 闸 5 的后半：日历末端不能落后于今天太久 ----
+    # 日历是**全局上限**：`start_for_bars`、`on_or_after`、缺口语义全按它算。
+    # 它落后时的症状极隐蔽 —— 不会报错，只会让 `missing_segments` 算不出增量、
+    # 退化成"每只票整段重取"，跑得慢但看起来一切正常（2026-11-15 实测：
+    # 日历停在 11-13、K 线也停在 11-13，两边自锁，每天重下 129 万行）。
+    # 所以这里只提醒、不阻断：读库不需要新日历，需要取数的人自然会看到这行字。
+    try:
+        lag = (now.date() - dt.date.fromisoformat(cal.end)).days
+    except (TypeError, ValueError):
+        lag = 0
+    if lag > 3:
+        log.warning("交易日历停在 %s（落后 %d 天）：增量补数会退化成整段重取。"
+                    "请先跑 `python -m stock_data_fetch.build_calendar`", cal.end, lag)
 
     # ---- 闸 1 盘中：只标记，不拦启动 ----
     intraday = is_market_open(now, cal, cfg.market_open, cfg.market_close)

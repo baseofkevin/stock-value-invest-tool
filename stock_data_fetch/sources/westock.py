@@ -49,7 +49,7 @@ from pathlib import Path
 
 from ..errors import EmptyResult, SourceUnavailable
 from ..need import Need
-from .base import Got
+from .base import BatchError, Got
 from .mcp import McpClient, read_token_file
 
 log = logging.getLogger("stock_data_fetch.westock")
@@ -66,8 +66,27 @@ TOKEN_URL = (os.environ.get("STOCKHUB_WESTOCK_TOKEN_URL")
              or "https://stockbuddy.qq.com/cgi/cgi-bin/openai/mcp/oauth/token")
 
 BATCH = 40
-"""单次最多几只。实测 150 只也能回，但一批 150 只的响应体很大、限额也吃得猛，
-拿 40 换"失败时只重取 40 只"，比一次拿满更划算。"""
+"""单次最多几只（全量回补用）。实测 150 只也能回，但一批 150 只的响应体很大、限额也吃得猛，
+拿 40 换"失败时只重取 40 只"，比一次拿满更划算。
+
+**增量时放宽到 `DELTA_BATCH`**（2026-11-15）：增量补新每只只回 1~3 行，单请求体积小一个量级，
+可以一次带更多码。原版 kline-screen-tool 的实测值是「全量 20 只/批、增量 60 只/批」
+（`params.py:9,20`，注释：「服务端吞吐约 600 只/分钟，20 只/批贴着这个上限最稳」）。
+"""
+
+DELTA_BATCH = 60
+"""增量补新（`need.points` 很小）时的单批只数。见 `BATCH` 的说明。"""
+
+
+def batch_size(need: Need | None) -> int:
+    """按本次要取的根数选批量：只补几天就放大到 60，整段回补仍用 40。
+
+    阈值取 10 根：日增量只补 1–3 根，补洞通常也在一两周内；超过 10 根就说明这次是
+    "回补一整段"（首次建库、换口径、或断更很久），响应体会随根数线性变大，
+    这时回到 40 只/批更稳。实测 20 只 × 6 根 = 120 行，一批 0.6 秒。
+    """
+    points = int(getattr(need, "points", 0) or 0)
+    return DELTA_BATCH if 0 < points <= 10 else BATCH
 
 FIN_FIELDS = (
     # 利润表（income）：累计 / 单季 / TTM 三套并列，全部是上游原值
@@ -288,8 +307,9 @@ def _kline(codes: list[str], need: Need) -> Got:
     end = need.end or ""
     # 与 tencent 适配器同款：多要 20 根给 min_bars 门槛留缓冲
     limit = max(1, int(need.points or 300) + 20)
-    for i in range(0, len(codes), BATCH):
-        chunk = codes[i:i + BATCH]
+    bsz = batch_size(need)                  # 全量 40 / 增量 60，见 BATCH 的说明
+    for i in range(0, len(codes), bsz):
+        chunk = codes[i:i + bsz]
         if len(chunk) == 1:
             d = call("data_kline", {"code": chunk[0], "start": start, "end": end,
                                     "period": "day", "limit": limit})
@@ -302,11 +322,19 @@ def _kline(codes: list[str], need: Need) -> Got:
             if d is None:
                 raise EmptyResult("data_kline 上游多次未返回数据（call 重试耗尽）")
             blocks = (d.get("data") or []) if isinstance(d, dict) else []
+            # 上游自报的**逐只**失败必须进 `got.errors`。
+            # 不写的话 `router._fetch_with_retry` 永远看不到"哪几只缺"（它的重试起点是
+            # `got.failed_symbols`，由 `errors[]` 派生），组级重试成了死代码；
+            # `_pull` 的 `if got.errors: raise PartialData` 也永远不成立。
             for err in (d.get("errors") or []):
                 sym = err.get("symbol")
-                if sym:
-                    log.info("westock data_kline %s: %s", sym,
-                             err.get("message") or err)
+                if not sym:
+                    continue
+                code = str(err.get("code") or "BATCH_ERROR")
+                msg = str(err.get("message") or err)
+                log.info("westock data_kline %s: %s", sym, msg)
+                got.errors.append(BatchError([sym], code=code, message=msg))
+
         seen = set()
         for blk in blocks:
             sym = blk.get("symbol") or ""

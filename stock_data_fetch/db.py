@@ -89,7 +89,7 @@ def check_version(conn: sqlite3.Connection, expected: int = SCHEMA_VERSION) -> N
             got=cur, want=expected)
 
 
-AUTO_UPGRADE: set[tuple[int, int]] = {(1, 2), (2, 3), (3, 4), (4, 5)}
+AUTO_UPGRADE: set[tuple[int, int]] = {(1, 2), (2, 3), (3, 4), (4, 5), (5, 6)}
 """允许**自动**迁移的单步版本对。空集以外每加一条都要能说清"为什么它是安全的"。
 
 **这里登记的是"一步"。** 从 v1 直接升到 v3 不需要额外登记 `(1,3)`——
@@ -126,6 +126,46 @@ SQLite 加列是原地操作，不重建表、不拷数据，比 `(2,3)` 那次�
 """
 
 
+def _sql_statements(sql: str) -> list[str]:
+    """把一段 DDL 脚本拆成单条语句。
+
+    **为什么不能用 `conn.executescript()`**（2026-11-15 实测）：`executescript` 在
+    Python 3.13 上会**先隐式 COMMIT 掉挂起的事务**，然后逐条在自动提交模式下执行。
+    于是 `upgrade()` 里"整个升级包在一个事务里"这句承诺是假的：外面 `tx()` 包着的
+    `BEGIN IMMEDIATE` 被它悄悄提交，退出 `tx()` 时 `COMMIT` 直接抛
+    `cannot commit - no transaction is active`。更糟的是迁移本身变成非原子的：
+    中途崩在 `DROP TABLE` 与 `RENAME` 之间，数据就停在半迁移状态。
+
+    `schema.sql` 是纯 DDL（无触发器、无 `BEGIN...END`），每句以行尾 `;` 结束，
+    所以按行累积即可。整行注释丢弃；行尾 `--` 注释先切掉再判断是否结束。
+
+    **跳过的两类语句**：
+    - `PRAGMA user_version`：版本号由 `upgrade()` 显式设置，免得脚本里的值覆盖目标版本；
+    - 其余 `PRAGMA` 全部跳过。`schema.sql` 头部那几条是**建库期**设置，其中
+      `synchronous` / `journal_mode` / `page_size` / `auto_vacuum` 在事务里改会直接报错
+      （`Safety level may not be changed inside a transaction`——实测就是这么炸的），
+      而且对老库本来就改不动：连接级的几条由 `db.connect()` 每次落实，
+      `journal_mode` 已经持久化在库文件里。重放它们只有害没有益。
+    """
+    out: list[str] = []
+    buf: list[str] = []
+    for raw in sql.splitlines():
+        code = raw.split("--", 1)[0].rstrip()
+        if not code.strip():
+            continue
+        buf.append(raw)
+        if code.endswith(";"):
+            stmt = "\n".join(buf).strip()
+            buf = []
+            if stmt and not stmt.upper().startswith("PRAGMA"):
+                out.append(stmt)
+    if buf:
+        tail = "\n".join(buf).strip()
+        if tail and not tail.upper().startswith("PRAGMA"):
+            out.append(tail)
+    return out
+
+
 def _rebuild_snapshot(conn: sqlite3.Connection) -> None:
     """v2 → v3：重建 `snapshot`，把 `gbalance` / `gcashflow` 加进 CHECK。
 
@@ -142,7 +182,9 @@ def _rebuild_snapshot(conn: sqlite3.Connection) -> None:
                        ).fetchone()
     if row is None or "gcashflow" in (row[0] or ""):
         return
-    conn.executescript("""
+    # 逐条 execute，不用 executescript：它会隐式提交，把 `upgrade()` 的事务边界
+    # 打穿（见 `_sql_statements()` 的说明）。这五句本来就是一步，必须同进同出。
+    for stmt in _sql_statements("""
         CREATE TABLE snapshot_new (
           symbol  TEXT NOT NULL,
           domain  TEXT NOT NULL CHECK (domain IN ('mainop','consensus','rating',
@@ -156,8 +198,8 @@ def _rebuild_snapshot(conn: sqlite3.Connection) -> None:
         INSERT INTO snapshot_new(symbol,domain,as_of,payload,src,updated_at)
             SELECT symbol,domain,as_of,payload,src,updated_at FROM snapshot;
         DROP TABLE snapshot;
-        ALTER TABLE snapshot_new RENAME TO snapshot;
-    """)
+        ALTER TABLE snapshot_new RENAME TO snapshot;"""):
+        conn.execute(stmt)
 
 
 def _add_stock_columns(conn: sqlite3.Connection) -> None:
@@ -191,9 +233,25 @@ def _add_stock_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE stock ADD COLUMN {col} TEXT")
 
 
+def _drop_kline_date_index(conn: sqlite3.Connection) -> None:
+    """v5 → v6：删掉 `ix_kline_date`（实测 33 MB，占库体积 22%，零查询使用）。
+
+    这条索引是 v1 时"给按日扫全市场预留"的（见 `schema.sql` 旧注释），但横截面
+    查询全部走 `scan` 表，`kline` 侧只有"按 symbol 取一段"，主键 `(symbol, date)`
+    已经聚簇够用。实测 122 万行时它是 33.2 MB，而 `shared.db` 总共 153 MB。
+
+    真需要按日扫全市场时，临时建一条再删也比常驻划算——那种查询一天最多几次，
+    而这条索引是每次写入都要维护的。
+
+    **可重入**：`DROP INDEX IF EXISTS`，重跑无害；表不存在也无害。
+    """
+    conn.execute("DROP INDEX IF EXISTS ix_kline_date")
+
+
 UPGRADE_STEPS: dict[tuple[int, int], object] = {
     (2, 3): _rebuild_snapshot,
     (3, 4): _add_stock_columns,
+    (5, 6): _drop_kline_date_index,
 }
 """需要"额外动作"的版本升级。不在这张表里的版本对只重放 `schema.sql`。"""
 
@@ -218,6 +276,12 @@ def upgrade(conn: sqlite3.Connection, schema_path: Path | str,
 
     整个升级包在一个事务里：中途崩了库还停在旧版本，重跑一次即可
     （`UPGRADE_STEPS` 的每一步都是可重入的）。
+
+    **原子性在 2026-11-15 才真正做到。** 原来靠 `conn.executescript()`，而它会在
+    Python 3.13 上先隐式 COMMIT 掉挂起事务、再逐条自动提交——于是
+    "整个升级包在一个事务里"是假的，且外面套着 `db.tx()` 时 COMMIT 必然抛
+    `cannot commit - no transaction is active`（实测撞到）。现在改成
+    `_sql_statements()` 拆句 + 逐条 `execute()`，并自己在没有外层事务时开一个。
     """
     p = Path(schema_path)
     if not p.exists():
@@ -225,13 +289,37 @@ def upgrade(conn: sqlite3.Connection, schema_path: Path | str,
 
     if from_version is None:
         from_version = schema_version(conn)
-    for step_from in range(from_version, to_version):
-        action = UPGRADE_STEPS.get((step_from, step_from + 1))
-        if action is not None:
-            action(conn)
 
-    conn.executescript(p.read_text(encoding="utf-8"))
-    conn.execute(f"PRAGMA user_version = {to_version}")
+    own_tx = not conn.in_transaction
+    if own_tx:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        for step_from in range(from_version, to_version):
+            action = UPGRADE_STEPS.get((step_from, step_from + 1))
+            if action is not None:
+                action(conn)
+        for stmt in _sql_statements(p.read_text(encoding="utf-8")):
+            conn.execute(stmt)
+        conn.execute(f"PRAGMA user_version = {to_version}")
+        if own_tx:
+            conn.execute("COMMIT")
+    except BaseException:
+        if own_tx:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+        raise
+
+    # `PRAGMA journal_mode` 改不了在事务里（见 `_sql_statements()`），所以放在提交之后
+    # 补一次。非 WAL 的老库多半是绕过 `create_db()` 建的（手工 `sqlite3 < ddl` 之类），
+    # 补上之后闸 4 才不会在"刚迁移完"的库上误报。失败不管：闸 4 会给出准确报错。
+    if own_tx:
+        try:
+            if str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower() != "wal":
+                conn.execute("PRAGMA journal_mode = WAL")
+        except sqlite3.Error:
+            pass
     return to_version
 
 
@@ -251,7 +339,14 @@ def can_upgrade(from_version: int, to_version: int = SCHEMA_VERSION) -> bool:
 
 @contextmanager
 def tx(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
-    """写事务。`BEGIN IMMEDIATE` 立刻拿写锁，避免读→写升级的死锁。"""
+    """写事务。`BEGIN IMMEDIATE` 立刻拿写锁，避免读→写升级的死锁。
+
+    **COMMIT 失败要回滚**（2026-11-15）：原来 `conn.execute("COMMIT")` 裸着，
+    一旦它抛（`cannot commit - no transaction is active` / 锁超时），事务就挂在
+    半开状态，后续任何 `tx()` 都会撞 `cannot start a transaction within a transaction`。
+    实测触发场景：`db.upgrade()` 里的 `executescript` 会隐式提交，外面这层
+    `tx()` 的 COMMIT 就必然失败（见 `upgrade()` 的说明）。
+    """
     conn.execute("BEGIN IMMEDIATE")
     try:
         yield conn
@@ -261,7 +356,14 @@ def tx(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
         except sqlite3.Error:
             pass
         raise
-    conn.execute("COMMIT")
+    try:
+        conn.execute("COMMIT")
+    except sqlite3.Error:
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        raise
 
 
 # ---------------------------------------------------------------- meta

@@ -11,7 +11,7 @@ import sys
 
 MODULES = ("test_gates", "test_coverage", "test_fetch", "test_factor", "test_westock",
            "test_doctor", "test_probe", "test_repair", "test_scan", "test_tencent",
-           "test_annotation")
+           "test_annotation", "test_bulk")
 
 
 def main() -> int:

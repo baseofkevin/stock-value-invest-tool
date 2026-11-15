@@ -70,7 +70,7 @@ v2.0 改的只是「数据从哪来」，不是「怎么选」。
 | 「二级行业」列 | 展示列 | 共享库 `stock.industry` 只有上游一级口径 |
 | 整套 volume 单位换算（`unit_from_prefix` / `infer_unit` / `volume_to_shares`） | 修「主板给手、科创板给股」的两可 | `kline.volume` 入库前已统一成**股**；留着反而误导后来人以为还要换 |
 | `evaluation/`（前向评估 + 历史下载） | 评估名单的 5/10/20 日超额 | 不在本次重建范围；且评估要的是「全市场日线」，由共享库的 `kline`/`scan` 域天然支持，将来单写 |
-| 自动清理 `dbclean` | 删 `database/` 里过期的中间缓存 | 中间数据在库里，GC 归 hub（`scan` 只留 120 天，kline 有滚动深度） |
+| 自动清理 `dbclean` | 删 `database/` 里过期的中间缓存 | 中间数据在库里，GC 归 hub：`scan` 只留 30 天、`kline` 每只只留最近 400 根（`hub.prune_scan()` / `hub.prune_kline()`，每次跑完自动做） |
 
 ### 1.4 一字没动的部分
 

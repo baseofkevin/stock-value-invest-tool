@@ -1,6 +1,6 @@
 -- ============================================================================
 -- schema.sql — 按需共享数据层（lazy hub）建库脚本
--- 版本：user_version = 5
+-- 版本：user_version = 6
 -- 生成依据：`讨论纪要-共享数据层.md`（v16）
 -- 用法：sqlite3 shared.db < schema.sql
 --
@@ -266,8 +266,9 @@ CREATE TABLE IF NOT EXISTS meta (
 ) WITHOUT ROWID;
 
 -- ---------------------------------------------------------------- 索引
--- kline 的主键已按 (symbol, date) 聚簇；额外给"按日扫全市场"留一条。
-CREATE INDEX IF NOT EXISTS ix_kline_date   ON kline(date);
+-- v6 删掉了 `ix_kline_date`（曾占 153MB 库的 22%，而全仓没有任何查询用到它：
+-- 横截面走 `scan`，kline 侧只有"按 symbol 取一段"，主键已按 (symbol,date) 聚簇）。
+-- 真要按日扫全市场，临时建索引再删比常驻划算——常驻的代价是每次写入都要维护它。
 -- 财报按报告期反查（"哪些股票缺 2023 年报"）。
 CREATE INDEX IF NOT EXISTS ix_finance_period ON finance(period);
 -- 修订记录按股票+期查。
@@ -298,7 +299,7 @@ CREATE TABLE IF NOT EXISTS annotation (
 ) WITHOUT ROWID;
 
 -- ---------------------------------------------------------------- 初始化
-PRAGMA user_version = 5;
+PRAGMA user_version = 6;
 
 INSERT OR IGNORE INTO meta(key, value) VALUES
   ('schema_version', '2'),
