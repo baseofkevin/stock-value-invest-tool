@@ -1,0 +1,27 @@
+# 数据与产物：不进版本库
+shared.db
+shared.db-wal
+shared.db-shm
+*.db
+*.db-wal
+*.db-shm
+backup/
+
+# 运行时状态
+state/
+output/
+.runlog/
+.testtmp/
+.archive-tmp/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 编辑器
+.vscode/
+.idea/

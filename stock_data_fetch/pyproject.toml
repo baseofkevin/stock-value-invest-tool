@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stock_data_fetch"
+version = "0.1.0"
+description = "按需取数的共享 SQLite 数据层：给 stock_quality_screen / stock_cycle_elastic 用"
+requires-python = ">=3.11"
+dependencies = []
+# 主链路**只用标准库**。这是硬约束，不是洁癖：所有上层工具都挂在上面，
+# 不能因为 pandas 升个小版本就让整个数据层起不来（SOURCES §10）。
+# 三个开源源（baostock / akshare / efinance）放进 optional：
+[project.optional-dependencies]
+baostock = ["baostock==0.8.9"]
+akshare = ["akshare"]
+efinance = ["efinance"]
+
+[project.scripts]
+# 体检 CLI（第 6 步）。命令名与包名一致，不加前后缀。
+# stock_data_fetch_doctor = "stock_data_fetch.doctor:main"
+
+[tool.setuptools]
+# **扁平布局**：`stock_data_fetch/` 这个目录既是项目根（放本文件），又是包
+# （放 `__init__.py`）。所以要把包的根重映射到 `.`，否则 setuptools 会去
+# 找 `stock_data_fetch/stock_data_fetch/`。
+packages = ["stock_data_fetch", "stock_data_fetch.sources", "stock_data_fetch.tests"]
+package-dir = { stock_data_fetch = "." }
+
+[tool.setuptools.package-data]
+# DDL 必须在包里，`create_db()` 才找得到（config.PKG / "schema.sql"）
+stock_data_fetch = ["schema.sql"]

@@ -1,0 +1,429 @@
+{
+ "code": "600036",
+ "name": "招商银行",
+ "industry": "银行",
+ "calls": {
+  "data_finance": {
+   "ok": true,
+   "data": {
+    "code": 0,
+    "msg": "success",
+    "data": {
+     "sh600036": {
+      "income": [
+       {
+        "EndDate": "2016-12-31",
+        "OperatingRevenue_Q": "70000000000.00",
+        "OperatingProfit_Q": "29400000000.00"
+       },
+       {
+        "EndDate": "2017-03-31",
+        "OperatingRevenue_Q": "70560000000.00",
+        "OperatingProfit_Q": "29635200000.00"
+       },
+       {
+        "EndDate": "2017-06-30",
+        "OperatingRevenue_Q": "71124480000.00",
+        "OperatingProfit_Q": "29872281600.00"
+       },
+       {
+        "EndDate": "2017-09-30",
+        "OperatingRevenue_Q": "71693475840.00",
+        "OperatingProfit_Q": "30111259852.80"
+       },
+       {
+        "EndDate": "2017-12-31",
+        "OperatingRevenue_Q": "72267023646.72",
+        "OperatingProfit_Q": "30352149931.62"
+       },
+       {
+        "EndDate": "2018-03-31",
+        "OperatingRevenue_Q": "72845159835.89",
+        "OperatingProfit_Q": "30594967131.08"
+       },
+       {
+        "EndDate": "2018-06-30",
+        "OperatingRevenue_Q": "73427921114.58",
+        "OperatingProfit_Q": "30839726868.12"
+       },
+       {
+        "EndDate": "2018-09-30",
+        "OperatingRevenue_Q": "74015344483.50",
+        "OperatingProfit_Q": "31086444683.07"
+       },
+       {
+        "EndDate": "2018-12-31",
+        "OperatingRevenue_Q": "74607467239.37",
+        "OperatingProfit_Q": "31335136240.53"
+       },
+       {
+        "EndDate": "2019-03-31",
+        "OperatingRevenue_Q": "75204326977.28",
+        "OperatingProfit_Q": "31585817330.46"
+       },
+       {
+        "EndDate": "2019-06-30",
+        "OperatingRevenue_Q": "75805961593.10",
+        "OperatingProfit_Q": "31838503869.10"
+       },
+       {
+        "EndDate": "2019-09-30",
+        "OperatingRevenue_Q": "76412409285.84",
+        "OperatingProfit_Q": "32093211900.05"
+       },
+       {
+        "EndDate": "2019-12-31",
+        "OperatingRevenue_Q": "77023708560.13",
+        "OperatingProfit_Q": "32349957595.25"
+       },
+       {
+        "EndDate": "2020-03-31",
+        "OperatingRevenue_Q": "77639898228.61",
+        "OperatingProfit_Q": "32608757256.02"
+       },
+       {
+        "EndDate": "2020-06-30",
+        "OperatingRevenue_Q": "78261017414.44",
+        "OperatingProfit_Q": "32869627314.06"
+       },
+       {
+        "EndDate": "2020-09-30",
+        "OperatingRevenue_Q": "78887105553.76",
+        "OperatingProfit_Q": "33132584332.58"
+       },
+       {
+        "EndDate": "2020-12-31",
+        "OperatingRevenue_Q": "79518202398.19",
+        "OperatingProfit_Q": "33397645007.24"
+       },
+       {
+        "EndDate": "2021-03-31",
+        "OperatingRevenue_Q": "80154348017.37",
+        "OperatingProfit_Q": "33664826167.30"
+       },
+       {
+        "EndDate": "2021-06-30",
+        "OperatingRevenue_Q": "80795582801.51",
+        "OperatingProfit_Q": "33934144776.63"
+       },
+       {
+        "EndDate": "2021-09-30",
+        "OperatingRevenue_Q": "81441947463.92",
+        "OperatingProfit_Q": "34205617934.85"
+       },
+       {
+        "EndDate": "2021-12-31",
+        "OperatingRevenue_Q": "82093483043.63",
+        "OperatingProfit_Q": "34479262878.33"
+       },
+       {
+        "EndDate": "2022-03-31",
+        "OperatingRevenue_Q": "82750230907.98",
+        "OperatingProfit_Q": "34755096981.35"
+       },
+       {
+        "EndDate": "2022-06-30",
+        "OperatingRevenue_Q": "83412232755.25",
+        "OperatingProfit_Q": "35033137757.20"
+       },
+       {
+        "EndDate": "2022-09-30",
+        "OperatingRevenue_Q": "84079530617.29",
+        "OperatingProfit_Q": "35313402859.26"
+       },
+       {
+        "EndDate": "2022-12-31",
+        "OperatingRevenue_Q": "84752166862.23",
+        "OperatingProfit_Q": "35595910082.14"
+       },
+       {
+        "EndDate": "2023-03-31",
+        "OperatingRevenue_Q": "85430184197.12",
+        "OperatingProfit_Q": "35880677362.79"
+       },
+       {
+        "EndDate": "2023-06-30",
+        "OperatingRevenue_Q": "86113625670.70",
+        "OperatingProfit_Q": "36167722781.69"
+       },
+       {
+        "EndDate": "2023-09-30",
+        "OperatingRevenue_Q": "86802534676.07",
+        "OperatingProfit_Q": "36457064563.95"
+       },
+       {
+        "EndDate": "2023-12-31",
+        "OperatingRevenue_Q": "87496954953.48",
+        "OperatingProfit_Q": "36748721080.46"
+       },
+       {
+        "EndDate": "2024-03-31",
+        "OperatingRevenue_Q": "88196930593.10",
+        "OperatingProfit_Q": "37042710849.10"
+       },
+       {
+        "EndDate": "2024-06-30",
+        "OperatingRevenue_Q": "88902506037.85",
+        "OperatingProfit_Q": "37339052535.90"
+       },
+       {
+        "EndDate": "2024-09-30",
+        "OperatingRevenue_Q": "89613726086.15",
+        "OperatingProfit_Q": "37637764956.18"
+       },
+       {
+        "EndDate": "2024-12-31",
+        "OperatingRevenue_Q": "90330635894.84",
+        "OperatingProfit_Q": "37938867075.83"
+       },
+       {
+        "EndDate": "2025-03-31",
+        "OperatingRevenue_Q": "91053280982.00",
+        "OperatingProfit_Q": "38242378012.44"
+       },
+       {
+        "EndDate": "2025-06-30",
+        "OperatingRevenue_Q": "91781707229.86",
+        "OperatingProfit_Q": "38548317036.54"
+       },
+       {
+        "EndDate": "2025-09-30",
+        "OperatingRevenue_Q": "92515960887.69",
+        "OperatingProfit_Q": "38856703572.83"
+       },
+       {
+        "EndDate": "2025-12-31",
+        "OperatingRevenue_Q": "93256088574.80",
+        "OperatingProfit_Q": "39167557201.41"
+       },
+       {
+        "EndDate": "2026-03-31",
+        "OperatingRevenue_Q": "94002137283.39",
+        "OperatingProfit_Q": "39480897659.03"
+       },
+       {
+        "EndDate": "2026-06-30",
+        "OperatingRevenue_Q": "94754154381.66",
+        "OperatingProfit_Q": "39796744840.30"
+       },
+       {
+        "EndDate": "2026-09-30",
+        "OperatingRevenue_Q": "95512187616.71",
+        "OperatingProfit_Q": "40115118799.02"
+       }
+      ],
+      "balance": [
+       {
+        "EndDate": "2016-12-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2017-03-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2017-06-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2017-09-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2017-12-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2018-03-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2018-06-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2018-09-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2018-12-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2019-03-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2019-06-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2019-09-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2019-12-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2020-03-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2020-06-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2020-09-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2020-12-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2021-03-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2021-06-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2021-09-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2021-12-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2022-03-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2022-06-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2022-09-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2022-12-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2023-03-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2023-06-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2023-09-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2023-12-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2024-03-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2024-06-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2024-09-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2024-12-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2025-03-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2025-06-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2025-09-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2025-12-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2026-03-31",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2026-06-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       },
+       {
+        "EndDate": "2026-09-30",
+        "TotalFixedAsset": "100000000000.00",
+        "TConstruInProcess": "2000000000.00"
+       }
+      ]
+     }
+    }
+   }
+  },
+  "data_profile": {
+   "ok": true,
+   "data": {
+    "name": "招商银行",
+    "industry": "银行"
+   }
+  }
+ }
+}

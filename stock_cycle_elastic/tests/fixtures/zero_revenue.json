@@ -1,0 +1,317 @@
+{
+ "code": "600001",
+ "name": "零营收测试",
+ "industry": "测试",
+ "calls": {
+  "data_finance": {
+   "ok": true,
+   "data": {
+    "code": 0,
+    "msg": "success",
+    "data": {
+     "sh600001": {
+      "income": [
+       {
+        "EndDate": "2020-12-31",
+        "OperatingRevenue_Q": "1000000000.00",
+        "OperatingCost_Q": "740000000.00",
+        "OperatingProfit_Q": "300000000.00"
+       },
+       {
+        "EndDate": "2021-03-31",
+        "OperatingRevenue_Q": "1010000000.00",
+        "OperatingCost_Q": "707000000.00",
+        "OperatingProfit_Q": "303000000.00"
+       },
+       {
+        "EndDate": "2021-06-30",
+        "OperatingRevenue_Q": "1020100000.00",
+        "OperatingCost_Q": "754874000.00",
+        "OperatingProfit_Q": "306030000.00"
+       },
+       {
+        "EndDate": "2021-09-30",
+        "OperatingRevenue_Q": "1030301000.00",
+        "OperatingCost_Q": "721210700.00",
+        "OperatingProfit_Q": "309090300.00"
+       },
+       {
+        "EndDate": "2021-12-31",
+        "OperatingRevenue_Q": "1040604010.00",
+        "OperatingCost_Q": "770046967.40",
+        "OperatingProfit_Q": "312181203.00"
+       },
+       {
+        "EndDate": "2022-03-31",
+        "OperatingRevenue_Q": "1051010050.10",
+        "OperatingCost_Q": "735707035.07",
+        "OperatingProfit_Q": "315303015.03"
+       },
+       {
+        "EndDate": "2022-06-30",
+        "OperatingRevenue_Q": "1061520150.60",
+        "OperatingCost_Q": "785524911.44",
+        "OperatingProfit_Q": "318456045.18"
+       },
+       {
+        "EndDate": "2022-09-30",
+        "OperatingRevenue_Q": "1072135352.11",
+        "OperatingCost_Q": "750494746.47",
+        "OperatingProfit_Q": "321640605.63"
+       },
+       {
+        "EndDate": "2022-12-31",
+        "OperatingRevenue_Q": "1082856705.63",
+        "OperatingCost_Q": "801313962.16",
+        "OperatingProfit_Q": "324857011.69"
+       },
+       {
+        "EndDate": "2023-03-31",
+        "OperatingRevenue_Q": "1093685272.68",
+        "OperatingCost_Q": "765579690.88",
+        "OperatingProfit_Q": "328105581.81"
+       },
+       {
+        "EndDate": "2023-06-30",
+        "OperatingRevenue_Q": "0.00",
+        "OperatingCost_Q": "0.00",
+        "OperatingProfit_Q": "0.00"
+       },
+       {
+        "EndDate": "2023-09-30",
+        "OperatingRevenue_Q": "1115668346.67",
+        "OperatingCost_Q": "780967842.67",
+        "OperatingProfit_Q": "334700504.00"
+       },
+       {
+        "EndDate": "2023-12-31",
+        "OperatingRevenue_Q": "1126825030.13",
+        "OperatingCost_Q": "833850522.30",
+        "OperatingProfit_Q": "338047509.04"
+       },
+       {
+        "EndDate": "2024-03-31",
+        "OperatingRevenue_Q": "1138093280.43",
+        "OperatingCost_Q": "796665296.30",
+        "OperatingProfit_Q": "341427984.13"
+       },
+       {
+        "EndDate": "2024-06-30",
+        "OperatingRevenue_Q": "1149474213.24",
+        "OperatingCost_Q": "850610917.80",
+        "OperatingProfit_Q": "344842263.97"
+       },
+       {
+        "EndDate": "2024-09-30",
+        "OperatingRevenue_Q": "1160968955.37",
+        "OperatingCost_Q": "812678268.76",
+        "OperatingProfit_Q": "348290686.61"
+       },
+       {
+        "EndDate": "2024-12-31",
+        "OperatingRevenue_Q": "1172578644.92",
+        "OperatingCost_Q": "867708197.24",
+        "OperatingProfit_Q": "351773593.48"
+       },
+       {
+        "EndDate": "2025-03-31",
+        "OperatingRevenue_Q": "1184304431.37",
+        "OperatingCost_Q": "829013101.96",
+        "OperatingProfit_Q": "355291329.41"
+       },
+       {
+        "EndDate": "2025-06-30",
+        "OperatingRevenue_Q": "1196147475.69",
+        "OperatingCost_Q": "885149132.01",
+        "OperatingProfit_Q": "358844242.71"
+       },
+       {
+        "EndDate": "2025-09-30",
+        "OperatingRevenue_Q": "1208108950.44",
+        "OperatingCost_Q": "845676265.31",
+        "OperatingProfit_Q": "362432685.13"
+       },
+       {
+        "EndDate": "2025-12-31",
+        "OperatingRevenue_Q": "1220190039.95",
+        "OperatingCost_Q": "902940629.56",
+        "OperatingProfit_Q": "366057011.98"
+       },
+       {
+        "EndDate": "2026-03-31",
+        "OperatingRevenue_Q": "1232391940.35",
+        "OperatingCost_Q": "862674358.24",
+        "OperatingProfit_Q": "369717582.10"
+       },
+       {
+        "EndDate": "2026-06-30",
+        "OperatingRevenue_Q": "1244715859.75",
+        "OperatingCost_Q": "921089736.22",
+        "OperatingProfit_Q": "373414757.93"
+       },
+       {
+        "EndDate": "2026-09-30",
+        "OperatingRevenue_Q": "1257163018.35",
+        "OperatingCost_Q": "880014112.84",
+        "OperatingProfit_Q": "377148905.50"
+       }
+      ],
+      "balance": [
+       {
+        "EndDate": "2020-12-31",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2021-03-31",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2021-06-30",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2021-09-30",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2021-12-31",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2022-03-31",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2022-06-30",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2022-09-30",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2022-12-31",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2023-03-31",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2023-06-30",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2023-09-30",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2023-12-31",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2024-03-31",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2024-06-30",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2024-09-30",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2024-12-31",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2025-03-31",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2025-06-30",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2025-09-30",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2025-12-31",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2026-03-31",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2026-06-30",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       },
+       {
+        "EndDate": "2026-09-30",
+        "TotalFixedAsset": "500000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "100000000.00"
+       }
+      ]
+     }
+    }
+   }
+  },
+  "data_profile": {
+   "ok": true,
+   "data": {
+    "name": "零营收测试",
+    "industry": "测试"
+   }
+  }
+ }
+}

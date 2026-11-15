@@ -1,0 +1,173 @@
+{
+ "code": "301101",
+ "name": "明月镜片",
+ "industry": "轻工制造",
+ "calls": {
+  "data_finance": {
+   "ok": true,
+   "data": {
+    "code": 0,
+    "msg": "success",
+    "data": {
+     "sz301101": {
+      "income": [
+       {
+        "EndDate": "2023-12-31",
+        "OperatingRevenue_Q": "5000000000.00",
+        "OperatingCost_Q": "4000000000.00",
+        "OperatingProfit_Q": "1000000000.00"
+       },
+       {
+        "EndDate": "2024-03-31",
+        "OperatingRevenue_Q": "5250000000.00",
+        "OperatingCost_Q": "4221000000.00",
+        "OperatingProfit_Q": "1029000000.00"
+       },
+       {
+        "EndDate": "2024-06-30",
+        "OperatingRevenue_Q": "5512500000.00",
+        "OperatingCost_Q": "4454100000.00",
+        "OperatingProfit_Q": "1058400000.00"
+       },
+       {
+        "EndDate": "2024-09-30",
+        "OperatingRevenue_Q": "5788125000.00",
+        "OperatingCost_Q": "4699957500.00",
+        "OperatingProfit_Q": "1088167500.00"
+       },
+       {
+        "EndDate": "2024-12-31",
+        "OperatingRevenue_Q": "6077531250.00",
+        "OperatingCost_Q": "4959265500.00",
+        "OperatingProfit_Q": "1118265750.00"
+       },
+       {
+        "EndDate": "2025-03-31",
+        "OperatingRevenue_Q": "6381407812.50",
+        "OperatingCost_Q": "5232754406.25",
+        "OperatingProfit_Q": "1148653406.25"
+       },
+       {
+        "EndDate": "2025-06-30",
+        "OperatingRevenue_Q": "6700478203.13",
+        "OperatingCost_Q": "5521194039.38",
+        "OperatingProfit_Q": "1179284163.75"
+       },
+       {
+        "EndDate": "2025-09-30",
+        "OperatingRevenue_Q": "7035502113.28",
+        "OperatingCost_Q": "5825395749.80",
+        "OperatingProfit_Q": "1210106363.48"
+       },
+       {
+        "EndDate": "2025-12-31",
+        "OperatingRevenue_Q": "7387277218.95",
+        "OperatingCost_Q": "6146214646.16",
+        "OperatingProfit_Q": "1241062572.78"
+       },
+       {
+        "EndDate": "2026-03-31",
+        "OperatingRevenue_Q": "7756641079.89",
+        "OperatingCost_Q": "6484551942.79",
+        "OperatingProfit_Q": "1272089137.10"
+       },
+       {
+        "EndDate": "2026-06-30",
+        "OperatingRevenue_Q": "8144473133.89",
+        "OperatingCost_Q": "6841357432.47",
+        "OperatingProfit_Q": "1303115701.42"
+       },
+       {
+        "EndDate": "2026-09-30",
+        "OperatingRevenue_Q": "8551696790.58",
+        "OperatingCost_Q": "7217632091.25",
+        "OperatingProfit_Q": "1334064699.33"
+       }
+      ],
+      "balance": [
+       {
+        "EndDate": "2023-12-31",
+        "TotalFixedAsset": "2000000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "300000000.00"
+       },
+       {
+        "EndDate": "2024-03-31",
+        "TotalFixedAsset": "2000000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "300000000.00"
+       },
+       {
+        "EndDate": "2024-06-30",
+        "TotalFixedAsset": "2000000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "300000000.00"
+       },
+       {
+        "EndDate": "2024-09-30",
+        "TotalFixedAsset": "2000000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "300000000.00"
+       },
+       {
+        "EndDate": "2024-12-31",
+        "TotalFixedAsset": "2000000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "300000000.00"
+       },
+       {
+        "EndDate": "2025-03-31",
+        "TotalFixedAsset": "2000000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "300000000.00"
+       },
+       {
+        "EndDate": "2025-06-30",
+        "TotalFixedAsset": "2000000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "300000000.00"
+       },
+       {
+        "EndDate": "2025-09-30",
+        "TotalFixedAsset": "2000000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "300000000.00"
+       },
+       {
+        "EndDate": "2025-12-31",
+        "TotalFixedAsset": "2000000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "300000000.00"
+       },
+       {
+        "EndDate": "2026-03-31",
+        "TotalFixedAsset": "2000000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "300000000.00"
+       },
+       {
+        "EndDate": "2026-06-30",
+        "TotalFixedAsset": "2000000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "300000000.00"
+       },
+       {
+        "EndDate": "2026-09-30",
+        "TotalFixedAsset": "2000000000.00",
+        "TConstruInProcess": "100000000.00",
+        "ContractLiability": "300000000.00"
+       }
+      ]
+     }
+    }
+   }
+  },
+  "data_profile": {
+   "ok": true,
+   "data": {
+    "name": "明月镜片",
+    "industry": "轻工制造"
+   }
+  }
+ }
+}
