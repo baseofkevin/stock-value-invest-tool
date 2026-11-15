@@ -442,8 +442,14 @@ def _annotate_turnaround(st) -> None:
     turn, turn_failed = None, []
     if final:
         print("      业绩转变标注（finance 域）...")
+        # `periods=44` 不是为了本工具（业绩转变只要 8 期），是为了**别把下游饿死**：
+        # 覆盖率只记 `n`，而 `hit()` 只比 `n >= min_points`。这里是整条流水线里
+        # 第一个碰 `finance` 域的，若只要 20 期，之后 `stock_cycle_elastic` 的判断③
+        # （产能周转率 10 年分位，要 40 个「最近 4 季之和」样本 = 43 期）就会安静地
+        # 退化成 4~5 年分位——报告照出，只是标签悄悄变了。
+        # `min_points` 仍是 20：次新股本来就凑不满，不该因此判死。
         batch = hub.ensure_many("finance", [x["code"] for x in final],
-                                want.finance(S, periods=20, min_points=20))
+                                want.finance(S, periods=44, min_points=20))
         fin = {sym: r.rows for sym, r in batch.ok.items() if r.rows}
         turn_failed = sorted(batch.failed)
         if not fin and turn_failed:

@@ -1223,11 +1223,17 @@ def _decision(q: dict[str, Any], v: dict[str, Any], fatal: list[str],
     qs, vs = q.get("score"), v.get("score")
     if fatal:
         return {"key": "avoid", "label": "回避", "reason": "出现致命风险：" + "；".join(fatal)}
+
+    # **Q 的地板必须先于「缺 V」判定**（2026-11-15 修）。
+    # 原来先看 `vs is None`，于是 Q=25.7 的票（质量已经差到禁止买入）因为缺分析师
+    # 一致预期被判成「数据不足，不下结论」——缺数据反而让结论更宽松，与
+    # `_risk_gate` 里「数据缺失不能变成更保守等于更好」是同一条原则的反面。
+    # 实测本批 38 只里有 10 只是这样被判宽的。
+    if qs is not None and qs < config.QUALITY_HARD_FLOOR:
+        return {"key": "avoid", "label": "回避", "reason": f"质量分 {qs:.1f} 低于 {config.QUALITY_HARD_FLOOR:.0f}，禁止买入"}
+
     if qs is None or vs is None:
         return {"key": "unknown", "label": "数据不足，不下结论", "reason": "质量分或估值分无法计算"}
-
-    if qs < config.QUALITY_HARD_FLOOR:
-        return {"key": "avoid", "label": "回避", "reason": f"质量分 {qs:.1f} 低于 {config.QUALITY_HARD_FLOOR:.0f}，禁止买入"}
 
     # 矩阵在 config.DECISION_MATRIX：先按 Q 落档，再按 V 落格
     result: dict[str, Any] | None = None
