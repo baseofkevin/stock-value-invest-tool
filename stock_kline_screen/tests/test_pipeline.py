@@ -19,7 +19,14 @@
    当周最该入选的票，而报告一句都不提。
 """
 
+
 from __future__ import annotations
+
+# 结果库指到临时目录：本文件被直接跑（不经 tests 包）时也要生效。
+try:
+    from . import _env  # noqa: F401  （作为包导入）
+except ImportError:  # pragma: no cover - 直接跑文件
+    import _env  # noqa: F401
 
 import argparse
 import contextlib
