@@ -15,7 +15,7 @@
     <p class="sub">右上角才是"又波动又敏感"的强周期股。横轴 σ&lt;5pp 且靠左的，多属稳定生意。</p>
     <div class="canvas-wrap"><canvas id="scatter"></canvas></div>
   </div>
-  <div class="chart-box tall">
+  <div class="chart-box rows-lg">
     <h3>产能周转率分位</h3>
     <p class="sub">判断③：产能利用率处在自身十年分位。&lt;40 低位、&gt;60 高位（虚线）。</p>
     <div class="canvas-wrap"><canvas id="position"></canvas></div>
@@ -99,18 +99,26 @@ new Chart(document.getElementById('scatter'), {
   }
 });
 
-const posColor = posL.map(l => l === 'high' ? COLORS.warn : (l === 'low' ? COLORS.info : COLORS.muted));
+// 横着画、按分位从高到低排：30 多只票的名字竖着写会糊成一条黑带，
+// 而且这张图要回答的是"谁在满负荷"，排序比按代码顺序有用。
+const posIdx = pos.map((p, i) => i)
+  .filter(i => pos[i] != null)
+  .sort((a, b) => pos[b] - pos[a]);
+const posColor = posIdx.map(i => posL[i] === 'high' ? COLORS.warn
+  : (posL[i] === 'low' ? COLORS.info : COLORS.muted));
 new Chart(document.getElementById('position'), {
   type: 'bar',
-  data: { labels: name.map((n, i) => `${n}`),
-    datasets: [{data: pos, backgroundColor: posColor, borderRadius: 5}] },
+  data: { labels: posIdx.map(i => name[i]),
+    datasets: [{data: posIdx.map(i => +pos[i].toFixed(1)),
+      backgroundColor: posColor, borderRadius: 5}] },
   options: {
-    maintainAspectRatio: false,
+    maintainAspectRatio: false, indexAxis: 'y',
     plugins: {legend: {display: false},
-      tooltip: {callbacks: {label: c => `${c.raw.y} 分位（${posL[c.dataIndex]}）`}}},
-    scales: {y: {min: 0, max: 100, grid: {color: '#eef2f7'},
+      tooltip: {callbacks: {label: c => `${c.raw.x} 分位（${posL[posIdx[c.dataIndex]]}）`}}},
+    scales: {x: {min: 0, max: 100, grid: {color: '#eef2f7'},
                  title: {display: true, text: '产能周转率分位'}},
-             x: {grid: {display: false}, ticks: {autoSkip: false, maxRotation: 60, font: {size: 10}}}}
+             y: {grid: {display: false},
+                 ticks: {font: {size: 10}, autoSkip: false}}}
   }
 });
 </script>

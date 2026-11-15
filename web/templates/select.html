@@ -44,7 +44,7 @@
           <td class="n">{{ r.pool_turnover_rank|num(1) }}</td>
           <td class="n">{{ r.stars or '—' }}</td>
           <td class="n">{{ r.turnover20|num(2) }}</td>
-          <td class="n">{{ r.launch_date|date or '—' }}</td>
+          <td class="n date">{{ r.launch_date|date or '—' }}</td>
           <td class="n">{{ r.days_since_launch }}</td>
           <td class="n">{{ r.vol_multiple|ratio }}</td>
           <td class="n">{{ r.launch_gain_pct|num(2) }}</td>

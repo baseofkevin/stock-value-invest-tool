@@ -196,7 +196,9 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             top_data = top_row.get("data") or {}
             return render_template(
                 "stock.html", symbol=symbol, name=name, rows=rows, hist=hist,
-                views=top_data.get("views") or [],
+                # views_full 比 views 多出 headline / metrics：单只页那张卡要能
+                # 说清楚"为什么是这个结论"，只有状态词是不够的。
+                views=top_data.get("views_full") or top_data.get("views") or [],
                 extras=top_data.get("extras") or {},
                 gaps=top_data.get("gaps") or [],
                 cyc=(rows.get("cycle") or {}).get("data") or {},

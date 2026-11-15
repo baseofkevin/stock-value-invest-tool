@@ -74,8 +74,16 @@ concl.forEach((c, i) => {
   const k = c || '—';
   (byConcl[k] = byConcl[k] || []).push({x: q[i], y: v[i], name: name[i], code: code[i]});
 });
-const colorOf = c => c.includes('回避') ? 'rgba(180,83,9,.7)'
-  : c.includes('观察') ? 'rgba(29,78,216,.65)' : 'rgba(148,163,184,.75)';
+// 结论颜色必须**固定**，不能按出现顺序分色：同一批数据换个筛选条件就换颜色，
+// 图例就白给了。这里逐条列死，认不出的走灰。
+const COLORS = {
+  '推荐买入': 'rgba(21,128,61,.75)', '可买': 'rgba(22,163,74,.7)',
+  '小仓买入': 'rgba(15,118,110,.7)', '小仓试错': 'rgba(20,184,166,.7)',
+  '观察': 'rgba(29,78,216,.65)', '观察，第二节有信号': 'rgba(2,132,199,.7)',
+  '观察，等待数据完整': 'rgba(99,102,241,.6)',
+  '回避': 'rgba(180,83,9,.75)', '数据不足，不下结论': 'rgba(148,163,184,.8)',
+};
+const colorOf = c => COLORS[c] || 'rgba(148,163,184,.55)';
 
 new Chart(document.getElementById('qv'), {
   type: 'scatter',

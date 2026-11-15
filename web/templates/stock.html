@@ -42,8 +42,14 @@
   <div class="two">
     {% for v in views %}
     <div class="tile">
-      <h3>{{ v[0] }}<span class="chip {{ v[1]|tone }}" style="margin-left:8px">{{ v[1] }}</span></h3>
-      <p class="sub">这是 {{ top.data.date or '' }} 这一天按当时的 K 线/财务算出来的结论块。</p>
+      <h3>{{ v.title or v[0] }}<span class="chip {{ (v.state or v[1])|tone }}" style="margin-left:8px">{{ (v.state or v[1])|cycle_state }}</span></h3>
+      {% if v.subtitle %}<p class="sub">{{ v.subtitle }}</p>{% endif %}
+      {% if v.headline %}<div style="font-size:13px;margin-top:4px">{{ v.headline }}</div>{% endif %}
+      {% if v.metrics %}
+      <table class="kv" style="margin-top:8px"><tbody>
+        {% for m in v.metrics %}<tr><th>{{ m[0] }}</th><td>{{ m[1] }}</td></tr>{% endfor %}
+      </tbody></table>
+      {% endif %}
     </div>
     {% endfor %}
   </div>
