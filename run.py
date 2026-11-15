@@ -11,6 +11,8 @@
     python3 run.py quality         # 质量初筛批量（依赖当天的选股 CSV）
     python3 run.py quality --stock 600519   # 质量初筛单只
     python3 run.py top sh600519    # 顶部判断（stock_judge_top，单只，随时可跑）
+    python3 run.py top --csv 选股.csv           # 顶部判断批量：读 CSV 的代码列
+    python3 run.py top --from-select            # 顶部判断批量：用当天选股结果
 
 ## 为什么要有这个脚本
 
@@ -281,10 +283,25 @@ def note_single_date(tee: Tee, day: str, wanted: str | None) -> int:
     return 0
 
 
-def step_top(tee: Tee, day: str, codes: list[str], extra: list[str]) -> int:
-    """顶部判断：**单只、随时可跑**，不依赖当天的选股结果。"""
+def step_top(tee: Tee, day: str, codes: list[str], extra: list[str],
+             csv_path: Path | None = None, workers: int = 4) -> int:
+    """顶部判断：**随时可跑**，单只或多只，也可以整份 CSV 批量。
+
+    批量走 `stock_judge_top --csv`（程序自己读代码列、自己并发），比在这里
+    一只只 fork 快得多，失败也不会中断其余的。
+    """
+    if csv_path is not None:
+        if csv_rows(csv_path) <= 0:
+            tee.line(f"❌ 找不到可用的股票清单：{csv_path}")
+            return 2
+        argv = py_module("stock_judge_top") + [
+            "--csv", str(csv_path), "--date", day, "--workers", str(workers)] + extra
+        rc, _ = run_step(tee, f"④ 顶部判断 stock_judge_top（批量 {csv_rows(csv_path)} 只 @ {day}）",
+                         argv, ROOT)
+        return rc
+
     if not codes:
-        tee.line("❌ 顶部判断需要至少一个股票代码。")
+        tee.line("❌ 顶部判断需要至少一个股票代码（或用 --csv / --from-select 批量）。")
         return 2
     failed = []
     for code in codes:
@@ -404,7 +421,15 @@ def cmd_single(action: str):
             return (step_cycle if action == "cycle" else step_quality)(
                 tee, day, args.extra)
         if action == "top":
-            return step_top(tee, day, args.codes, args.extra)
+            csv_path = None
+            if getattr(args, "from_select", False):
+                csv_path = csv_for(day)
+            elif getattr(args, "csv", None):
+                csv_path = Path(args.csv).expanduser()
+                if not csv_path.is_absolute():
+                    csv_path = ROOT / csv_path
+            return step_top(tee, day, args.codes or [], args.extra,
+                            csv_path=csv_path, workers=getattr(args, "workers", 4))
         raise AssertionError(action)
     return run
 
@@ -426,7 +451,7 @@ MENU = """
   2) 只跑选股            stock_kline_screen
   3) 周期弹性            stock_cycle_elastic     （回车=批量，或填单只代码）
   4) 质量初筛            stock_quality_screen    （回车=批量，或填单只代码）
-  5) 顶部判断            stock_judge_top         （单只，随时）
+  5) 顶部判断            stock_judge_top         （单只/多只；回车=当天选股批量）
   6) 只更新交易日历      build_calendar
   0) 退出
 """
@@ -473,9 +498,10 @@ def interactive() -> int:
                                           extra=[] if code else ["--workers", "2"])
                 rc = cmd_single("cycle" if choice == "3" else "quality")(args, tee)
             elif choice == "5":
-                codes = input("股票代码（可多个，空格分隔，如 sh600519 sz000001）: ").split()
+                raw = input("股票代码（可多个，空格分隔；回车=用当天选股结果批量跑）: ").split()
                 args = argparse.Namespace(date=day_hint, no_calendar=False,
-                                          codes=codes, extra=[])
+                                          codes=raw, csv=None,
+                                          from_select=not raw, workers=4, extra=[])
                 rc = cmd_single("top")(args, tee)
             else:
                 args = argparse.Namespace()
@@ -548,9 +574,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help=f"单只模式：只跑这一只（转成 {flag}），不需要当天的选股 CSV")
         sp.add_argument("extra", nargs="*", default=[], help="透传给该程序的参数")
 
-    sp = sub.add_parser("top", help="顶部判断 stock_judge_top（单只/多只）")
+    sp = sub.add_parser("top", help="顶部判断 stock_judge_top（单只/多只/CSV 批量）")
     add_date(sp)
-    sp.add_argument("codes", nargs="+", help="股票代码，如 sh600519 600519 600519.SH")
+    sp.add_argument("codes", nargs="*", default=[],
+                    help="股票代码，如 sh600519 600519 600519.SH（与 --csv 二选一）")
+    sp.add_argument("--csv", metavar="CSV", default=None,
+                    help="批量：从该 CSV 读代码列（代码/股票代码/证券代码/code）")
+    sp.add_argument("--from-select", action="store_true",
+                    help="批量：直接用当天选股结果 output/kline-screen/选股_<基准日>.csv")
+    sp.add_argument("--workers", type=int, default=4, help="批量并发线程数，默认 4")
     sp.add_argument("extra", nargs="*", default=[], help="透传给 stock_judge_top 的参数")
 
     sp = sub.add_parser("calendar", help="只更新交易日历")

@@ -11,7 +11,7 @@ import sys
 
 MODULES = ("test_indicators", "test_finance", "test_judgement",
            "test_views", "test_render", "test_evaluate",
-           "test_judge", "test_hubdata")
+           "test_judge", "test_hubdata", "test_batch")
 
 
 def main() -> int:

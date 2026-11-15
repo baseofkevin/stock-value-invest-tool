@@ -10,7 +10,7 @@
 | `stock_kline_screen` | 选股：5 日涨幅池 → K 线形态 → 板块/财务过滤 | `run.py select` |
 | `stock_cycle_elastic` | 周期弹性：是不是周期股 / 弹性强弱 / 周期位置 | `run.py cycle [--stock 代码]` |
 | `stock_quality_screen` | 质量初筛：质量分 Q + 估值分 V + 14 项风险检查 | `run.py quality [--stock 代码]` |
-| `stock_judge_top` | 顶部判断：四因子观察单只股票是否到顶部 | `run.py top <代码>` |
+| `stock_judge_top` | 顶部判断：四因子观察股票是否到顶部 | `run.py top <代码>` / `top --csv` |
 
 ## 每周五收盘后（15:10 之后）
 
@@ -44,7 +44,13 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ./run.py top sh600519                      # 基准日自动取「今天（过了 15:05）」
 ./run.py top sh600519 --date 2026-11-13
 ./run.py top sh600519 sz000001             # 一次多只
+
+./run.py top --from-select                 # 批量：把当天的选股结果整体扫一遍
+./run.py top --csv 我的持仓.csv            # 批量：自己给清单（读「代码」列）
 ```
+
+批量会多出一个索引页 `output/judge-top/四因子观察-批量_<日期>_<时间>.html`，
+按「距 250 日高点」从近到远排，一眼看出谁贴着一年高点。
 
 ## 单独跑某一步
 

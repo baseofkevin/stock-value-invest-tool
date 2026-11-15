@@ -244,6 +244,45 @@ class TestFatal(unittest.TestCase):
         checks = score._risk_checks(data)
         self.assertEqual(score._fatal(data, checks), [])
 
+    def test_loss_making_with_debt_is_leverage_hit(self):
+        """EBIT ≤ 0 时旧逻辑把「净负债/EBIT = 负数」判成通过，等于放过亏损加杠杆。
+
+        实测新五丰：净有息负债 70 亿、EBIT −13 亿、比值 −5.42 → 旧代码「通过」。
+        """
+        annual = helpers.annual_series(5, ebit=-13e8, debt=80e8, cash=10e8)
+        checks = score._risk_checks(helpers.data_with_annual(annual))
+        lev = [c for c in checks if c["key"] == "leverage"][0]
+        self.assertEqual(lev["status"], "hit", "亏损 + 净有息负债为正 → 命中")
+
+    def test_loss_making_with_net_cash_is_watch_not_hit(self):
+        """亏损但净现金：旧逻辑因比值为正（−净负债/−EBIT）误判成「加杠杆」。
+
+        实测航天南湖 61.77、新炬网络 37.79、景嘉微 9.93 都是净现金公司被误判。
+        """
+        annual = helpers.annual_series(5, ebit=-2e8, debt=1e8, cash=16e8)
+        checks = score._risk_checks(helpers.data_with_annual(annual))
+        lev = [c for c in checks if c["key"] == "leverage"][0]
+        self.assertEqual(lev["status"], "watch", "净现金不该被判加杠杆，也不该发绿勾")
+
+    def test_profitable_leverage_unchanged(self):
+        """盈利公司的口径一字不变（0 与 3 两个端点）。"""
+        hot = helpers.annual_series(5, ebit=10e8, debt=50e8, cash=5e8)
+        lev = [c for c in score._risk_checks(helpers.data_with_annual(hot))
+               if c["key"] == "leverage"][0]
+        self.assertEqual(lev["status"], "hit")
+        calm = helpers.annual_series(5, ebit=10e8, debt=5e8, cash=30e8)
+        lev = [c for c in score._risk_checks(helpers.data_with_annual(calm))
+               if c["key"] == "leverage"][0]
+        self.assertEqual(lev["status"], "clear")
+
+    def test_zero_ebit_is_not_field_missing(self):
+        """EBIT 恰好为 0：`div()` 返回 None，但这是「不赚钱」，不是「字段不足」。"""
+        annual = helpers.annual_series(5, ebit=0.0, debt=20e8, cash=5e8)
+        lev = [c for c in score._risk_checks(helpers.data_with_annual(annual))
+               if c["key"] == "leverage"][0]
+        self.assertEqual(lev["status"], "hit")
+        self.assertNotIn("字段不足", lev["detail"])
+
     def test_low_interest_cover_is_fatal(self):
         """利息保障 < 1：经营利润不够付利息，直接否决。"""
         annual = helpers.annual_series(5, ebit=1e8, finance_expense=2e8)

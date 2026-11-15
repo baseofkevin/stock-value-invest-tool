@@ -65,8 +65,13 @@ def normalize_code(raw):
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="单只股票四因子独立观察（不合并总分，不筛选；共享数据层版）")
-    ap.add_argument("code", help="股票代码：sh600519 / 600519 / 600519.SH")
-    ap.add_argument("--date", help="基准交易日，默认今天（YYYY-MM-DD）")
+    ap.add_argument("code", nargs="?", default=None,
+                    help="股票代码：sh600519 / 600519 / 600519.SH；用 --csv 时省略")
+    ap.add_argument("--csv", metavar="CSV",
+                    help="批量模式：从该 CSV 的代码列逐只出报告（代码 / 股票代码 / 证券代码 / code）")
+    ap.add_argument("--workers", type=int, default=4,
+                    help="批量模式并发线程数，默认 4（每线程一个库连接）")
+    ap.add_argument("--date", help="基准交易日，默认取「今天（过了 15:05）或上一个交易日」")
     ap.add_argument("--refresh", action="store_true", help="忽略缓存重新拉取")
     ap.add_argument("--json", action="store_true",
                     help="stdout 只输出 JSON（--json 的 JSON 不受 --quiet 影响）")
@@ -84,10 +89,14 @@ def main(argv=None):
     configure(quiet=a.quiet or not a.verbose,
               stream=sys.stderr if a.json else sys.stdout)
 
-    try:
-        code = normalize_code(a.code)
-    except ValueError as e:
-        sys.stderr.write(f"参数错误：{e}\n")
+    if a.csv and a.code:
+        sys.stderr.write("参数错误：--csv 与股票代码不能同时给\n")
+        return 2
+    if not a.csv and not a.code:
+        sys.stderr.write("参数错误：给一个股票代码，或用 --csv 跑批量\n")
+        return 2
+    if a.csv and a.json:
+        sys.stderr.write("参数错误：--json 只支持单只模式\n")
         return 2
 
     try:
@@ -96,7 +105,22 @@ def main(argv=None):
         sys.stderr.write(f"错误（数据层）：{e}\n")
         return 3
 
-    end = a.date or dt.date.today().isoformat()
+    # 基准日默认取 hub 的目标交易日（今天过了 15:05 才是今天，否则上一个交易日）。
+    # 原来默认 `dt.date.today()`：周末或盘中跑会得到「末端不足（库 11-13 / 需 11-15）」
+    # 然后报「当前无 K 线（可能停牌）」——把「今天不是交易日」说成了「停牌」。
+    end = a.date or hub.target
+
+    if a.csv:
+        from .batch import run as run_batch
+        return run_batch(a.csv, end, refresh=a.refresh, workers=a.workers,
+                         db=a.db, quiet=a.quiet)
+
+    try:
+        code = normalize_code(a.code)
+    except ValueError as e:
+        sys.stderr.write(f"参数错误：{e}\n")
+        return 2
+
     log(f"[开始] {code}，基准日 {end}")
 
     try:

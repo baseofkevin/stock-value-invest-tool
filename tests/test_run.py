@@ -133,10 +133,29 @@ class ParserTest(unittest.TestCase):
         self.assertIn("./run.py menu", text)
         self.assertNotIn("① 选股", text)
 
-    def test_top_requires_code(self) -> None:
+    def test_top_accepts_code_or_csv(self) -> None:
+        """top 三种用法：单只/多只代码、--csv、--from-select。"""
         p = run.build_parser()
-        with self.assertRaises(SystemExit):
-            p.parse_args(["top"])
+        self.assertEqual(p.parse_args(["top", "600519"]).codes, ["600519"])
+        self.assertEqual(p.parse_args(["top", "600519", "000001"]).codes,
+                         ["600519", "000001"])
+        self.assertEqual(p.parse_args(["top", "--csv", "x.csv"]).csv, "x.csv")
+        self.assertTrue(p.parse_args(["top", "--from-select"]).from_select)
+        self.assertEqual(p.parse_args(["top"]).codes, [])   # 运行时再报错
+
+    def test_top_without_anything_is_rejected_at_runtime(self) -> None:
+        """`top` 什么也不给时由 step_top 拦下（返回 2），不是靠 argparse。"""
+        import io
+        import tempfile
+        from contextlib import redirect_stdout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tee = run.Tee(Path(tmp) / "t.log")
+            try:
+                with redirect_stdout(io.StringIO()):
+                    self.assertEqual(run.step_top(tee, "2026-11-13", [], []), 2)
+            finally:
+                tee.close()
 
     def test_weekly_defaults(self) -> None:
         a = run.build_parser().parse_args(["weekly"])

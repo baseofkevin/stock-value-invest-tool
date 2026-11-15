@@ -44,7 +44,13 @@ class NormalizeCodeTest(unittest.TestCase):
 
 
 class _FakeHub:
-    """preflight 的替身：一个能进 with 的空对象。"""
+    """preflight 的替身：一个能进 with 的空对象。
+
+    `target` 必须给：基准日默认值取它（`a.date or hub.target`），
+    原来默认 `date.today()` 会在周末跑成「末端不足」再报「可能停牌」。
+    """
+
+    target = "2026-11-13"
 
     def __enter__(self):
         return self
@@ -84,6 +90,23 @@ class MainTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(out.strip(), "[输出] HTML：/tmp/fake.html")
         self.assertEqual(len(self.html_calls), 1)
+
+    def test_default_date_comes_from_hub_target(self):
+        """不给 --date 时用 hub.target，而不是 date.today()。
+
+        旧写法在周末会算成今天：先报「末端不足（库 11-13 / 需 11-15）」，
+        再报「当前无 K 线（可能停牌）」——把"今天不是交易日"说成了"停牌"。
+        """
+        seen = {}
+
+        def _ev(hub, code, end, refresh):
+            seen["end"] = end
+            return fx.result()
+
+        cli_mod.evaluate = _ev
+        code, _, _ = self.run_cli("600519")
+        self.assertEqual(code, 0)
+        self.assertEqual(seen["end"], "2026-11-13")
 
     def test_json_goes_to_stdout(self):
         code, out, _ = self.run_cli("600519", "--json")

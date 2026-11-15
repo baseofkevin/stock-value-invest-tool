@@ -688,11 +688,31 @@ def _risk_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
     net_debt = None
     if latest.get("debt") is not None and latest.get("cash") is not None:
         net_debt = latest["debt"] - latest["cash"]
-    nd_ebit = div(net_debt, latest.get("ebit"))
+    ebit_l = latest.get("ebit")
+    nd_ebit = div(net_debt, ebit_l)
     debt_g = _growth(latest.get("debt"), base.get("debt"))
     debt_txt = (f"有息负债 {_yi(base.get('debt'))} → {_yi(latest.get('debt'))}（{_delta_pct(debt_g)}）"
                 if latest.get("debt") is not None else "有息负债字段缺失")
-    if nd_ebit is None:
+    # 先判 EBIT ≤ 0 再判 nd_ebit 是否为 None：`div()` 在除数为 0 时也返回 None，
+    # EBIT 恰好为 0 会被上面那条判成「字段不足」，把「不赚钱」说成「没数据」。
+    if net_debt is not None and ebit_l is not None and ebit_l <= 0:
+        # EBIT ≤ 0 时这个比值没有意义，按现金流方向判（2026-11-15 修）。
+        # 旧写法只比 `nd_ebit > 3`，而负 EBIT 会让符号反过来：
+        #   净有息负债 > 0 → 比值为负 → 永远不命中 → 亏损 + 高负债被判「通过」
+        #                    （实测新五丰：净负债 70 亿、EBIT −13 亿、比值 −5.42 → 通过）；
+        #   净有息负债 < 0 → 比值为正 → 还能 > 3 → 净现金公司被误判「加杠杆」
+        #                    （实测航天南湖 61.77、新炬网络 37.79、景嘉微 9.93）。
+        # 判据回到「亏损时靠不靠借来的钱活着」：净负债为正 = 命中；净现金 = 提示。
+        # 净现金不给「通过」：亏损本身是另一条检查的事，这里不该替它发绿勾。
+        why = "亏损" if ebit_l < 0 else "EBIT 为 0"
+        if net_debt > 0:
+            add("leverage", "安全", "杠杆", "hit",
+                f"EBIT {_yi(ebit_l)}（{why}），净有息负债 {_yi(net_debt)}"
+                f"——不赚钱时杠杆无法由经营利润覆盖；{debt_txt}", "高")
+        else:
+            add("leverage", "安全", "杠杆", "watch",
+                f"EBIT {_yi(ebit_l)}（{why}），但有息负债不高于现金，杠杆非主要风险；{debt_txt}", "高")
+    elif nd_ebit is None:
         add("leverage", "安全", "杠杆", "unknown", "有息负债/现金/EBIT 字段不足；" + debt_txt, "高")
     else:
         add("leverage", "安全", "杠杆",
