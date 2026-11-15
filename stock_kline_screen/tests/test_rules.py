@@ -23,7 +23,8 @@ PROJECT = HERE.parent.parent.parent          # stock-value-invest-tool/
 sys.path.insert(0, str(PROJECT))
 
 from stock_kline_screen.params import C2_TOL, C3_RATIO, MIN_HISTORY  # noqa: E402
-from stock_kline_screen.rules import find_start, judge, reason_cat   # noqa: E402
+from stock_kline_screen.rules import (find_start, judge, reason_cat,  # noqa: E402
+                                      reason_label)
 
 PASS = 0
 FAIL: list[str] = []
@@ -209,10 +210,27 @@ def test_reason_cat() -> None:
           == "③ 启动日涨幅#%不在[#,#]")
 
 
+def test_reason_label() -> None:
+    """聚合键是给程序分组的，印给用户看必须是人话：`#` 不能出现在屏幕上。"""
+    print("\nreason_label")
+    cases = ["⑦ 距启动4日 > N=4", "② 启动日放量不足(1.20<1.75)",
+             "④ 启动日 MA20 < MA60×0.97",
+             "④ 启动日 MA20 近3日跌逾2.0%",
+             "⑤ 次新（2024-05-06 上市，未满3年）",
+             "④ 启动日 距MA60 ≥ 0.1"]
+    for raw in cases:
+        label = reason_label(reason_cat(raw))
+        check(f"无 # 占位符：{label}", "#" not in label)
+    check("没匹配上的也不留 #",
+          "#" not in reason_label("⑨ 某条新规则#日"))
+    check("原因原文照旧", reason_label("未站上 MA20") == "未站上 MA20")
+
+
 def main() -> int:
     test_find_start()
     test_judge()
     test_reason_cat()
+    test_reason_label()
     print("\n" + "=" * 60)
     print(f"通过 {PASS} 项，失败 {len(FAIL)} 项")
     if FAIL:

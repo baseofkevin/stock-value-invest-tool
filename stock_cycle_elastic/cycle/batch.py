@@ -292,8 +292,11 @@ def _save_results(results, target_date=None, kind="batch") -> None:
         })
     if not rows:
         return
+    # 没算出结论的（利润表为空等）要如实记成失败：看板与 run.py 都靠它
+    # 区分"这一批全成了"和"缺了 3 只、但其余照常"。
+    n_fail = sum(1 for item in results if not item.ok or not item.decision)
     results_db.save("cycle", rows, target_date or _latest_quarter(results) or _today(),
-                    argv="stock_cycle_elastic", kind=kind)
+                    argv="stock_cycle_elastic", kind=kind, n_fail=n_fail)
 
 
 def _latest_quarter(results) -> str:

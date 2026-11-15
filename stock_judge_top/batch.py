@@ -124,7 +124,8 @@ def _one(target: dict, end: str, refresh: bool, db: str | None) -> dict:
 
 
 def run(path: str, end: str, *, refresh: bool = False, workers: int = 4,
-        db: str | None = None, quiet: bool = False) -> int:
+        db: str | None = None, quiet: bool = False,
+        progress: bool = False) -> int:
     """从外部 CSV 读名单，然后跑批量。退出码：0 全成 / 1 有失败 / 2 输入有问题。"""
     targets, warnings = read_targets(path)
     for w in warnings:
@@ -133,12 +134,12 @@ def run(path: str, end: str, *, refresh: bool = False, workers: int = 4,
         print(f"错误：{path} 里没有可用的股票代码")
         return 2
     return run_targets(targets, end, refresh=refresh, workers=workers, db=db,
-                       quiet=quiet, source=path)
+                       quiet=quiet, progress=progress, source=path)
 
 
 def from_select(target_date: str | None, end: str, *, refresh: bool = False,
                 workers: int = 4, db: str | None = None,
-                quiet: bool = False) -> int:
+                quiet: bool = False, progress: bool = False) -> int:
     """名单来自结果库的选股结果（省略日期 = 最近一次运行）。"""
     try:
         from stock_data_fetch import results as results_db
@@ -153,14 +154,19 @@ def from_select(target_date: str | None, end: str, *, refresh: bool = False,
     targets = [{"code": normalize_code(r["symbol"]),
                 "name": r.get("name") or ""} for r in rows]
     return run_targets(targets, end, refresh=refresh, workers=workers, db=db,
-                       quiet=quiet,
+                       quiet=quiet, progress=progress,
                        source=f"结果库 选股 {target_date or '最近一次'}")
 
 
 def run_targets(targets: list[dict], end: str, *, refresh: bool = False,
                 workers: int = 4, db: str | None = None, quiet: bool = False,
-                source: str = "") -> int:
-    """跑一批已解析好的 {code, name}。退出码：0 全成 / 1 有失败。"""
+                progress: bool = False, source: str = "") -> int:
+    """跑一批已解析好的 {code, name}。退出码：0 全成 / 1 有失败。
+
+    `progress` 控制逐只进度行（`[ 3/38] sh600019 …`）。默认关：紧跟其后的
+    汇总表把每只都列了一遍，进度行只是重复；38 只就是 38 行，全流程里
+    这一截能占掉半屏。要看就加 `-v`。
+    """
     total = len(targets)
     print(f"批量顶部观察：{total} 只，基准日 {end}，并发 {workers}，来自 {source}")
     log(f"[批量] {total} 只，基准日 {end}")
@@ -180,9 +186,10 @@ def run_targets(targets: list[dict], end: str, *, refresh: bool = False,
                 results.append(r)
                 done += 1
                 if r["ok"]:
-                    if not quiet:
+                    if progress and not quiet:
                         print(f"[{done:2d}/{total}] {_line(r)}")
                 else:
+                    # 失败的照常报：数量少、每条都要人处理，藏起来没好处。
                     print(f"[{done:2d}/{total}] {r['code']} {r.get('name') or ''} "
                           f"失败：{r['error']}")
     finally:
@@ -208,7 +215,8 @@ def _save_results(results: list[dict], end: str) -> None:
         return
     rows = [r for r in results if r.get("ok")]
     if rows:
-        results_db.save("top", rows, end, argv="stock_judge_top --from-select")
+        results_db.save("top", rows, end, argv="stock_judge_top --from-select",
+                        n_fail=len(results) - len(rows))
 
 
 def _w(text: str) -> int:

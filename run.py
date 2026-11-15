@@ -151,17 +151,44 @@ def pick_date(explicit: str | None, days: list[str]) -> str:
     return chosen
 
 
-class Tee:
-    """同时写屏幕和日志文件。每一步的输出都留底，事后能查是哪一步慢。"""
+#: 逐只失败的播报行。同样的信息紧接着就有聚合汇总（「145 只历史不足」、
+#: 「完成 35 只，失败 3 只」），一行一只股就会把真正的结果挤出屏幕——
+#: 2026-11-15 那次全流程里，这类行占了全部输出的一半以上。
+#: 控制台省掉，**日志文件里一行不少**；要现场看就加 `--verbose`。
+_NOISE = (
+    re.compile(r"^kline \S+ 失败："),      # stock_data_fetch.api 逐只 K 线失败
+    re.compile(r"^\[\d+/\d+\] FAIL "),   # cycle/quality 逐只
+    re.compile(r"^\[FAIL\]"),
+)
 
-    def __init__(self, path: Path):
+
+def _is_noise(text: str) -> bool:
+    return any(p.match(text) for p in _NOISE)
+
+
+class Tee:
+    """同时写屏幕和日志文件。每一步的输出都留底，事后能查是哪一步慢。
+
+    屏幕走"关键信息"路线（噪声行只计数、不打印），日志文件保持全量。
+    """
+
+    def __init__(self, path: Path, verbose: bool = False):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.fh = path.open("w", encoding="utf-8")
+        self.verbose = verbose
+        self.muted = 0          # 控制台省掉的行数（带 --verbose 恒为 0）
+        self._blank = False     # 上一条是不是空行（折叠连续空行）
 
     def line(self, text: str) -> None:
-        say(text)
         self.fh.write(text + "\n")
         self.fh.flush()
+        if not self.verbose and _is_noise(text):
+            self.muted += 1
+            return
+        if not text and self._blank:
+            return              # 连续空行压成一行
+        self._blank = not text
+        say(text)
 
     def close(self) -> None:
         """可重复调用：`all` 起看板前要先把日志收掉（后面是长驻进程）。"""
@@ -192,12 +219,16 @@ def run_step(tee: Tee, title: str, argv: list[str], cwd: Path) -> tuple[int, flo
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             errors="replace", bufsize=1)
     assert proc.stdout is not None
+    tee.muted = 0
     for raw in proc.stdout:
         tee.line(raw.rstrip("\n"))
+    muted, tee.muted = tee.muted, 0
     code = proc.wait()
     spent = time.time() - t0
     LAST_SPENT["s"] = spent
 
+    if muted:
+        tee.line(f"    （省掉 {muted} 行逐只失败播报，日志里有；要看就加 --verbose）")
     tee.line("")
     if code == 0:
         tee.line(f"✅ {title} 完成（{spent:.1f}s）")
@@ -227,6 +258,40 @@ def select_count(day: str) -> int:
         return len(results_db.symbols_for("select", day))
     except Exception:                              # noqa: BLE001
         return -1
+
+
+def step_stats(tool: str, day: str) -> tuple[int, int]:
+    """该批次最新一次运行的 (成功, 失败)；读不到给 (-1, -1)。"""
+    try:
+        from stock_data_fetch import results as results_db
+        info = results_db.run_stats(tool, day, kind="batch")
+    except Exception:                              # noqa: BLE001
+        return -1, -1
+    return int(info.get("n_ok", -1)), int(info.get("n_fail", -1))
+
+
+def judge_step(tee: Tee, title: str, tool: str, day: str, rc: int,
+               strict: bool) -> bool:
+    """这一步要不要中断整条流程（True = 可以往下走）。
+
+    判据是**有没有产出**，不是"退出码是不是 0"。上游对个别小票会返回空
+    （利润表为空、K 线历史不足、停牌退市），周期弹性因此以退出码 1 结束，
+    但它已经把 35 只写进了库。这时停掉整条链路，等于让 3 只票的数据缺口
+    把每周的批量流程废掉——而这 3 只下周多半还是缺。
+
+    反过来，一只都没成功（例如名单对不上、库被锁住）必须停：再往下跑
+    只会产出一份缺一条腿的结果。`--strict` 可以恢复"任何失败都停"。
+    """
+    if rc == 0:
+        return True
+    n_ok, n_fail = step_stats(tool, day)
+    if strict or n_ok <= 0:
+        return False
+    tee.line("")
+    tee.line(f"⚠️  {title} 有 {n_fail} 只失败，但已写入 {n_ok} 只 → 继续往下跑")
+    tee.line("    失败的多是上游缺数据（利润表为空 / K 线历史不足），看板里这几只留空。")
+    tee.line("    要「有任何失败就停」，加 --strict。")
+    return True
 
 
 def step_select(tee: Tee, day: str, extra: list[str]) -> int:
@@ -310,6 +375,8 @@ def step_top(tee: Tee, day: str, codes: list[str], extra: list[str],
             return 2
         argv = py_module("stock_judge_top") + [
             "--from-select", day, "--date", day, "--workers", str(workers)] + extra
+        if tee.verbose and "--verbose" not in argv and "-v" not in argv:
+            argv.append("--verbose")
         rc, _ = run_step(tee, f"④ 顶部判断 stock_judge_top（批量 {n} 只 @ {day}）",
                          argv, ROOT)
         return rc
@@ -369,7 +436,8 @@ def ensure_calendar(tee: Tee, day_wanted: str | None, auto: bool) -> tuple[str, 
 def summary(tee: Tee, day: str, steps: list[tuple[str, int, float]]) -> None:
     hr(f"汇总（{day}）")
     for name, rc, spent in steps:
-        mark = "✅" if rc == 0 else ("⚠️" if rc == 3 else "❌")
+        # 3 = 选股 0 只（交接处拦下），1 = 有失败但可能已部分写入
+        mark = "✅" if rc == 0 else ("⚠️" if rc in (1, 3) else "❌")
         tee.line(f"  {mark} {name:<28s} {spent:6.1f}s   退出码 {rc}")
     tee.line("")
     tee.line(f"  结果库      {DB_PATH}（看板：./run.py web）")
@@ -397,7 +465,8 @@ def cmd_all(args, tee: Tee) -> int:
     else:
         rc = step_cycle(tee, day, args.cycle_args)
         steps.append(("② 周期弹性", rc, LAST_SPENT["s"]))
-        if rc != 0 and not args.keep_going:
+        if not judge_step(tee, "② 周期弹性", "cycle", day, rc, args.strict) \
+                and not args.keep_going:
             summary(tee, day, steps)
             return rc
 
@@ -406,7 +475,8 @@ def cmd_all(args, tee: Tee) -> int:
     else:
         rc = step_quality(tee, day, args.quality_args)
         steps.append(("③ 质量初筛", rc, LAST_SPENT["s"]))
-        if rc != 0 and not args.keep_going:
+        if not judge_step(tee, "③ 质量初筛", "quality", day, rc, args.strict) \
+                and not args.keep_going:
             summary(tee, day, steps)
             return rc
 
@@ -416,7 +486,8 @@ def cmd_all(args, tee: Tee) -> int:
         rc = step_top(tee, day, [], args.top_args,
                       csv_path="results", workers=args.top_workers)
         steps.append(("④ 顶部判断", rc, LAST_SPENT["s"]))
-        if rc != 0 and not args.keep_going:
+        if not judge_step(tee, "④ 顶部判断", "top", day, rc, args.strict) \
+                and not args.keep_going:
             summary(tee, day, steps)
             return rc
 
@@ -669,7 +740,7 @@ def interactive() -> int:
         day_hint = input(f"基准日（回车=自动，今天 {dt.date.today()}）: ").strip() or None
 
         stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-        tee = Tee(LOG_DIR / f"run-{stamp}.log")
+        tee = Tee(LOG_DIR / f"run-{stamp}.log", verbose=False)
         try:
             if choice == "1":
                 args = argparse.Namespace(
@@ -677,8 +748,8 @@ def interactive() -> int:
                     select_args=[], cycle_args=["--workers", "2"],
                     quality_args=["--workers", "2"], top_args=[],
                     top_workers=4, skip_cycle=False, skip_quality=False,
-                    skip_top=False, keep_going=False, no_web=False,
-                    host="127.0.0.1", port=5000)
+                    skip_top=False, keep_going=False, strict=False,
+                    no_web=False, host="127.0.0.1", port=5000, verbose=False)
                 rc = cmd_all(args, tee)
             elif choice == "2":
                 args = argparse.Namespace(date=day_hint, no_calendar=False, extra=[])
@@ -737,7 +808,13 @@ def build_parser() -> argparse.ArgumentParser:
 下游（cycle/quality/top）认的是 results.db 里「基准日 = 那一天」的选股运行记录，
 所以它们的 --date 必须和那天的选股一致；不给就按「今天（过了 15:05）」算。
 四个工具都不再产出 CSV/HTML：结果只进 results.db，人看结果用 ./run.py web。""")
+    p.add_argument("-v", "--verbose", action="store_true",
+                   help="把逐只失败播报也打到屏幕上（日志文件本来就是全量）")
     sub = p.add_subparsers(dest="cmd")
+
+    def add_verbose(sp):
+        sp.add_argument("-v", "--verbose", action="store_true",
+                        help="把逐只失败播报也打出来（默认只留汇总，日志里是全量）")
 
     def add_date(sp):
         sp.add_argument("--date", default=None,
@@ -748,10 +825,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("all", aliases=["weekly"],
                         help="全流程：日历 → 选股 → 周期 → 质量 → 顶部 → 看板")
     add_date(sp)
+    add_verbose(sp)
     sp.add_argument("--skip-cycle", action="store_true", help="跳过周期弹性")
     sp.add_argument("--skip-quality", action="store_true", help="跳过质量初筛")
     sp.add_argument("--skip-top", action="store_true", help="跳过顶部判断")
     sp.add_argument("--keep-going", action="store_true", help="某一步失败也继续往下跑")
+    sp.add_argument("--strict", action="store_true",
+                    help="任何失败都停（默认：该步一只都没成功才停，"
+                         "个别票上游缺数据不拦整条流程）")
     sp.add_argument("--select-args", default="", help="透传给 stock_kline_screen 的参数")
     sp.add_argument("--cycle-args", default="--workers 2", help="透传给 cycle_report.py")
     sp.add_argument("--quality-args", default="--workers 2", help="透传给 stock_report.py")
@@ -764,6 +845,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("select", help="只跑选股 stock_kline_screen（只能批量）")
     add_date(sp)
+    add_verbose(sp)
     sp.add_argument("extra", nargs="*", default=[], help="透传给 stock_kline_screen 的参数")
 
     for name, helptext, flag in (
@@ -771,12 +853,14 @@ def build_parser() -> argparse.ArgumentParser:
             ("quality", "只跑质量初筛 stock_quality_screen", "--stock-code")):
         sp = sub.add_parser(name, help=helptext + "（批量或单只）")
         add_date(sp)
+        add_verbose(sp)
         sp.add_argument("--stock", metavar="代码", default=None,
                         help=f"单只模式：只跑这一只（转成 {flag}），不需要当天的选股名单")
         sp.add_argument("extra", nargs="*", default=[], help="透传给该程序的参数")
 
     sp = sub.add_parser("top", help="顶部判断 stock_judge_top（单只/多只/名单批量）")
     add_date(sp)
+    add_verbose(sp)
     sp.add_argument("codes", nargs="*", default=[],
                     help="股票代码，如 sh600519 600519 600519.SH（与 --csv 二选一）")
     sp.add_argument("--csv", metavar="CSV", default=None,
@@ -842,7 +926,8 @@ def main(argv: list[str] | None = None) -> int:
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    tee = Tee(LOG_DIR / f"run-{stamp}.log")
+    tee = Tee(LOG_DIR / f"run-{stamp}.log",
+              verbose=bool(getattr(args, "verbose", False)))
     try:
         if args.cmd == "menu":
             tee.close()

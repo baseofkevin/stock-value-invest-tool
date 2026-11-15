@@ -361,8 +361,12 @@ _MAPPER = {"select": _select_row, "cycle": _cycle_row,
 
 def save(tool: str, rows: list[dict], target_date: str, *, argv: str | None = None,
          db: str | Path | None = None, note: str | None = None,
-         kind: str = "batch") -> int:
+         kind: str = "batch", n_fail: int = 0) -> int:
     """把一次运行的结果写进结果库，返回 run_id。
+
+    `n_fail` 是**调用方知道、但没能入库**的只数（利润表为空、取数失败）。
+    必须由调用方给：只按 `len(rows)` 反推会把失败记成 0，看板上"38 只全成功"
+    就成了一句假话。
 
     **不抛异常**：任何失败都只在 stderr 留一行，主流程照常结束。
     """
@@ -399,7 +403,7 @@ def save(tool: str, rows: list[dict], target_date: str, *, argv: str | None = No
                 n_ok += 1
             except Exception as e:              # noqa: BLE001
                 _warn(f"写入一行失败（{r.get('symbol') or r.get('code')}）：{e}")
-        finish_run(conn, run_id, n_ok, len(rows) - n_ok)
+        finish_run(conn, run_id, n_ok, max(0, n_fail) + (len(rows) - n_ok))
         return run_id
     except Exception as e:                      # noqa: BLE001
         _warn(f"结果落库失败：{e}")
@@ -414,6 +418,31 @@ def _warn(msg: str) -> None:
 
 
 # ------------------------------------------------------------------ 查询
+
+def run_stats(tool: str, target_date: str | None = None,
+              kind: str | None = None, db: str | Path | None = None) -> dict:
+    """某次运行的台账：成功/失败只数、起止时间、kind；没有记录给空 dict。
+
+    入口脚本用它判断"这一步算不算失败"：35 只成功、3 只因上游缺数据失败，
+    不该让整条流程停在那儿；而 0 只成功才是真失败。
+    """
+    conn = connect(db)
+    try:
+        sql = "select * from run where tool=?"
+        params: list = [tool]
+        if target_date:
+            sql += " and target_date=?"
+            params.append(target_date)
+        if kind:
+            sql += " and kind=?"
+            params.append(kind)
+        cur = conn.execute(sql + " order by id desc limit 1", params)
+        names = [d[0] for d in cur.description]
+        row = cur.fetchone()
+        return dict(zip(names, row)) if row else {}
+    finally:
+        conn.close()
+
 
 def latest(tool: str, db: str | Path | None = None) -> list[dict]:
     """某工具最近一次运行的全部结果（按 run id 最大）。"""

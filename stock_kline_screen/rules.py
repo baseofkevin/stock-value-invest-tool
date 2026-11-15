@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 
-from .params import CHG_HI, CHG_LO, MIN_HISTORY
+from .params import CHG_HI, CHG_LO, K_VOL, MIN_HISTORY, NEW_STOCK_YEARS
 
 
 def fnum(v):
@@ -148,3 +148,23 @@ def reason_cat(why):
     return re.sub(r"MA\d+|[\d.]+",
                   lambda m: m.group(0) if m.group(0).startswith("MA") else "#",
                   why)
+
+
+#: 聚合键 → 能读给人看的一行。`#` 只是分组的占位符（"距启动#日 > N=#"），
+#: 直接印出来像程序漏填了变量——用户只会以为是 bug。
+_LABELS = (
+    ("⑦ 距启动", "⑦ 启动日距今天数超过 N（--n，默认 4）"),
+    ("② 启动日放量不足", f"② 启动日放量不足（量能倍数 < {K_VOL:g}）"),
+    ("④ 启动日 MA20 < MA60", "④ 启动日 MA20 低于 MA60 的要求倍数"),
+    ("④ 启动日 MA20 近", "④ 启动日 MA20 近 3 日跌逾阈值"),
+    ("④ 启动日 距MA60", "④ 启动日已高于 MA60 允许上限"),
+    ("⑤ 次新", f"⑤ 次新（上市不满 {NEW_STOCK_YEARS:g} 年）"),
+)
+
+
+def reason_label(cat: str) -> str:
+    """把 `reason_cat()` 的聚合键变成人话；认不出来的就把 `#` 换成省略号。"""
+    for prefix, label in _LABELS:
+        if cat.startswith(prefix):
+            return label
+    return cat.replace("#", "…")

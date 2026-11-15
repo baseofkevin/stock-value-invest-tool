@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from .rules import reason_label
+
 
 def turn_star(rank):
     """换手分位的星级标记（只影响展示，不参与排序/裁决）。
@@ -52,7 +54,7 @@ def print_summary(st):
     print(f"\n粗筛池 {st['pool_n']} 只 → 入选 {len(final)} 只\n")
     print("剔除明细（按原因聚合）：")
     for k, v in sorted(st["rej"].items(), key=lambda kv: -kv[1]):
-        print(f"    {k}: {v}")
+        print(f"    {reason_label(k)}: {v}")
     if final:
         cnt = {}
         for x in final:

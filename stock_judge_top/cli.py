@@ -116,12 +116,13 @@ def main(argv=None):
     if a.from_select is not None:
         from .batch import from_select
         return from_select(a.from_select or None, end, refresh=a.refresh,
-                           workers=a.workers, db=a.db, quiet=a.quiet)
+                           workers=a.workers, db=a.db, quiet=a.quiet,
+                           progress=a.verbose)
 
     if a.csv:
         from .batch import run as run_batch
         return run_batch(a.csv, end, refresh=a.refresh, workers=a.workers,
-                         db=a.db, quiet=a.quiet)
+                         db=a.db, quiet=a.quiet, progress=a.verbose)
 
     try:
         code = normalize_code(a.code)

@@ -218,9 +218,11 @@ def _save_results(results: dict[str, ReportResult], target_date: str | None,
         })
     if not rows:
         return
+    # 有结果、但拿不到 payload 的（数据缺口太大）如实记成失败。
     results_db.save("quality", rows,
                     target_date or datetime.now().date().isoformat(),
-                    argv="stock_quality_screen", kind=kind)
+                    argv="stock_quality_screen", kind=kind,
+                    n_fail=len(results) - len(rows))
 
 
 # ---------------------------------------------------------------------------

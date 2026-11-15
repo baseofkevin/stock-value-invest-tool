@@ -15,7 +15,9 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -119,7 +121,22 @@ class AllFlowTest(unittest.TestCase):
     把 --no-web 忘了传）恰恰是改代码时最容易犯又最难在真跑前发现的。
     """
 
-    def _run(self, **over):
+    def setUp(self):
+        """给每个用例一个临时结果库：judge_step 要读 run 台账。"""
+        import os
+        import tempfile
+        self.tmp_db = tempfile.mkdtemp(prefix="run-all-")
+        self._old_db = os.environ.get("STOCK_RESULTS_DB")
+        os.environ["STOCK_RESULTS_DB"] = os.path.join(self.tmp_db, "results.db")
+
+    def tearDown(self):
+        import os
+        if self._old_db is None:
+            os.environ.pop("STOCK_RESULTS_DB", None)
+        else:
+            os.environ["STOCK_RESULTS_DB"] = self._old_db
+
+    def _run(self, cycle_rc=0, **over):
         import io
         import tempfile
         from contextlib import redirect_stdout
@@ -130,7 +147,7 @@ class AllFlowTest(unittest.TestCase):
             def step(*a, **kw):
                 calls.append((name, a, kw))
                 run.LAST_SPENT["s"] = 0.1
-                return 0
+                return cycle_rc if name == "step_cycle" else 0
             return step
 
         patch = {name: fake(name) for name in
@@ -139,8 +156,8 @@ class AllFlowTest(unittest.TestCase):
         namespace = dict(
             date="2026-11-13", no_calendar=True, select_args=[], cycle_args=[],
             quality_args=[], top_args=[], top_workers=2, skip_cycle=False,
-            skip_quality=False, skip_top=False, keep_going=False, no_web=False,
-            host="127.0.0.1", port=5000)
+            skip_quality=False, skip_top=False, keep_going=False, strict=False,
+            no_web=False, host="127.0.0.1", port=5000)
         namespace.update(over)
         args = type("A", (), namespace)()
         with tempfile.TemporaryDirectory() as tmp:
@@ -179,12 +196,110 @@ class AllFlowTest(unittest.TestCase):
         web = dict((c[0], c) for c in calls)["step_web"]
         self.assertEqual(web[1][0].port, 8081)
 
+    def test_partial_failure_continues(self):
+        """个别票上游缺数据导致退出码 1，但只要写进了行，就该继续往下跑。
+
+        2026-11-15 的真实场景：周期弹性 35 只成功、3 只「利润表为空」，
+        退出码 1，整条流程停在第二步，质量和顶部再也没跑。
+        """
+        self._fake_run(kind="batch", n_ok=35, n_fail=3)
+        rc, names, _ = self._run(cycle_rc=1)
+        self.assertEqual(rc, 0)
+        self.assertIn("step_web", names, "该继续走到看板")
+
+    def test_zero_output_stops(self):
+        """一只都没成功（名单对不上/库被锁）必须停，别产出缺腿的结果。"""
+        self._fake_run(kind="batch", n_ok=0, n_fail=0)
+        rc, names, _ = self._run(cycle_rc=1)
+        self.assertEqual(rc, 1)
+        self.assertNotIn("step_quality", names)
+
+    def test_strict_stops_on_partial(self):
+        self._fake_run(kind="batch", n_ok=35, n_fail=3)
+        rc, names, _ = self._run(cycle_rc=1, strict=True)
+        self.assertEqual(rc, 1)
+        self.assertNotIn("step_quality", names)
+
+    def test_single_runs_do_not_count_as_output(self):
+        """单只运行不算"这一步有产出"，别让一次单跑把失败的一批放过。"""
+        self._fake_run(kind="single", n_ok=1, n_fail=0)
+        rc, names, _ = self._run(cycle_rc=1)
+        self.assertEqual(rc, 1)
+        self.assertNotIn("step_quality", names)
+
+    def _fake_run(self, kind: str, n_ok: int, n_fail: int) -> None:
+        from stock_data_fetch import results
+        import os
+        path = os.environ["STOCK_RESULTS_DB"]
+        results.save("cycle", [{"symbol": "sh600019"}], "2026-11-13",
+                     db=path, kind=kind)
+        import sqlite3
+        conn = sqlite3.connect(path)
+        conn.execute("update run set n_ok=?, n_fail=? where tool='cycle'",
+                     (n_ok, n_fail))
+        conn.commit()
+        conn.close()
+
 
 class PassthroughTest(unittest.TestCase):
     def test_split(self) -> None:
         self.assertEqual(run.split_passthrough("--workers 2"), ["--workers", "2"])
         self.assertEqual(run.split_passthrough("  "), [])
         self.assertEqual(run.split_passthrough("--force"), ["--force"])
+
+
+class TeeFilterTest(unittest.TestCase):
+    """控制台只留关键信息，日志文件保持全量。
+
+    2026-11-15 的全流程里 145 行「kline shXXXXXX 失败：…」把 38 只的名单
+    挤出了屏幕，而每只失败的原因紧接着就有聚合汇总。
+    """
+
+    def _tee(self, verbose=False):
+        self.tmp = tempfile.mkdtemp(prefix="tee-")
+        return run.Tee(Path(self.tmp) / "t.log", verbose=verbose)
+
+    def test_per_symbol_failures_are_muted(self):
+        import io
+        from contextlib import redirect_stdout
+        tee = self._tee()
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            tee.line("kline sh600185 失败：末端不足")
+            tee.line("[1/3] FAIL 300375 利润表为空")
+            tee.line("⚠️  145 只历史不足（次新/长期停牌），按「K线不足」剔除")
+        tee.close()
+        console = buf.getvalue()
+        self.assertNotIn("kline sh600185", console)
+        self.assertNotIn("FAIL 300375", console)
+        self.assertIn("145 只历史不足", console, "聚合汇总要留着")
+        self.assertEqual(tee.muted, 2)
+        self.assertIn("kline sh600185 失败", Path(self.tmp, "t.log").read_text())
+        self.assertIn("FAIL 300375", Path(self.tmp, "t.log").read_text())
+
+    def test_verbose_shows_everything(self):
+        import io
+        from contextlib import redirect_stdout
+        tee = self._tee(verbose=True)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            tee.line("kline sh600185 失败：末端不足")
+        tee.close()
+        self.assertIn("kline sh600185", buf.getvalue())
+        self.assertEqual(tee.muted, 0)
+
+    def test_blank_lines_collapse(self):
+        import io
+        from contextlib import redirect_stdout
+        tee = self._tee()
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            tee.line("a")
+            for _ in range(3):
+                tee.line("")
+            tee.line("b")
+        tee.close()
+        self.assertEqual(buf.getvalue().splitlines(), ["a", "", "b"])
 
 
 class ParserTest(unittest.TestCase):

@@ -128,6 +128,30 @@ class KindTest(unittest.TestCase):
             results.save("top", [{"code": "600519"}], "2026-11-13", db=self.db,
                          kind="weekly")
 
+    def test_fail_count_is_recorded(self):
+        """调用方知道失败只数就必须传进来，否则看板会说"38 只全成功"。"""
+        results.save("cycle", [{"symbol": "600519"}], "2026-11-13", db=self.db,
+                     n_fail=3)
+        conn = results.connect(self.db)
+        try:
+            n_ok, n_fail = conn.execute(
+                "select n_ok, n_fail from run order by id desc limit 1").fetchone()
+        finally:
+            conn.close()
+        self.assertEqual((n_ok, n_fail), (1, 3))
+
+    def test_dropped_rows_count_as_failures(self):
+        """没有代码的行被拒收时，失败数要把它们算进去。"""
+        results.save("select", [{"symbol": "600519"}, {"symbol": ""}],
+                     "2026-11-13", db=self.db)
+        conn = results.connect(self.db)
+        try:
+            n_ok, n_fail = conn.execute(
+                "select n_ok, n_fail from run order by id desc limit 1").fetchone()
+        finally:
+            conn.close()
+        self.assertEqual((n_ok, n_fail), (1, 1))
+
     def test_old_db_gets_the_column(self):
         """schema v1 的库要能原地升级：老行按 batch 算，不逼人删库。"""
         import sqlite3
