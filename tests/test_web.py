@@ -496,8 +496,20 @@ class TestStockDetail(WebCase):
 class TestStockReports(WebCase):
     """工具渲染好的原版报告：存进 payload.report_html，看板原样吐出来。"""
 
+    #: 各工具那一行至少要有这些字段，页面上的卡片/明细才不会拿到一堆空值
+    BASE = {
+        "top": {"code": None, "date": "2026-11-15", "ok": True, "close": 6.18,
+                "pos250": -0.21, "days_since_high": 242, "phase": "反弹"},
+        "quality": {"q": 50.0, "v": 60.0, "conclusion": "观察", "reason": "演示"},
+        "cycle": {"is_cycle": True, "gm_std_pp": 2.3, "gm_cv": 37.0, "elasticity": -1.17,
+                  "elastic_label": "weak", "position_pct": 63.7, "position_label": "high"},
+    }
+
     def _save_with_report(self, tool: str, symbol: str, title: str, body: str):
-        row = {"symbol": symbol, "name": "演示", "payload": {"report_html": _demo_report(title, body)}}
+        row = {"symbol": symbol, "name": "演示", **self.BASE[tool],
+               "payload": {"report_html": _demo_report(title, body)}}
+        if tool == "top":
+            row["code"] = symbol
         results_db.save(tool, [row], "2026-11-15", argv="test", db=self.db_path)
 
     def test_report_route_serves_the_stored_html(self):
@@ -515,9 +527,26 @@ class TestStockReports(WebCase):
         self._save_with_report("quality", "sh600019", "原版质量报告", "<p>五节正文</p>")
         html = client.get("/stock/sh600019?focus=quality").get_data(as_text=True)
         self.assertIn('/stock/sh600019/report/quality', html)     # iframe src
-        self.assertIn("原版报告", html)
         self.assertNotIn("Q 分项", html)                          # 明细视图让位
-        self.assertIn("四因子独立观察", html)                     # 另外两块仍按明细回退
+        # 一次只摆一份：另外两个工具只有标签，没有报告 iframe
+        self.assertEqual(html.count("iframe class=\"report-frame\""), 1)
+        self.assertNotIn("/report/top?", html)
+        self.assertNotIn("/report/cycle?", html)
+
+    def test_tabs_switch_which_report_is_shown(self):
+        client = self.client()
+        for tool in ("top", "quality", "cycle"):
+            self._save_with_report(tool, "sh600019", f"{tool} 报告", f"<p>{tool} 正文</p>")
+        html = client.get("/stock/sh600019?focus=cycle").get_data(as_text=True)
+        self.assertIn('src="/stock/sh600019/report/cycle?run=', html)     # 只有这一份报告
+        self.assertNotIn('src="/stock/sh600019/report/quality', html)
+        self.assertEqual(html.count('iframe class="report-frame"'), 1)
+        # 三个标签都在，且当前那个带 on
+        for tool, label in (("top", "顶部 · 四因子"), ("quality", "企业质量初筛"),
+                            ("cycle", "周期弹性初筛")):
+            self.assertIn(f'href="/stock/sh600019?focus={tool}"', html)
+            self.assertIn(label, html)
+        self.assertIn('class="tab on" href="/stock/sh600019?focus=cycle"', html)
 
     def test_report_route_404_when_row_has_no_report(self):
         resp = self.client().get("/stock/sh600019/report/top")

@@ -284,19 +284,18 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     #: 从哪个工具页点进来，就把那一块排最上面。四因子原来永远第一，于是
     #: 从周期/质量页点进来的人看到的也先是顶部判断——2026-11-15 提的那个"都
     #: 跳到同一个页面"其实就是这个错觉。
-    FOCUS_ORDER = {
-        "cycle": ["cycle", "top", "quality"],
-        "quality": ["quality", "top", "cycle"],
-        "top": ["top", "quality", "cycle"],
-    }
-    FOCUS_LABEL = {"cycle": "周期", "quality": "质量", "top": "顶部"}
-    DEFAULT_ORDER = ["top", "quality", "cycle"]
+    # 个股页一次只摆一份报告，用标签切换。标签顺序固定（跟导航一致），
+    # `?focus=` 只决定"打开时停在哪一页"——从质量页点进来就停在质量。
+    TAB_TOOLS = ["top", "quality", "cycle"]
+    TAB_LABEL = {"top": "顶部 · 四因子", "quality": "企业质量初筛",
+                 "cycle": "周期弹性初筛"}
 
     @app.route("/stock/<symbol>")
     def stock(symbol):
         focus = (request.args.get("focus") or "").strip()
-        if focus not in FOCUS_ORDER:
+        if focus not in TAB_TOOLS:
             focus = None
+        active = focus or TAB_TOOLS[0]
         with conn() as c:
             rows = {t: db.symbol_row(c, t, symbol) for t in db.ORDER}
             if not any(rows.values()):
@@ -314,10 +313,9 @@ def create_app(db_path: str | Path | None = None) -> Flask:
                 views=top_data.get("views_full") or top_data.get("views") or [],
                 extras=top_data.get("extras") or {},
                 gaps=top_data.get("gaps") or [],
-                cyc=(rows.get("cycle") or {}).get("data") or {},
-                qua=(rows.get("quality") or {}).get("data") or {},
-                focus=focus, order=FOCUS_ORDER.get(focus, DEFAULT_ORDER),
-                focus_label=FOCUS_LABEL.get(focus, ""))
+                active=active, tabs=TAB_TOOLS, tab_label=TAB_LABEL,
+                came_from=focus, active_row=rows.get(active),
+                active_label=TAB_LABEL.get(active, ""))
 
 
     @app.route("/stock/<symbol>/report/<tool>")

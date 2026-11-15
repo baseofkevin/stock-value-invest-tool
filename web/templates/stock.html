@@ -1,75 +1,87 @@
 {% extends "base.html" %}
 {% block title %}{{ name }}{% endblock %}
 {% block body %}
+{% set r_sel = rows.select %}{% set r_cyc = rows.cycle %}{% set r_qua = rows.quality %}{% set r_top = rows.top %}
 
+{% if active_row and active_row|hasreport %}
+{# 报告自己就带一个大表头（名称/价格/市值/日期），页面这边只留一条压扁的标题条：
+   两套表头叠在一起等于同一个信息印两遍。旧行没有报告时才用下面的大 hero。 #}
+<section class="hero slim">
+  <div class="eyebrow">STOCK</div>
+  <h1>{{ name }}<span class="code">{{ symbol }}</span></h1>
+  <p>个股研究看板 · 下面一次只显示一份工具报告，用标签切换{% if came_from %}；这一份是你点进来的{% endif %}。</p>
+</section>
+{% else %}
 <section class="hero">
   <div class="eyebrow">STOCK</div>
   <h1>{{ name }}<span class="code">{{ symbol }}</span></h1>
   <p>
     四个工具的结论并排。
-    {% set sel = rows.select %}{% set cyc = rows.cycle %}{% set qua = rows.quality %}{% set top = rows.top %}
-    {% if top %}
-      最近一次 {{ top.started_at|clock }}（{{ top.kind_label }}，基准日 {{ top.target_date }}）　
-      收盘 {{ top.close|num(2) }}　距 250 日高点 {{ top.pos250|pct }}。
+    {% if r_top %}
+      最近一次 {{ r_top.started_at|clock }}（{{ r_top.kind_label }}，基准日 {{ r_top.target_date }}）　
+      收盘 {{ r_top.close|num(2) }}　距 250 日高点 {{ r_top.pos250|pct }}。
     {% else %}这只票还没有跑过顶部判断。{% endif %}
     <br><small style="color:#94a3b8">每张卡片都是该工具<b>最近一次</b>的结果；下面「历次结果」列出全部时间点。</small>
-    {% if focus %}
-    <br><small style="color:#0f766e">你从「{{ focus_label }}」页点进来，{{ focus_label }}那一块排在最上面。</small>
-    {% endif %}
+    <br><small style="color:#0f766e">下面一次只显示一份工具报告，用标签切换。</small>
   </p>
 </section>
+{% endif %}
 
 <div class="cards">
-  <a class="card" href="/select{% if sel %}?run={{ sel.run_id }}{% endif %}">
+  <a class="card" href="/select{% if r_sel %}?run={{ r_sel.run_id }}{% endif %}">
     <div class="k">选股</div>
-    <div class="v">{{ '入选' if sel else '不在名单' }}</div>
-    <div class="s">{% if sel %}池内换手分位 {{ sel.pool_turnover_rank|num(1) }} · {{ sel.stars or '' }}<br>{{ sel.kind_label }} {{ sel.started_at|clock }}{% else %}—{% endif %}</div>
+    <div class="v">{{ '入选' if r_sel else '不在名单' }}</div>
+    <div class="s">{% if r_sel %}池内换手分位 {{ r_sel.pool_turnover_rank|num(1) }} · {{ r_sel.stars or '' }}<br>{{ r_sel.kind_label }} {{ r_sel.started_at|clock }}{% else %}—{% endif %}</div>
   </a>
-  <a class="card" href="/cycle{% if cyc %}?run={{ cyc.run_id }}{% endif %}">
+  <a class="card" href="/cycle{% if r_cyc %}?run={{ r_cyc.run_id }}{% endif %}">
     <div class="k">周期</div>
-    <div class="v">{{ '周期股' if cyc and cyc.is_cycle else ('非周期' if cyc else '—') }}</div>
-    <div class="s">{% if cyc %}σ {{ cyc.gm_std_pp|num(2) }}pp · 弹性 {{ {'strong':'强','weak':'弱','unstable':'不稳定'}.get(cyc.elastic_label, cyc.elastic_label or '—') }} · {{ cyc.position_label|poslabel }}<br>{{ cyc.kind_label }} {{ cyc.started_at|clock }}{% else %}—{% endif %}</div>
+    <div class="v">{{ '周期股' if r_cyc and r_cyc.is_cycle else ('非周期' if r_cyc else '—') }}</div>
+    <div class="s">{% if r_cyc %}σ {{ r_cyc.gm_std_pp|num(2) }}pp · 弹性 {{ {'strong':'强','weak':'弱','unstable':'不稳定'}.get(r_cyc.elastic_label, r_cyc.elastic_label or '—') }} · {{ r_cyc.position_label|poslabel }}<br>{{ r_cyc.kind_label }} {{ r_cyc.started_at|clock }}{% else %}—{% endif %}</div>
   </a>
-  <a class="card" href="/quality{% if qua %}?run={{ qua.run_id }}{% endif %}">
+  <a class="card" href="/quality{% if r_qua %}?run={{ r_qua.run_id }}{% endif %}">
     <div class="k">质量 / 估值</div>
-    <div class="v">{{ qua.q|num(1) if qua else '—' }} / {{ qua.v|num(1) if qua else '—' }}</div>
-    <div class="s">{% if qua %}<span class="chip {{ qua.conclusion|tone }}">{{ qua.conclusion }}</span><br>{{ qua.kind_label }} {{ qua.started_at|clock }}{% else %}—{% endif %}</div>
+    <div class="v">{{ r_qua.q|num(1) if r_qua else '—' }} / {{ r_qua.v|num(1) if r_qua else '—' }}</div>
+    <div class="s">{% if r_qua %}<span class="chip {{ r_qua.conclusion|tone }}">{{ r_qua.conclusion }}</span><br>{{ r_qua.kind_label }} {{ r_qua.started_at|clock }}{% else %}—{% endif %}</div>
   </a>
-  <a class="card" href="/top{% if top %}?run={{ top.run_id }}{% endif %}">
+  <a class="card" href="/top{% if r_top %}?run={{ r_top.run_id }}{% endif %}">
     <div class="k">顶部·动量</div>
-    <div class="v">{{ top.momentum_state if top else '—' }}</div>
-    <div class="s">{% if top %}换手 {{ top.turnover_state }} · 业绩 {{ top.earnings_state }} · 量价 {{ top.volume_state }}<br>{{ top.kind_label }} {{ top.started_at|clock }}{% endif %}</div>
+    <div class="v">{{ r_top.momentum_state if r_top else '—' }}</div>
+    <div class="s">{% if r_top %}换手 {{ r_top.turnover_state }} · 业绩 {{ r_top.earnings_state }} · 量价 {{ r_top.volume_state }}<br>{{ r_top.kind_label }} {{ r_top.started_at|clock }}{% endif %}</div>
   </a>
 </div>
 
-{# 三个工具的原版报告，按 focus 排序（从周期页点进来就先看周期）。
+{# 三份报告不堆在一页：上面一条标签栏，下面只摆当前那一份（?focus= 决定打开时停在哪）。
    报告是工具**算完就渲染好**存在 payload.report_html 里的，看板只解压、不重画：
-   这一份的版式（五节质量初筛 / 三个判断 + 含义说明 / 四因子卡片）是工具自己的，
-   看板复刻一遍必然走形。用 iframe 是为了两边 CSS 互不干扰（报告自带一整套
-   全局样式），高度在下面 scripts 里按内容撑开。
+   五节质量初筛 / 三个判断 + 含义说明 / 四因子卡片，看板复刻必然走形。
+   用 iframe 是为了两边 CSS 互不干扰（报告自带一整套全局样式），高度由下面脚本撑开。
    旧行没有 report_html 时退回看板自己的明细视图（_stock_*.html）。 #}
-{% set REPORT_TITLE = {'top': '顶部 · 四因子独立观察', 'quality': '企业质量初筛',
-                       'cycle': '周期弹性初筛'} %}
-{% set REPORT_TOOL = {'top': '顶部', 'quality': '质量', 'cycle': '周期'} %}
-{% for key in order %}
-  {% set row = rows[key] %}
-  {% if row and row|hasreport %}
-  <section class="panel report-panel">
-    <h2>{{ REPORT_TITLE[key] }} <span class="tag">原版报告</span></h2>
-    <p class="sub">
-      {{ REPORT_TOOL[key] }}工具自己排的版面（{{ row.kind_label }} · 基准日 {{ row.target_date }} ·
-      {{ row.started_at|clock }} 跑的）。
-      <a href="/stock/{{ symbol }}/report/{{ key }}?run={{ row.run_id }}" target="_blank" rel="noopener">单独打开这页</a>
-    </p>
-    <iframe class="report-frame" title="{{ REPORT_TITLE[key] }}"
-            src="/stock/{{ symbol }}/report/{{ key }}?run={{ row.run_id }}"
-            loading="lazy"></iframe>
-  </section>
-  {% elif key == 'top' %}{% include "_stock_top.html" %}
-  {% elif key == 'quality' %}{% include "_stock_quality.html" %}
-  {% elif key == 'cycle' %}{% include "_stock_cycle.html" %}
+<nav class="tabs">
+  {% for key in tabs %}
+  <a class="tab {{ 'on' if key == active }}" href="/stock/{{ symbol }}?focus={{ key }}">{{ tab_label[key] }}</a>
+  {% endfor %}
+  {% if active_row %}
+  <span class="tab-meta">
+    {% if active_row|hasreport %}
+      {{ active_row.kind_label }} · 基准日 {{ active_row.target_date }} · {{ active_row.started_at|clock }} 跑的
+      <a href="/stock/{{ symbol }}/report/{{ active }}?run={{ active_row.run_id }}" target="_blank" rel="noopener">单独打开这页 ↗</a>
+    {% else %}
+      {{ active_row.kind_label }} · 基准日 {{ active_row.target_date }} · {{ active_row.started_at|clock }}
+      —— 这条结果里没存原版报告（旧行），下面用看板自己的明细视图
+    {% endif %}
+  </span>
   {% endif %}
-{% endfor %}
+</nav>
+
+{% if active_row and active_row|hasreport %}
+<section class="panel report-panel">
+  <iframe class="report-frame" title="{{ active_label }}"
+          src="/stock/{{ symbol }}/report/{{ active }}?run={{ active_row.run_id }}"></iframe>
+</section>
+{# 明细模板要的是"那一行"（列 + payload），不是 payload 本身 #}
+{% elif active == 'top' %}{% include "_stock_top.html" %}
+{% elif active == 'quality' %}{% with qua = r_qua %}{% include "_stock_quality.html" %}{% endwith %}
+{% elif active == 'cycle' %}{% with cyc = r_cyc %}{% include "_stock_cycle.html" %}{% endwith %}
+{% endif %}
 
 {% if gaps %}
 <section class="panel">
