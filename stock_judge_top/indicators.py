@@ -107,6 +107,30 @@ def kline_metrics(nodes):
     pct = {"AVG20": pct_rank(avg20_hist[-250:], av20)}
     pct_n = {"AVG20": min(len([v for v in avg20_hist if v is not None]), 250)}
 
+    # ---- 成交额兜底（2026-11-15）---------------------------------------
+    # 换手率 = amount ÷ 流通市值，市值只有"当期一份"（quote 域），取不到时
+    # 整张换手卡片会变成「数据不足」（实测 41 只里 2 只）。成交额是市场真实
+    # 数据、不依赖市值，所以缺市值时改用**成交额自身的分位**：它同样能回答
+    # 「这段时间的交易是不是比过去一年更拥挤」，只是口径不同，报告里必须
+    # 标清楚是「成交额分位」而不是「换手率分位」。
+    amt = [fnum(x.get("amount")) for x in nodes]
+
+    def avg_amt(k):
+        if t + 1 < k:
+            return None
+        vals = [v for v in amt[t - k + 1:t + 1] if v is not None and v > 0]
+        return sum(vals) / len(vals) if vals else None
+
+    aav20, aav250 = avg_amt(20), avg_amt(250)
+    amt20_hist = roll_mean(amt, 20)
+    apct = pct_rank(amt20_hist[-250:], aav20)
+    apct_n = min(len([v for v in amt20_hist if v is not None]), 250)
+    a_ratio = (aav20 / aav250) if (aav20 is not None and aav250) else None
+
+    # 换手可用就拿换手（口径更标准），不可用才退回成交额
+    basis = "turnover" if (av20 is not None and av250 is not None
+                           and pct.get("AVG20") is not None) else "amount"
+
     return {
         "bars": len(nodes), "date": nodes[-1]["date"], "close": cl[t],
         "pos_basis": POS_BASIS,
@@ -125,6 +149,9 @@ def kline_metrics(nodes):
         "vol_ratio5": vol_ratio5,
         "pav5": pav5, "pav20": pav20, "pvol_ratio5": pvol_ratio5,
         "pct": pct, "pct_n": pct_n,
+        "turnover_basis": basis,
+        "amt_av20": aav20, "amt_av250": aav250, "amt_ratio": a_ratio,
+        "amt_pct": apct, "amt_pct_n": apct_n,
         "close_5_ago": cl[t - 5] if t >= 5 else None,
         "close_20_ago": cl[t - 20] if t >= 20 else None,
         "close_60_ago": cl[t - 60] if t >= 60 else None,

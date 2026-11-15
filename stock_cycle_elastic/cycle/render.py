@@ -181,11 +181,12 @@ DATA_ATTRS = (
     "data-cycle-channel",
     "data-capacity-direction",
     "data-elastic-reason",
+    "data-latest",
 )
 
 
 def body_attrs(stock, decision):
-    """生成 14 个 data-* 属性（顺序固定，便于正则解析与测试断言）。
+    """生成 15 个 data-* 属性（顺序固定，便于正则解析与测试断言）。
 
     第 10 个 `data-financial` 是后补的（"1"/"0"）：索引页靠它区分
     「金融企业本来就不适用产能周转率」和「这只股票数据缺失」——
@@ -221,6 +222,8 @@ def body_attrs(stock, decision):
         ("data-cycle-channel", cycle.get("channel")),
         ("data-capacity-direction", position.get("capacity_direction")),
         ("data-elastic-reason", elastic.get("reason")),
+        # 最近报告期：结果库要靠它当基准日（各股未必同一期），续跑读回也得有
+        ("data-latest", meta.get("latest")),
     )
     parts = []
     for key, value in pairs:

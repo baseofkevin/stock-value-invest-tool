@@ -20,17 +20,38 @@ def km(**over):
 
 
 class MomentumViewTest(unittest.TestCase):
-    def state(self, ret20):
-        return momentum_view({"kline": km(ret20=ret20)})["state"]
+    def state(self, ret20, **over):
+        return momentum_view({"kline": km(ret20=ret20, **over)})["state"]
 
     def test_states(self):
-        self.assertEqual(self.state(0.25), "过热")
-        self.assertEqual(self.state(0.20), "过热")
-        self.assertEqual(self.state(0.199), "偏热")
-        self.assertEqual(self.state(0.10), "偏热")
-        self.assertEqual(self.state(0.099), "中性")
-        self.assertEqual(self.state(0.0), "中性")
-        self.assertEqual(self.state(-0.001), "偏弱")
+        """状态是二维：位置·涨速。fixture 的 pos250 = -13.31% → 中位。"""
+        self.assertEqual(self.state(0.25), "中位·过热")
+        self.assertEqual(self.state(0.20), "中位·过热")
+        self.assertEqual(self.state(0.199), "中位·偏热")
+        self.assertEqual(self.state(0.10), "中位·偏热")
+        self.assertEqual(self.state(0.099), "中位·走平")
+        self.assertEqual(self.state(0.0), "中位·走平")
+        self.assertEqual(self.state(-0.001), "中位·偏弱")
+
+    def test_position_dimension_uses_pos250(self):
+        self.assertEqual(self.state(0.25, pos250=-0.02), "高位·过热")
+        self.assertEqual(self.state(0.25, pos250=-0.30), "低位·过热")
+        # 不足 250 根时退回 60 日，口径写在副标题里
+        v = momentum_view({"kline": km(ret20=0.25, pos250=None, pos60=-0.02)})
+        self.assertEqual(v["state"], "高位·过热")
+        self.assertIn("60日", v["subtitle"])
+
+    def test_low_position_surge_is_not_called_overheated(self):
+        """低位反抽不能叫「过热」——那是最容易被读成见顶的误标。
+
+        旧版只看 20 日涨幅：阿尔特 +40.7% 但离 60 日高点 -14.0% 被标"过热"。
+        """
+        v = momentum_view({"kline": km(ret20=0.407, pos250=-0.14)})
+        self.assertEqual(v["state"], "中位·过热")
+        self.assertIn("不是高位过热", v["headline"])
+        v2 = momentum_view({"kline": km(ret20=0.30, pos250=-0.45)})
+        self.assertEqual(v2["state"], "低位·过热")
+        self.assertIn("低位反抽", v2["headline"])
 
     def test_short_history_is_insufficient(self):
         v = momentum_view({"kline": km(bars=50)})
@@ -78,24 +99,50 @@ class VolumeViewTest(unittest.TestCase):
         return volume_view({"kline": km(**over)})
 
     def test_high_level_stall(self):
-        v = self.view(pos60=-0.02, pvol_ratio5=1.6, range5_high=1.02, range5_low=1.0,
-                      ret5=0.005)
+        # 「高位」用 250 日（2026-11-15 起），pos60 只是显示用
+        v = self.view(pos250=-0.02, pos60=-0.02, pvol_ratio5=1.6,
+                      range5_high=1.02, range5_low=1.0, ret5=0.005)
         self.assertEqual(v["state"], "放量盘整")
 
     def test_high_level_volume_up(self):
-        v = self.view(pos60=-0.02, pvol_ratio5=1.6, range5_high=1.10, range5_low=1.0,
-                      ret5=0.03)
+        v = self.view(pos250=-0.02, pos60=-0.02, pvol_ratio5=1.6,
+                      range5_high=1.10, range5_low=1.0, ret5=0.03)
         self.assertEqual(v["state"], "放量上涨")
 
     def test_volume_without_high_position(self):
-        v = self.view(pos60=-0.30, pvol_ratio5=2.0)
+        v = self.view(pos250=-0.30, pos60=-0.30, pvol_ratio5=2.0)
         self.assertEqual(v["state"], "放量（非高位）")
 
     def test_not_triggered(self):
-        self.assertEqual(self.view(pvol_ratio5=1.0, pos60=-0.01)["state"], "未触发")
+        self.assertEqual(self.view(pvol_ratio5=1.0, pos250=-0.01)["state"], "未触发")
 
     def test_insufficient(self):
         self.assertEqual(self.view(bars=30)["state"], "数据不足")
+
+
+class TurnoverAmountFallbackTest(unittest.TestCase):
+    """流通市值缺失 → 用成交额自身分位，而不是整张卡片"数据不足"。"""
+
+    def view(self, **over):
+        base = dict(turnover_basis="amount", av20=None, av250=None,
+                    pct={"AVG20": None}, amt_av20=8e8, amt_av250=5e8,
+                    amt_ratio=1.6, amt_pct=82.0, amt_pct_n=240)
+        base.update(over)
+        return turnover_view({"kline": km(**base)})
+
+    def test_falls_back_instead_of_insufficient(self):
+        v = self.view()
+        self.assertEqual(v["state"], "偏高")
+        self.assertEqual(v["title"], "交易拥挤度")      # 不顶着"换手"的名字
+        self.assertIn("成交额", v["subtitle"])
+
+    def test_thresholds_mirror_turnover(self):
+        self.assertEqual(self.view(amt_pct=80.0, amt_ratio=1.1)["state"], "中性")
+        self.assertEqual(self.view(amt_pct=60.0)["state"], "中性")
+        self.assertEqual(self.view(amt_pct=30.0)["state"], "偏低")
+
+    def test_amount_history_too_short(self):
+        self.assertEqual(self.view(amt_pct=None)["state"], "数据不足")
 
 
 class EarningsViewTest(unittest.TestCase):

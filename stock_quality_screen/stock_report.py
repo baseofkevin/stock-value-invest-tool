@@ -371,6 +371,9 @@ def _run_batch(args: argparse.Namespace) -> int:
     pending_codes: list[str] = []
     reused_rows = 0
     reused_codes = 0
+    # code → ScoreSummary：结果库要落每只票的 Q/V/结论（复用和现生成的都算）
+    summaries: dict[str, object] = {}
+    data_by_code: dict[str, dict] = {}
     for code in unique_codes:
         indices = code_rows[code]
         # 续跑只看输出目录里已有的报告（带代码的文件名），不依赖任何 CSV
@@ -384,6 +387,7 @@ def _run_batch(args: argparse.Namespace) -> int:
                     print(f"已有报告不可用，重新生成 {existing.name}：{exc}", file=sys.stderr)
                 existing = None
         if existing is not None and summary is not None:
+            summaries[code] = summary
             for index in indices:
                 table.rows[index][SCORE_COLUMN] = summary.conclusion
                 table.rows[index][LINK_COLUMN] = report_link_cell(existing)
@@ -441,6 +445,10 @@ def _run_batch(args: argparse.Namespace) -> int:
                 except Exception as exc:  # noqa: BLE001
                     result = ReportResult(code=code, error=str(exc))
                     print(f"[{done:>3}/{total}] {code} 生成失败：{exc}", file=sys.stderr)
+                if result.summary is not None:
+                    summaries[code] = result.summary
+                if getattr(result, "data", None):
+                    data_by_code[code] = result.data
                 _apply_result(table, code_rows[code], result)
                 done_count += 1
                 if not args.quiet:
@@ -482,6 +490,8 @@ def _run_batch(args: argparse.Namespace) -> int:
         else:
             ok += 1
 
+    _save_results(table, summaries, data_by_code, out_dir)
+
     nav_path: Path | None = None
     try:
         nav_path = write_index_html(table, out_dir)
@@ -500,6 +510,122 @@ def _run_batch(args: argparse.Namespace) -> int:
         if nav_path is not None:
             print(f"  导航页   {nav_path}")
     return 0 if failed == 0 else 1
+
+
+def _num_from_text(text: str) -> float | None:
+    """从 "62.3" / "62.3（良好）" 里取第一个数；取不到就是 None。"""
+    match = re.search(r"-?\d+(?:\.\d+)?", str(text or ""))
+    return float(match.group(0)) if match else None
+
+
+def _grade_from_text(text: str) -> str:
+    """Q/V 文本里的档位（"62.3（良好）" → "良好"），没有就空串。"""
+    match = re.search(r"[（(]([^）)]+)[）)]", str(text or ""))
+    return match.group(1) if match else ""
+
+
+_Q_NOTE_RE = re.compile(
+    r'data-metric="q"[^>]*>[^<]*</div>\s*<div class="note">([^<]*)</div>', re.S)
+_V_NOTE_RE = re.compile(
+    r'data-metric="v">[^<]*</div>\s*<div class="note">([^<]*)</div>', re.S)
+
+
+def _html_extra(code: str, out_dir: Path) -> dict:
+    """从已有报告里补 Q/V 档位与风险已知数（续跑复用路径，没有内存数据可用）。
+
+    报告里 Q 那格下面写着「良好 · 风险检查 9/14 已知」，V 那格下面只写档位。
+    解析它比再跑一遍计算便宜得多，也是"续跑不重算"这个设计的代价。
+    """
+    import html as _html
+    try:
+        path = _find_existing_report(out_dir, code)
+        if path is None:
+            return {}
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    out: dict = {}
+    m = _Q_NOTE_RE.search(text)
+    if m:
+        note = _html.unescape(m.group(1))
+        out["q_grade"] = note.split("·")[0].strip()
+        hit = re.search(r"风险检查\s*(\d+)\s*/\s*(\d+)", note)
+        if hit:
+            out["risks_known"] = int(hit.group(1))
+            out["risks_applicable"] = int(hit.group(2))
+    for key in ("risks_hit", "risks_watch"):
+        hit = re.search(rf'data-{key.replace("_", "-")}="(\d+)"', text)
+        if hit:
+            out[key] = int(hit.group(1))
+    m = _V_NOTE_RE.search(text)
+    if m:
+        out["v_grade"] = _html.unescape(m.group(1)).strip()
+    return out
+
+
+def _save_results(table, summaries, data_by_code, out_dir: Path) -> None:
+    """把本批的 Q/V/结论写进 results.db（派生数据，失败只 warn）。
+
+    基准日取输出目录名里的日期（`_out_dir_for` 由启动日推出来的），
+    取不到就用今天——质量初筛没有"基准日"概念，这里只求能对上是哪一批。
+    """
+    try:
+        from stock_data_fetch import results
+    except Exception:                            # noqa: BLE001
+        return
+    names = {}
+    for index, row in enumerate(table.rows):
+        code = table.rows[index].get("代码") or ""
+        if code:
+            names.setdefault(code, row.get("名称") or "")
+    rows = []
+    for code, summary in summaries.items():
+        payload = _payload(data_by_code.get(code))
+        if not payload:
+            payload = _html_extra(code, out_dir)
+        rows.append({
+            "symbol": code, "name": names.get(code),
+            "q": payload.get("q_score") if payload.get("q_score") is not None
+            else _num_from_text(summary.quality),
+            "q_grade": payload.get("q_grade") or _grade_from_text(summary.quality),
+            "v": payload.get("v_score") if payload.get("v_score") is not None
+            else _num_from_text(summary.valuation),
+            "v_grade": payload.get("v_grade") or _grade_from_text(summary.valuation),
+            "conclusion": summary.conclusion,
+            "reason": payload.get("reason") or "",
+            "risks_hit": payload.get("risks_hit"),
+            "risks_watch": payload.get("risks_watch"),
+            "risks_known": payload.get("risks_known"),
+            "payload": {**payload, "quality_text": summary.quality,
+                        "valuation_text": summary.valuation},
+        })
+    if not rows:
+        return
+    date = next((p.name for p in [out_dir] if re.fullmatch(r"\d{4}-\d{2}-\d{2}", p.name)), "")
+    results.save("quality", rows, date or datetime.now().date().isoformat(),
+                 argv="stock_quality_screen")
+
+
+def _payload(data: dict | None) -> dict:
+    """从内存里的报告数据取几个能直接查的字段（复用的报告没有 data，返回空）。"""
+    if not data:
+        return {}
+    dec = data.get("decision") or {}
+    dq = data.get("data_quality") or {}
+    checks = ((data.get("risks") or {}).get("checks") or [])
+    q = data.get("quality") or {}
+    v = data.get("valuation_score") or {}
+    return {
+        "reason": dec.get("reason") or "",
+        "q_grade": q.get("grade") or "",
+        "v_grade": v.get("grade") or "",
+        "q_score": q.get("score"),
+        "v_score": v.get("score"),
+        "risks_known": dq.get("risk_known"),
+        "risks_hit": sum(1 for c in checks if c.get("status") == "hit"),
+        "risks_watch": sum(1 for c in checks if c.get("status") == "watch"),
+        "fatal": list(data.get("fatal") or []),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -127,6 +127,8 @@ def _one(target: dict, end: str, refresh: bool, db: str | None) -> dict:
         "days_since_high": r.get("days_since_high"),
         "phase": r.get("phase"),
         "views": views,
+        "extras": r.get("extras"),
+        "gaps": r.get("gaps"),
         "html": path,
     }
 
@@ -175,11 +177,23 @@ def run(path: str, end: str, *, refresh: bool = False, workers: int = 4,
     failed = [r for r in results if not r["ok"]]
     if not quiet:
         _print_summary(results, failed)
+    _save_results(results, end)
     index = _write_index(results, end)
     if index:
         print(f"\n索引页：{index}")
     print(f"批量完成：成功 {len(results) - len(failed)} 只，失败 {len(failed)} 只，共 {total} 只")
     return 0 if not failed else 1
+
+
+def _save_results(results: list[dict], end: str) -> None:
+    """把这一批的四因子状态写进 results.db（派生数据，失败只 warn）。"""
+    try:
+        from stock_data_fetch import results as results_db
+    except Exception:                            # noqa: BLE001
+        return
+    rows = [r for r in results if r.get("ok")]
+    if rows:
+        results_db.save("top", rows, end, argv="stock_judge_top --csv")
 
 
 def _w(text: str) -> int:

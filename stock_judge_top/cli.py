@@ -142,6 +142,14 @@ def main(argv=None):
         print_report(r)
         sys.stdout.flush()
 
+    # 单只模式也落结果库：批量是常态，但单只盯盘同样是"跑出来的一次结论"
+    try:
+        from stock_data_fetch import results as results_db
+        results_db.save("top", [{**r, "code": code, "name": r.get("name"),
+                                 "ok": True}], end, argv="stock_judge_top")
+    except Exception:                            # noqa: BLE001 - 落库失败绝不影响出报告
+        pass
+
     if not a.no_html:
         try:
             html_path = write_html_file(r)

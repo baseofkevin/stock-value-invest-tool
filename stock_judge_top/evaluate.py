@@ -6,6 +6,7 @@
 """
 from .common.values import fnum
 from .data import fetch
+from .extras import enrich
 from .finance import fin_metrics
 from .indicators import kline_metrics, market_phase
 from .judgement import earnings_judgement, qoq_judgement
@@ -83,6 +84,16 @@ def evaluate(hub, code, end, refresh, with_quote=True):
     else:
         log("[业绩] 无可用财务数据，业绩卡片不判断")
 
+    # --- 旁证：估值分位 / 机构目标价 / 基本面反证 / 周期位置 ----------------
+    # 这四张都只是"旁证"，任何一张取不到都只记一条缺口，绝不拦住四因子。
+    extras, gaps = enrich(hub, code, end, km.get("close"), refresh)
+    cy = extras.get("cycle") or {}
+    if cy.get("is_cycle"):
+        log(f"[旁证] 周期股：毛利率σ {cy.get('gm_std') and round(cy['gm_std'], 2)}pp | "
+            f"弹性 {cy.get('elastic_label')} | 产能位置 {cy.get('position_label')}")
+    else:
+        log("[旁证] 非周期股（判断①不成立），不出周期位置卡片")
+
     warnings = []
     if km["bars"] < 250:
         warnings.append(f"K线仅 {km['bars']} 根，不足 250 日；位置类指标只作参考")
@@ -115,6 +126,7 @@ def evaluate(hub, code, end, refresh, with_quote=True):
         },
         "kline": km, "finance": fm,
         "quote": quote, "warnings": warnings,
+        "extras": extras, "gaps": gaps,
         "earnings": {
             "state": ej["state"], "direction": ej["direction"],
             "is_accelerating": ej["is_accelerating"],

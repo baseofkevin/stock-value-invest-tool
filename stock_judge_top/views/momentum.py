@@ -26,29 +26,64 @@ def momentum_view(r):
             "K线不足 60 日或动量数据缺失，本轮不判断。", mom_calc)
 
     ret20, ret60, pos60 = km["ret20"], km.get("ret60"), km["pos60"]
+    pos250 = km.get("pos250")
+
+    # 二维（2026-11-15）：**"涨得多"和"位置高"是两件事**。
+    # 旧版只看 20 日涨幅，于是「从深坑里 20 日反弹 40%、离 60 日高点还有 -14%」
+    # 也会被标成"过热"——那不是顶部的过热，是下跌后的剧烈反抽。
+    # 实测 40 只里 4 只被这样误标（阿尔特 +40.7%/距高 -14.0%、海量数据
+    # +20.6%/-14.0%、日海智能 +17.1%/-16.6%、通力科技 +14.8%/-11.4%）。
     if ret20 >= 0.20:
-        state, tone = "过热", "warn"
+        speed, tone_s = "过热", "warn"
     elif ret20 >= 0.10:
-        state, tone = "偏热", "warn"
+        speed, tone_s = "偏热", "warn"
     elif ret20 >= 0:
-        state, tone = "中性", "info"
+        speed, tone_s = "走平", "info"
     else:
-        state, tone = "偏弱", "muted"
+        speed, tone_s = "偏弱", "muted"
+
+    # 位置用 250 日（顶部判断的时间尺度是年线级别）；不足 250 根时退回 60 日，
+    # 并在副标题里写明口径。
+    if pos250 is not None:
+        pos, pos_basis = pos250, "250日"
+    else:
+        pos, pos_basis = pos60, "60日"
+    if pos >= -0.05:
+        where, tone_p = "高位", "warn"
+    elif pos >= -0.20:
+        where, tone_p = "中位", "info"
+    else:
+        where, tone_p = "低位", "muted"
+
+    state = f"{where}·{speed}"
+    # 色调取"更值得看"的那一侧：高位永远要先看，其次才是涨速
+    tone = tone_p if tone_p == "warn" else tone_s
+
+    if where == "高位" and speed in ("过热", "偏热"):
+        headline = f"20日 {fmt_pct(ret20)}，距{pos_basis}高点 {fmt_pct(pos)}——高位加速"
+    elif where != "高位" and speed in ("过热", "偏热"):
+        # 涨得急但没到高位：这是反抽，不是见顶。把"离高点还有多远"顶到句首，
+        # 否则读者只看见"过热"两个字就当成顶部信号。
+        headline = (f"距{pos_basis}高点仍有 {fmt_pct(pos)}，20日 {fmt_pct(ret20)}"
+                    f"——{'低位反抽' if where == '低位' else '尚未到高位'}，不是高位过热")
+    else:
+        headline = f"20日 {fmt_pct(ret20)}，距{pos_basis}高点 {fmt_pct(pos)}"
     return {
         "key": "momentum", "title": "动量",
-        "subtitle": "股价走势的延续性",
+        "subtitle": f"涨幅（20日）× 位置（距{pos_basis}高点）两个维度",
         "state": state, "tone": tone,
-        "headline": f"20日 {fmt_pct(ret20)}，距60日高点 {fmt_pct(pos60)}",
+        "headline": headline,
         "metrics": [
             ("20日涨幅", fmt_pct(ret20)),
             ("5日涨幅", fmt_pct(km.get("ret5"))),
             ("60日涨幅", fmt_pct(ret60)),
-            ("距60日高点", fmt_pct(pos60)),
+            (f"距{pos_basis}高点", fmt_pct(pos)),
         ],
         "calc": mom_calc,
         "note": (
-            "动量只描述“已经涨了多少、是否还在高位”，不等于见顶。"
-            "高位强动量既可能延续，也可能是加速赶顶，需要你结合其他因子判断。"
+            "动量分两个维度：涨了多少（20 日涨幅）和现在在哪个位置（距 250 日高点），"
+            "两者分开看才有意义——低位大反弹不是过热，高位继续加速才值得警惕。"
+            "但两者都不等于见顶：高位强动量既可能延续，也可能是加速赶顶。"
         ),
         "wide": False,
     }

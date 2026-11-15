@@ -878,10 +878,25 @@ def _fatal(data: dict[str, Any], checks: list[dict[str, Any]]) -> list[str]:
     # 旧写法 `_years(data)[-3:]` 在只有 2 年时切片仍非空，会把 2 年说成 3 年。
     ocf_3y = [y.get("ocf") for y in _years(data)[-3:]]
     if (len(ocf_3y) >= 3 and all(v is not None and v < 0 for v in ocf_3y)
-            and latest.get("ebit") and latest.get("debt") is not None
+            and latest.get("ebit") is not None and latest.get("debt") is not None
             and latest.get("cash") is not None):
-        if (latest["debt"] - latest["cash"]) / latest["ebit"] > config.FATAL_NET_DEBT_EBIT:
-            fatal.append(f"连续 {config.FCF_NEGATIVE_YEARS} 年经营现金流为负且净负债/EBIT > {config.FATAL_NET_DEBT_EBIT:g}")
+        nd = latest["debt"] - latest["cash"]
+        ebit_2y = latest["ebit"]
+        # EBIT ≤ 0 的判据（2026-11-15 修）：比值 `净负债/EBIT` 在 EBIT<0 时恒为
+        # 负数，`> 4` 永不成立，于是「三年经营现金流为负 + 净负债」的公司只要
+        # 亏损就绕过了这条致命项——恰恰是最该触发的那一类。改为按方向判：
+        # 净负债 > 0 且 EBIT ≤ 0 → 直接算命中（借钱、不赚钱、还连续三年失血）。
+        # 净负债 ≤ 0（净现金）时不算：它没有靠借钱续命，谈不上这条。
+        if ebit_2y <= 0:
+            hit = nd > 0
+            why = (f"连续 {config.FCF_NEGATIVE_YEARS} 年经营现金流为负、EBIT 为负"
+                   f"（{ebit_2y / 1e8:.2f} 亿）且净有息负债 {nd / 1e8:.2f} 亿 > 0")
+        else:
+            hit = nd / ebit_2y > config.FATAL_NET_DEBT_EBIT
+            why = (f"连续 {config.FCF_NEGATIVE_YEARS} 年经营现金流为负且净负债/EBIT > "
+                   f"{config.FATAL_NET_DEBT_EBIT:g}")
+        if hit:
+            fatal.append(why)
     return fatal
 
 

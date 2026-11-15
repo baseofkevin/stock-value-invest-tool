@@ -32,7 +32,7 @@ from .params import (C2_TOL, C3_RATIO, KLINE_BARS,
                      OUT_DIR_NAME, TURN_WINDOW)
 from .rules import find_start, judge, reason_cat
 from .turnover import apply_turnover
-from .output import csv_row, print_summary
+from .output import csv_row, print_summary, turn_cell, turn_star
 from .turnaround import compute_turnaround
 
 
@@ -530,6 +530,31 @@ def _write(st) -> None:
     st.update({"csv_path": csv_path, "n_csv": n_csv})
     if not os.path.exists(csv_path):
         raise RuntimeError("产物缺失：CSV 没写上盘")
+
+    # 结果是派生数据，另存一份到 results.db（失败只 warn，绝不影响名单本身）
+    _save_results(st, final, S)
+
+
+def _save_results(st, final, S) -> None:
+    """把入选名单写进结果库，字段与 CSV 同源（`x` 是同一批 dict）。"""
+    try:
+        from stock_data_fetch import results
+    except Exception:                            # noqa: BLE001
+        return
+    rows = [{
+        "symbol": x["code"], "name": x.get("name"),
+        "industry": x.get("sw1"), "launch_date": x.get("d_star"),
+        "days_since_launch": x.get("age"), "vol_multiple": x.get("vcross"),
+        "launch_gain_pct": x.get("chg"), "ma20_gap_pct": x.get("r20"),
+        "ma60_gap_pct": x.get("r60"),
+        "gross_margin_up": turn_cell(x.get("turn_p1", ""), x.get("turn_gm", "")),
+        "turnover20": x.get("turn20"), "pool_turnover_rank": x.get("turn20_rank"),
+        "pool_size": st.get("pool_n"), "stars": turn_star(x.get("turn20_rank")),
+        "close": x.get("price"), "market_cap_yi": x.get("total_cap_yi"),
+        "payload": x,
+    } for x in final]
+    results.save("select", rows, S, argv="stock_kline_screen",
+                 note=f"粗筛池 {st.get('pool_n')} 只 / 入选 {len(final)} 只")
 
 
 def _out_dir(hub) -> str:

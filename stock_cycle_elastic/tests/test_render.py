@@ -37,7 +37,7 @@ MATRIX = (
     "no_cl",                       # 缺合同负债字段
 )
 
-#: 14 个 data-* 锚点（顺序须与 render.DATA_ATTRS 一致）
+#: 15 个 data-* 锚点（顺序须与 render.DATA_ATTRS 一致）
 #: 第 10 个 data-financial 用来区分"金融不适用"与"数据缺失"；
 #: 第 11/12 个 data-gm-cv / data-cycle-channel 让索引页能判断"标签是哪条通道来的"
 #: （判断① 双通道后，光看 data-gm-std 已推不出标签）
@@ -56,6 +56,7 @@ ATTRS = (
     "data-cycle-channel",
     "data-capacity-direction",
     "data-elastic-reason",
+    "data-latest",
 )
 
 #: 旧版（已废弃）的徽章文案 —— 出现即回归
@@ -149,7 +150,7 @@ class TestDataAttrs(unittest.TestCase):
 
     def test_data_attrs_matches_render_constant(self):
         self.assertEqual(tuple(render.DATA_ATTRS), ATTRS)
-        self.assertEqual(len(render.DATA_ATTRS), 14)
+        self.assertEqual(len(render.DATA_ATTRS), 15)
 
     def test_code_and_name_are_verbatim(self):
         case = render_named("full_40q")

@@ -221,6 +221,9 @@ def process_one(code, name_hint="", out_dir=None, timestamp=None, force=False):
 
     m = metrics.compute_all(stock["quarters"], config)
     decision = decide.decide(stock["quarters"], m, stock["industry"], config)
+    # 最近报告期挂进 decision：结果库要用它当基准日（各股未必同一期）
+    decision.setdefault("meta", {})["latest"] = str(
+        (stock["quarters"][-1] or {}).get("date") or "")[:10]
     charts = metrics.series_for_chart(stock["quarters"], config)
     html = render.render(stock, decision, m, charts)
 
@@ -249,6 +252,7 @@ _ATTR_RE = {
     "cycle_channel": re.compile(r'data-cycle-channel="([^"]*)"'),
     "capacity_direction": re.compile(r'data-capacity-direction="([^"]*)"'),
     "elastic_reason": re.compile(r'data-elastic-reason="([^"]*)"'),
+    "latest": re.compile(r'data-latest="([^"]*)"'),
 }
 
 _HTML_UNESCAPE = (("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
@@ -304,7 +308,10 @@ def parse_report_decision(path):
         # 最坏结果只是索引页把"不适用"显示成"—"，不会误判成别的标签。
         "flags": {"financial": got.get("financial") == "1",
                   "insufficient_history": False},
-        "meta": {"quarters": int(as_float("quarters") or 0)},
+        # latest 是最近报告期（结果库拿它当基准日）；老报告没这个属性时为空串，
+        # 由调用方退回今天——不能瞎猜一期，宁可承认不知道。
+        "meta": {"quarters": int(as_float("quarters") or 0),
+                 "latest": got.get("latest") or ""},
     }
 
 
@@ -382,6 +389,8 @@ def run_batch(csv_path, out_dir=None, workers=4, force=False, progress=None,
     else:
         _run_threaded(to_process, work, workers)
 
+    _save_results(results)
+
     index_path = ""
     if build_index:
         from cycle import index_html
@@ -392,6 +401,54 @@ def run_batch(csv_path, out_dir=None, workers=4, force=False, progress=None,
         )
 
     return results, index_path
+
+
+def _save_results(results) -> None:
+    """把批量结果写进 results.db（派生数据，失败只 warn）。
+
+    `decision` 是 decide() 的三档结构；字段名对齐 results.cycle_result。
+    失败的股票不入库——结果库只存"算出来的结论"，失败原因看 stderr。
+    """
+    try:
+        from stock_data_fetch import results as results_db
+    except Exception:                            # noqa: BLE001
+        return
+    rows = []
+    for item in results:
+        d = item.decision or {}
+        if not item.ok or not d:
+            continue
+        cyc = d.get("cycle") or {}
+        ela = d.get("elastic") or {}
+        pos = d.get("position") or {}
+        rows.append({
+            "symbol": item.row.code, "name": item.stock.get("name") if item.stock else item.row.name_raw,
+            "is_cycle": cyc.get("label") == 1,      # decide.CYCLE_YES
+            "gm_std": cyc.get("gm_std"), "gm_cv": cyc.get("gm_cv"),
+            "gm_median": cyc.get("gm_median"),
+            "elasticity": ela.get("ratio"), "elastic_label": ela.get("label"),
+            "position_pct": pos.get("percent"), "position_label": pos.get("label"),
+            "payload": d,
+        })
+    if not rows:
+        return
+    results_db.save("cycle", rows, _latest_quarter(results) or _today(),
+                    argv="stock_cycle_elastic")
+
+
+def _latest_quarter(results) -> str:
+    """结果里最新的报告期（批量里各股拉到的季度未必同一期）。"""
+    best = ""
+    for item in results:
+        d = str(((item.decision or {}).get("meta") or {}).get("latest") or "")
+        if d > best:
+            best = d
+    return best
+
+
+def _today() -> str:
+    import datetime as dt
+    return dt.date.today().isoformat()
 
 
 def _new_results(rows):

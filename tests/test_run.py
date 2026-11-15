@@ -197,3 +197,102 @@ class PassthroughUnknownTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class BackupTest(unittest.TestCase):
+    """备份：文件名识别、保留份数、绝不删手工文件。
+
+    这三点错了都会"很晚才发现"：识别错了会无限累积，保留策略错了会删掉
+    别人手写的回滚点，删早了会在真出事那天发现只有一份坏的。
+    """
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _touch(self, name, data=b"x"):
+        p = self.dir / name
+        p.write_bytes(data)
+        return p
+
+    def test_recognizes_own_backup_names(self):
+        for name in ("shared.db.20261115-143000", "results.db.20261114-090001"):
+            self.assertIsNotNone(run.BACKUP_RE.match(name), name)
+
+    def test_ignores_manual_names(self):
+        """`shared.db.20261115-before-v6` 是手写的回滚点，不能被当成自己的备份。"""
+        for name in ("shared.db.20261115-before-v6", "shared.db",
+                     "shared.db.20261115", "notes.txt"):
+            self.assertIsNone(run.BACKUP_RE.match(name), name)
+
+    def test_existing_backups_sorted_and_filtered(self):
+        self._touch("shared.db.20261115-143000")
+        self._touch("shared.db.20261113-143000")
+        self._touch("results.db.20261115-143000")     # 别的库
+        self._touch("shared.db.20261115-before-v6")   # 手写的
+        got = [p.name for p in run._existing_backups(self.dir, "shared")]
+        self.assertEqual(got, ["shared.db.20261113-143000",
+                               "shared.db.20261115-143000"])
+
+    def test_existing_backups_missing_dir_is_empty(self):
+        self.assertEqual(run._existing_backups(self.dir / "nope", "shared"), [])
+
+
+class BackupEndToEndTest(unittest.TestCase):
+    """真建一个 3 张表的小库，跑一次备份：校验、保留、跳过手写文件。"""
+
+    def setUp(self):
+        import sqlite3
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.db = self.dir / "shared.db"
+        conn = sqlite3.connect(str(self.db))
+        conn.execute("create table a(x)")
+        conn.execute("create table b(y)")
+        conn.execute("pragma user_version=6")
+        conn.commit()
+        conn.close()
+        self._real_root = run.ROOT
+        run.ROOT = self.dir
+
+    def tearDown(self):
+        run.ROOT = self._real_root
+        self.tmp.cleanup()
+
+    def _tee(self):
+        class _T:
+            def __init__(self):
+                self.lines = []
+
+            def line(self, text=""):
+                self.lines.append(text)
+
+        return _T()
+
+    def test_backup_creates_verified_copy(self):
+        tee = self._tee()
+        rc = run.cmd_backup(type("A", (), {"dir": str(self.dir / "bk"), "keep": 7,
+                                           "only": "shared", "list_only": False})(), tee)
+        self.assertEqual(rc, 0)
+        made = list((self.dir / "bk").glob("shared.db.*"))
+        self.assertEqual(len(made), 1)
+        import sqlite3
+        conn = sqlite3.connect(str(made[0]))
+        self.assertEqual(conn.execute("pragma user_version").fetchone()[0], 6)
+        self.assertEqual(conn.execute(
+            "select count(*) from sqlite_master where type='table'").fetchone()[0], 2)
+        conn.close()
+        self.assertTrue(any("完整性 ok" in x for x in tee.lines))
+
+    def test_missing_db_is_skipped(self):
+        (self.db).unlink()
+        tee = self._tee()
+        rc = run.cmd_backup(type("A", (), {"dir": str(self.dir / "bk"), "keep": 7,
+                                           "only": None, "list_only": False})(), tee)
+        self.assertEqual(rc, 0)
+        self.assertTrue(any("不存在" in x for x in tee.lines))

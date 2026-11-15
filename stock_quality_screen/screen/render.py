@@ -966,7 +966,7 @@ def _section_score(data: dict[str, Any]) -> str:
 <section>
   <h2>四、综合评分</h2>
   <div class="grid">
-    <div class="metric"><div class="k">质量分 Q</div><div class="v" data-metric="q">{n(qs, 1)}</div><div class="note">{esc(q.get('grade'))} · 风险检查 {risk_known}/{risk_applicable} 已知</div>
+    <div class="metric"><div class="k">质量分 Q</div><div class="v" data-metric="q" data-risks-hit="{risk_hits}" data-risks-watch="{risk_watches}">{n(qs, 1)}</div><div class="note">{esc(q.get('grade'))} · 风险检查 {risk_known}/{risk_applicable} 已知</div>
       {f'<div class="note">{esc(consist_note)}</div>' if consist_note else ''}
       {_bar(qs, _score_class(qs))}</div>
     <div class="metric"><div class="k">估值分 V</div><div class="v" data-metric="v">{n(vs, 1)}</div><div class="note">{esc(v.get('grade'))}</div>

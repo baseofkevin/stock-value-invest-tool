@@ -44,6 +44,8 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
+import sqlite3
 import subprocess
 import sys
 import time
@@ -443,6 +445,129 @@ def cmd_calendar(args, tee: Tee) -> int:
 
 
 # ---------------------------------------------------------------------------
+# 备份
+# ---------------------------------------------------------------------------
+
+#: 备份文件名形如 `shared.db.20261115-143000`。
+#: 保留策略**只认这个格式**：手工改名的（如 `shared.db.20261115-before-v6`）
+#: 是老版本留下的回滚点，一律不删——删掉别人手写的文件不是"清理"，是事故。
+BACKUP_RE = re.compile(r"^(shared|results)\.db\.(\d{8}-\d{6})$")
+DB_FILES = (("shared", "shared.db"), ("results", "results.db"))
+
+
+def _backup_dir(arg: str | None) -> Path:
+    if arg:
+        return Path(arg).expanduser().resolve()
+    return ROOT / "backup"
+
+
+def _existing_backups(where: Path, name: str) -> list[Path]:
+    """某库已有的、由本命令生成的备份（按时间戳升序）。"""
+    if not where.is_dir():
+        return []
+    out = []
+    for p in where.iterdir():
+        m = BACKUP_RE.match(p.name)
+        if m and m.group(1) == name and p.is_file():
+            out.append(p)
+    return sorted(out, key=lambda p: p.name)
+
+
+def _backup_one(tee: Tee, name: str, src: Path, where: Path, stamp: str,
+                keep: int) -> int:
+    """VACUUM INTO 一份备份，校验完整性与表数，然后按 keep 清理旧份。
+
+    为什么用 `VACUUM INTO` 而不是 `cp`：
+      · shared.db 是 WAL 模式，直接 cp 可能拷到一个"缺最新提交"的库，
+        `-wal` 文件不在或已被 checkpoint 掉时，拷出来的库会缺数据；
+      · VACUUM INTO 走 SQLite 的一致性读，且顺带整理碎片（体积小很多）。
+
+    为什么要校验：备份存在的意义是"能恢复"。拷完不做 `integrity_check`
+    就等于把发现损坏的时间推迟到真出事那天。
+    """
+    dest = where / f"{src.name}.{stamp}"
+    if dest.exists():
+        tee.line(f"⚠️  {dest.name} 已存在，跳过")
+        return 0
+    tee.line(f"⏳ 备份 {src.name}（{src.stat().st_size / 1024 / 1024:.0f} MB）→ {dest}")
+    src_conn = dest_conn = None
+    try:
+        src_conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+        src_conn.execute("vacuum into ?", (str(dest),))
+    except Exception as e:                          # noqa: BLE001
+        if dest.exists():
+            dest.unlink(missing_ok=True)
+        tee.line(f"❌ 备份失败（{src.name}）：{e}")
+        return 1
+    finally:
+        if src_conn is not None:
+            src_conn.close()
+
+    try:
+        dest_conn = sqlite3.connect(f"file:{dest}?mode=ro", uri=True)
+        ok = dest_conn.execute("pragma integrity_check").fetchone()
+        ok = bool(ok and ok[0] == "ok")
+        n_tab = dest_conn.execute(
+            "select count(*) from sqlite_master where type='table'").fetchone()[0]
+        ver = dest_conn.execute("pragma user_version").fetchone()[0]
+    except Exception as e:                          # noqa: BLE001
+        ok, n_tab, ver, err = False, 0, 0, str(e)
+    else:
+        err = ""
+    finally:
+        if dest_conn is not None:
+            dest_conn.close()
+
+    if not ok:
+        dest.unlink(missing_ok=True)
+        tee.line(f"❌ 备份校验失败，已删除：{err or 'integrity_check 不通过'}")
+        return 1
+    size = dest.stat().st_size / 1024 / 1024
+    tee.line(f"✅ {dest.name}  {size:.0f} MB · {n_tab} 张表 · schema v{ver} · 完整性 ok")
+
+    olds = _existing_backups(where, name)
+    if keep > 0 and len(olds) > keep:
+        for old in olds[:len(olds) - keep]:
+            old.unlink(missing_ok=True)
+            tee.line(f"   清理旧备份 {old.name}")
+    return 0
+
+
+def cmd_backup(args, tee: Tee) -> int:
+    where = _backup_dir(args.dir)
+    keep = max(0, args.keep)
+    todo = [(n, ROOT / f) for n, f in DB_FILES if args.only in (None, n)]
+    if args.list_only:
+        tee.line(f"备份目录：{where}")
+        found = False
+        for name, _ in DB_FILES:
+            for p in _existing_backups(where, name):
+                found = True
+                tee.line(f"  {p.name}  {p.stat().st_size / 1024 / 1024:.0f} MB")
+        if not found:
+            tee.line("  （还没有由本命令生成的备份）")
+        return 0
+
+    where.mkdir(parents=True, exist_ok=True)
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    rc = 0
+    done = 0
+    for name, src in todo:
+        if not src.exists():
+            tee.line(f"⚠️  {src.name} 不存在，跳过")
+            continue
+        if _backup_one(tee, name, src, where, stamp, keep) != 0:
+            rc = 1
+        else:
+            done += 1
+    if done == 0 and rc == 0:
+        tee.line("没有可备份的库。")
+    else:
+        tee.line(f"备份完成：{done} 个库 → {where}（保留 {keep if keep else '不限'} 份）")
+    return rc
+
+
+# ---------------------------------------------------------------------------
 # 交互菜单
 # ---------------------------------------------------------------------------
 
@@ -538,6 +663,7 @@ def build_parser() -> argparse.ArgumentParser:
   ./run.py cycle   --stock 600519         # 周期弹性，单只
   ./run.py quality --stock 600519         # 质量初筛，单只
   ./run.py top     600519                 # 顶部判断
+  ./run.py backup                         # 备份数据库（VACUUM INTO + 保留 7 份）
 
 不带参数只打印本帮助，不跑任何程序（全流程要三十多分钟，免得误敲回车就开跑）。
 
@@ -586,6 +712,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("extra", nargs="*", default=[], help="透传给 stock_judge_top 的参数")
 
     sp = sub.add_parser("calendar", help="只更新交易日历")
+
+    sp = sub.add_parser("backup", help="备份 shared.db / results.db 到 backup/（VACUUM INTO）")
+    sp.add_argument("--dir", default=None,
+                    help="备份目录，默认 backup/（可用绝对路径，如 ~/MyData/backups）")
+    sp.add_argument("--keep", type=int, default=7,
+                    help="每个库保留最近几份，默认 7（只删本命令生成的，手改的不动）")
+    sp.add_argument("--only", choices=["shared", "results"], default=None,
+                    help="只备份其中一个库")
+    sp.add_argument("--list", dest="list_only", action="store_true",
+                    help="只列出已有备份，不做备份")
+
     sub.add_parser("menu", help="交互菜单（0-6 选择）")
     return p
 
@@ -616,6 +753,12 @@ def main(argv: list[str] | None = None) -> int:
             say(f"❌ weekly 不认识这些参数：{' '.join(unknown)}")
             say("   透传请用 --select-args / --cycle-args / --quality-args。")
             return 2
+    elif args.cmd in ("backup", "calendar", "menu"):
+        # 这三个不接受透传参数：未知参数直接报错，别让 `--dry-run` 这种
+        # 打错/臆想的开关被静默吞掉（人会以为它生效了）。
+        if unknown:
+            say(f"❌ {args.cmd} 不认识这些参数：{' '.join(unknown)}")
+            return 2
     else:
         args.extra = list(getattr(args, "extra", []) or []) + list(unknown)
 
@@ -633,6 +776,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_all(args, tee)
         if args.cmd == "calendar":
             return cmd_calendar(args, tee)
+        if args.cmd == "backup":
+            return cmd_backup(args, tee)
         handler = cmd_single(args.cmd)
         return handler(args, tee)
     except KeyboardInterrupt:

@@ -117,7 +117,28 @@ h2{font-size:19px;line-height:1.3;margin:0 0 4px}
   .earn-blocks{grid-template-columns:1fr}
   .hero-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
+/* 旁证表 + 缺口清单表：都是"读一行就走"的信息，不做卡片化，保持表格的扫描速度 */
+table.evidence,table.gaps,table.kv{width:100%;border-collapse:collapse;font-size:12.5px}
+table.evidence th,table.gaps th,table.kv th{text-align:left;vertical-align:top;
+  padding:8px 10px;color:#334155;font-weight:600;white-space:nowrap;
+  border-bottom:1px solid #eef2f7;width:1%}
+table.evidence td,table.gaps td,table.kv td{padding:8px 10px;color:#475569;
+  border-bottom:1px solid #eef2f7;line-height:1.55}
+table.evidence tr:last-child th,table.evidence tr:last-child td,
+table.gaps tr:last-child td,table.kv tr:last-child th,table.kv tr:last-child td{border-bottom:0}
+table.gaps thead th{background:#f8fafc;border-bottom:1px solid #e2e8f0;
+  font-size:11.5px;color:#64748b;letter-spacing:.02em}
+table.gaps td.ok{color:#15803d}
+/* 表格行也认 tone：warn 提醒、good 通过、muted 缺数据，与卡片同一套语言 */
+table.evidence tr.tone-warn td,table.gaps tr.tone-warn td{color:#9a3412}
+table.evidence tr.tone-good td{color:#166534}
+table.evidence tr.tone-muted td{color:#94a3b8}
+table.evidence tr.tone-warn th{color:#c2410c}
+table.evidence tr.tone-muted th{color:#94a3b8}
 @media (max-width:640px){
+  table.evidence th,table.gaps th,table.kv th{white-space:normal}
+  table.evidence th,table.evidence td,table.gaps th,table.gaps td,
+  table.kv th,table.kv td{padding:7px 6px;font-size:12px}
   .page{padding:14px 11px 28px}
   .hero{padding:22px 18px;border-radius:20px}
   h1{font-size:24px}

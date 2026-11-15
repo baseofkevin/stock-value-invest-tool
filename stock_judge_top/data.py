@@ -4,7 +4,7 @@
 --------------------------------------------------------------------
 | 原版（westock MCP） | 本版（共享库 hub） |
 |---|---|
-| `data_kline` fq="qfq"，3 段×1 年 limit=300 | `ensure_many("kline", ...)` 取 **raw**，再用 `factor.adjusted()` 本地算 qfq |
+| `data_kline` fq="qfq"，3 段×1 年 limit=300 | `ensure_many("kline", ...)` 取 **raw**，原样使用（2026-11-15 起与选股工具同口径） |
 | 换手率 `exchange` 由上游直接给 | **折算**：`amount ÷ 流通市值 × 100`（市值来自 quote 域，当期一份） |
 | `data_finance` fields=all num=60 | `ensure_many("finance", ...)` + `finance_full()["income"]`（raw_json 拆包，字段名与上游一致） |
 | `data_quote` 取名称/存在性 | profile 域（`stock` 表：name / list_date / industry） |
@@ -12,9 +12,13 @@
 
 三个口径决定（都记在 README §2）：
 
-1. **qfq 本地算**：共享库只存 raw（`fp=fq=raw`），复权是"同一份 raw × 不同因子"，
-   不该为某个工具再存一份复权序列。锚点 = 基准日 `end`（原版 westock 的 qfq
-   也是以查询日为锚）。
+1. **价格一律 raw（不再本地算 qfq）**：与 `stock_kline_screen` 统一。之前这里用
+   `factor.adjusted()` 算前复权，同一只票会出现「选股说站上 MA20、这里说跌破」
+   （实测 2026-11-13 的 sh601288 农业银行：qfq MA20 = 7.358、raw = 7.371）。
+   位置类指标（距高点 %）本来就是同一价格序列内的比值，除权日只会让「前复权」
+   与「不复权」差一个当天的除权缺口，取舍一致更重要。
+   代价：除权日附近的历史高点会带着除权缺口（例如 10 派 3 元会让 250 日高点
+   虚高约 3%），所以 Q 报告里「距 250 日高点」的绝对值在有分红时略偏保守。
 2. **换手率折算**：共享库 kline 没有 `exchange` 列。折算式
    `exchange = amount / circ_mv × 100` 与 kline_screen 的 `turnover20` 同款
    （分母用"当期一份"的流通市值，历史日的真实流通市值不在库里——两边接受
@@ -36,25 +40,26 @@ KLINE_MIN_BARS = 30
 FIN_PERIODS = 60
 
 
-def _nodes(rows_raw, rows_qfq, circ_mv):
+def _nodes(rows, circ_mv):
     """hub kline 行 → judge 指标层的 node（last/high/exchange/volume）。
 
-    `last` / `high` / `low` / `open` 取 **qfq** 值（价格类指标必须复权）；
-    `volume` / `exchange` 用 **raw** 口径（量在除权日不缩放；换手率是
-    未复权量配流通市值，两个都 raw 才对得上——见 factor.PRICE_COLS 注释）。
+    价格一律取 raw（不复权，见模块头第 1 条）。换手率是**折算**的：
+    `amount ÷ 流通市值 × 100`，市值只有"当期一份"，所以历史换手率是近似——
+    与 stock_kline_screen 的 turnover20 同一个近似。流通市值缺失时
+    `exchange` 为 None，指标层会退回用成交额自身的分位（见 indicators）。
     """
     out = []
-    for raw, adj in zip(rows_raw, rows_qfq):
-        amt = fnum(raw.get("amount"))
+    for row in rows:
+        amt = fnum(row.get("amount"))
         if amt is None or amt <= 0:
-            c, v = fnum(raw.get("close")), fnum(raw.get("volume"))
+            c, v = fnum(row.get("close")), fnum(row.get("volume"))
             amt = c * v if (c is not None and v is not None) else None
         exch = amt / circ_mv * 100 if (amt and circ_mv) else None
         out.append({
-            "date": str(raw["date"]),
-            "open": adj.get("open"), "high": adj.get("high"),
-            "low": adj.get("low"), "last": adj.get("close"),
-            "volume": raw.get("volume"),
+            "date": str(row["date"]),
+            "open": row.get("open"), "high": row.get("high"),
+            "low": row.get("low"), "last": row.get("close"),
+            "volume": row.get("volume"),
             "exchange": round(exch, 4) if exch is not None else None,
             "amount": amt,
         })
@@ -64,7 +69,7 @@ def _nodes(rows_raw, rows_qfq, circ_mv):
 def fetch(hub, code, end, refresh=False):
     """返回 (nodes, finance_rows, profile)。
 
-    - nodes：qfq 日 K + 折算换手率，按日期升序；
+    - nodes：日 K（raw 价）+ 折算换手率，按日期升序；
     - finance_rows：westock income 原始行（含 EndDate / InfoPublDate /
       NPParentCompanyYOY_Q 等判断字段），可能为空列表；
     - profile：stock 表行（name / list_date / industry），取不到为 {}。
@@ -72,7 +77,6 @@ def fetch(hub, code, end, refresh=False):
     `refresh=True` 透传为 hub `ensure` 的 `force`（清重试标记后重取），
     对应原版 `--refresh` 忽略缓存。
     """
-    from stock_data_fetch import factor
     from stock_data_fetch.need import want
 
     kw = {"force": refresh} if refresh else {}
@@ -83,7 +87,7 @@ def fetch(hub, code, end, refresh=False):
     if code in batch.ok and batch.ok[code].rows:
         prof = batch.ok[code].rows[0]
 
-    # ---- 日 K：raw → qfq → node ------------------------------------------
+    # ---- 日 K：raw → node -------------------------------------------------
     from stock_data_fetch.errors import InsufficientDepth, HoleUnreachable
     need_k = want.kline(hub.cal, end, bars=KLINE_BARS, min_bars=KLINE_MIN_BARS)
     try:
@@ -97,10 +101,6 @@ def fetch(hub, code, end, refresh=False):
 
     nodes = []
     if rows:
-        start = str(rows[0]["date"])
-        # qfq 依赖 dividend 表；没取过就全 1.0（静默错），必须先 ensure。
-        hub.ensure_many("dividend", [code], want.dividend(start), **kw)
-        adj = factor.adjusted(hub.conn, hub.cal, code, rows, anchor=end)
         # 流通市值：quote 域当期一份（分母口径见模块头第 2 条）
         cap = None
         try:
@@ -109,11 +109,11 @@ def fetch(hub, code, end, refresh=False):
                 cap = fnum(qb.ok[code].rows[0].get("circ_mv"))
         except Exception as e:                      # 市值取不到不该拦住 K 线因子
             log(f"[数据] {code} 行情(quote)获取失败，换手率将不可用：{e}")
-        nodes = _nodes(rows, adj, cap)
+        nodes = _nodes(rows, cap)
         if not cap:
             log(f"[数据] {code} 无流通市值：换手类指标（av20/ratio/AVG20）将为 —")
         ks = [n["date"] for n in nodes]
-        log(f"[数据] 日K完成：{len(nodes)} 根（{ks[0]} ~ {ks[-1]}，qfq，锚点 {end}）")
+        log(f"[数据] 日K完成：{len(nodes)} 根（{ks[0]} ~ {ks[-1]}，raw）")
     else:
         log("[数据] 日K完成：0 根（库里无数据且未能取到）")
 

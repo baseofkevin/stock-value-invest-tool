@@ -47,6 +47,7 @@ cd /home/kevin/MyData/stock-value-invest-tool
 
 ./run.py top --from-select                 # 批量：把当天的选股结果整体扫一遍
 ./run.py top --csv 我的持仓.csv            # 批量：自己给清单（读「代码」列）
+./run.py backup                            # 备份两个数据库
 ```
 
 批量会多出一个索引页 `output/judge-top/四因子观察-批量_<日期>_<时间>.html`，
@@ -97,16 +98,62 @@ cd /home/kevin/MyData/stock-value-invest-tool
 
 日志：每次运行写 `output/logs/run-<时间戳>.log`（完整子进程输出，事后可查）。
 
+## 两个数据库
+
+| 文件 | 装什么 | 丢掉了会怎样 |
+|---|---|---|
+| `shared.db` | **上游数据**：K 线、财务、估值、覆盖表（`coverage`） | 只能重新联网抓，几十分钟 |
+| `results.db` | **派生结论**：四个工具每次跑出来的名单与档位 | 重跑一遍就有（几分钟） |
+
+分开的理由：`shared.db` 有严格的不变量（只追加 raw、覆盖与数据同事务），
+`maintain.py --apply` 会 VACUUM 并清 coverage。结论如果也躺在里面，
+一次清理就可能把上周的名单一起带走，备份也会白白多拷一份。
+
+`results.db` 每工具一张表（`select_result` / `cycle_result` / `quality_result` /
+`top_result`）+ 一张 `run` 台账，每条结果都带 `payload`（完整 JSON）。
+四个工具**自动写**，写失败只 warn 一行、绝不影响出报告。
+
+```bash
+python3 -m stock_data_fetch.results                    # 各工具最近一次运行
+python3 -m stock_data_fetch.results --tool top         # 只看顶部判断
+python3 -m stock_data_fetch.results --tool quality --symbol sh600019   # 一只票的历史
+python3 -m stock_data_fetch.results --prune            # 每工具只留最近一次运行
+```
+
+跨工具的联合查询就是一个普通 JOIN（这是一张库而不是四个库的原因）：
+
+```sql
+select t.symbol, t.name, s.pool_turnover_rank, q.conclusion, t.momentum_state
+from (select * from top_result   where run_id=(select max(id) from run where tool='top'))   t
+left join (select * from select_result  where run_id=(select max(id) from run where tool='select'))  s on s.symbol=t.symbol
+left join (select * from quality_result where run_id=(select max(id) from run where tool='quality')) q on q.symbol=t.symbol;
+```
+
+## 备份
+
+```bash
+./run.py backup              # shared.db + results.db → backup/（保留最近 7 份）
+./run.py backup --list       # 看已有备份
+./run.py backup --dir ~/MyData/backups --keep 14
+```
+
+用 `VACUUM INTO` 而不是 `cp`：`shared.db` 是 WAL 模式，直接复制可能拿到一个
+缺最新提交的库；`VACUUM INTO` 走一致性读，顺带整理碎片（107 MB → 实测同量级）。
+每份备份都跑 `pragma integrity_check` 与表数统计，**校验不过就删掉并报错**——
+备份的意义是"能恢复"，拷完不验等于把发现问题的时间推迟到真出事那天。
+
+保留策略只删本命令自己生成的（`shared.db.YYYYMMDD-HHMMSS`）；手工改名的
+（如 `shared.db.20261115-before-v6`）一律不动。
+
 ## 环境
 
 - Python 3.13，只用标准库。
-- 数据库 `shared.db`（SQLite，WAL）。备份在 `backup/`，不进版本库。
 - 交易日历 `state/trading_calendar.json`（`build_calendar` 生成）。
 
 ## 测试
 
 ```bash
-python3 -m stock_data_fetch.tests                  # 数据层 12 个文件
+python3 -m stock_data_fetch.tests                  # 数据层 13 个文件
 python3 -m stock_kline_screen.tests                # 选股 4 个文件
 python3 -m unittest discover -s stock_quality_screen/tests -t stock_quality_screen
 python3 -m unittest discover -s stock_cycle_elastic/tests -t stock_cycle_elastic

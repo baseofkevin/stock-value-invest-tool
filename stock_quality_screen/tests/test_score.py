@@ -338,6 +338,29 @@ class TestFatal(unittest.TestCase):
         fatal = score._fatal(data, checks)
         self.assertTrue(fatal, "长期失血 + 高杠杆必须否决")
 
+    def test_chronic_negative_cfo_with_loss_ebit_is_fatal(self):
+        """EBIT ≤ 0 时比值恒为负，`> 4` 永不成立 → 旧版对亏损公司形同虚设。
+
+        这一类恰恰最该否决：三年经营现金流为负、还在净借债、而且不赚钱。
+        """
+        annual = helpers.annual_series(
+            5, ocf=-5e8, ocf_ttm=-5e8, debt=80e8, cash=2e8, ebit=-3e8,
+            finance_expense=0)
+        data = helpers.data_with_annual(annual)
+        checks = score._risk_checks(data)
+        fatal = score._fatal(data, checks)
+        self.assertTrue(fatal, "亏损 + 三年失血 + 净负债必须否决")
+        self.assertTrue(any("EBIT 为负" in f for f in fatal), fatal)
+
+    def test_chronic_negative_cfo_with_loss_but_net_cash_is_not_fatal(self):
+        """亏损但净现金：没靠借钱续命，不该触发这一条（别的项会扣分）。"""
+        annual = helpers.annual_series(
+            5, ocf=-1e8, ocf_ttm=-1e8, debt=1e8, cash=60e8, ebit=-3e8,
+            finance_expense=0)
+        data = helpers.data_with_annual(annual)
+        checks = score._risk_checks(data)
+        self.assertEqual(score._fatal(data, checks), [])
+
     def test_negative_cfo_alone_is_not_fatal(self):
         """只亏损不欠债，不该被一票否决 —— 那是「观察」，不是「排除」。"""
         annual = helpers.annual_series(

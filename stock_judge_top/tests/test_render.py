@@ -56,8 +56,41 @@ class HtmlReportTest(unittest.TestCase):
         self.assertIn("K线仅 120 根", html)
         self.assertNotIn("无额外数据提示", html)
 
-    def test_no_warning_placeholder(self):
-        self.assertIn("无额外数据提示", self.html)
+    def test_no_warning_is_silent_not_placeholder(self):
+        """没有 warnings 时不再输出占位句：缺口清单表格已经承担了"这里空着"的表达。"""
+        self.assertNotIn("无额外数据提示", self.html)
+        self.assertIn("取数缺口", self.html)
+
+    def test_gaps_table_lists_each_gap(self):
+        r = dict(fx.result())
+        r["gaps"] = [{"domain": "snapshot", "symbol": "sh600519",
+                      "why": "上游返回空表"}]
+        html = html_mod.html_report(r)
+        self.assertIn("snapshot", html)
+        self.assertIn("上游返回空表", html)
+        self.assertIn("不影响四因子", html)
+
+    def test_evidence_section_has_four_rows(self):
+        r = dict(fx.result())
+        r["extras"] = {
+            "valuation": {"metrics": {"pe": {"label": "PE(TTM)", "current": 21.8,
+                                             "percentile": 18.0}},
+                          "sample_start": "2018-01-05", "weeks": 454},
+            "consensus": {"target": 1692.3, "upside": 0.18, "forecasts": 3},
+            "risk": {"items": [{"label": "经营现金流 / 净利润", "text": "1.30",
+                                "state": "clear"}], "hit": 0, "watch": 0},
+            "cycle": {"is_cycle": False, "gm_std": 1.0, "gm_cv": None,
+                      "elastic_label": "弱", "position_pct": 70.0,
+                      "position_label": "高位"},
+        }
+        html = html_mod.html_report(r)
+        for label in ("估值分位", "机构目标价", "基本面反证", "周期状态"):
+            self.assertIn(label, html)
+        self.assertIn("PE(TTM) 21.80（P18）", html)
+
+    def test_raw_price_caliper_is_stated(self):
+        """价格口径必须写在报告里——它和选股工具一致，但和"复权"直觉相反。"""
+        self.assertIn("不复权（raw）", self.html)
 
     def test_wide_card_comes_last(self):
         # 业绩卡（wide）应排在其余三张之后，前端网格才不会出现空洞
