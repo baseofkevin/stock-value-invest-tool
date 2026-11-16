@@ -29,6 +29,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = ROOT / "results.db"
+SHARED_DB = ROOT / "shared.db"
 
 #: 工具 → (表名, 中文名, 一句话说明, 页面路径)
 TOOLS = {
@@ -52,6 +53,39 @@ def connect(db: str | Path | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+# ---------------------------------------------------------------- 共享库（只读）
+
+def moats(db: str | Path | None = None) -> dict[str, str]:
+    """垄断性标注：`{symbol: moat_type}`，来自 `shared.db` 的 `annotation` 表。
+
+    为什么不去 payload 里读：`stock_quality_screen` 确实算了 `resource_moat`
+    （`screen/score.py`），但 `stock_report.py` 存库时只把 `detail` 和
+    `report_html` 塞进 payload，`resource_moat` 只出现在 HTML 报告里。
+    所以想看标注只有两条路——解析 HTML，或者直接读这张表。选后者。
+
+    标注是**人工维护**的（`stock_data_fetch.annotation`），`"无标注"` 是结论
+    （查过、没有），不是缺口；没进这张表的股票是真的没查过。
+
+    读不到（库不存在 / 没有这张表 / 打不开）就给空 dict：页面上所有票显示
+    「未标注」，只是失去那一项加分，不该让整页 500。
+    """
+    p = Path(db or SHARED_DB)
+    if not p.exists():
+        return {}
+    try:
+        conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return {}
+    try:
+        rows = conn.execute(
+            "select symbol, moat_type from annotation where kind='moat'").fetchall()
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+    return {str(s).lower(): (t or "无标注") for s, t in rows}
 
 
 # ------------------------------------------------------------------ run 台账

@@ -13,10 +13,10 @@
 
 {% if rows %}
 <div class="charts">
-  <div class="chart-box rows">
+  <div class="chart-box tall">
     <h3>距 250 日高点</h3>
-    <p class="sub">0% = 就在一年最高点。颜色越暖越接近高位（这一列只作位置背景，不是顶部结论）。只画最接近高点的 20 只。</p>
-    <div class="canvas-wrap"><canvas id="pos"></canvas></div>
+    <p class="sub">0% = 一年最高点，色越暖越高位；只作位置背景，不是顶部结论。</p>
+    <div class="canvas-wrap scroll-y"><div class="canvas-inner"><canvas id="pos"></canvas></div></div>
   </div>
   <div class="chart-box tall">
     <h3>动量状态分布</h3>
@@ -71,15 +71,21 @@ const code = {{ rows|map(attribute='symbol')|list|tojson }};
 const pos  = {{ rows|map(attribute='pos250')|list|tojson }};
 const mom  = {{ rows|map(attribute='momentum_state')|list|tojson }};
 
-// 38 只全画出来，y 轴标签会挤成一片。只画最贴近 250 日高点的 20 只，
-// 这张图本来就是看"谁在顶部"，尾部那些 -50% 的票对判断没帮助。
-// 降序 = 越靠上越接近高点；取前 20 只，正好一屏能读完。
+// 降序 = 越靠上越接近高点。以前只截前 20 只（怕 38 只挤在 430px 里名字叠成
+// 黑带），现在画布按「行数 × 15px」撑高、外层框固定 330px 内部滚动，
+// 就不必再砍票了：一行标签恒定 15px，整批都能翻到。
 const order = pos.map((p, i) => i)
-  .sort((a, b) => (pos[b] ?? -9) - (pos[a] ?? -9))
-  .slice(0, 20);
+  .sort((a, b) => (pos[b] ?? -9) - (pos[a] ?? -9));
 const posColor = p => p == null ? 'rgba(148,163,184,.6)'
   : p > -0.05 ? 'rgba(180,83,9,.75)'
   : p > -0.20 ? 'rgba(245,158,11,.7)' : 'rgba(29,78,216,.55)';
+
+// 框固定、图在框里滚（与右边「动量状态分布」同高 330px）。
+// 票少到塞不满一屏时让画布占满框，免得底下空一块。
+const ROW_H = 15;
+const posWrap = document.getElementById('pos').closest('.canvas-wrap');
+posWrap.firstElementChild.style.height =
+  Math.max(posWrap.clientHeight, order.length * ROW_H) + 'px';
 
 new Chart(document.getElementById('pos'), {
   type: 'bar',
@@ -92,7 +98,8 @@ new Chart(document.getElementById('pos'), {
       tooltip: {callbacks: {label: c => `${c.raw.y}%　${mom[order[c.dataIndex]] || ''}`}}},
     scales: {x: {title: {display: true, text: '距 250 日高点 %'},
                  grid: {color: '#eef2f7'}, max: 0},
-             y: {grid: {display: false}, ticks: {font: {size: 10}}}}
+             y: {grid: {display: false},
+                 ticks: {font: {size: 10}, padding: 4, autoSkip: false}}}
   }
 });
 

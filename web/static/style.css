@@ -113,6 +113,11 @@ table.grid tr.dim td{opacity:.55}
    rows = 20 只，rows-lg = 30 只上下，别让标签被挤掉。 */
 .chart-box.rows .canvas-wrap{height:430px}
 .chart-box.rows-lg .canvas-wrap{height:640px}
+/* 票数超过框高时：框不动，图在里面滚。
+   `.canvas-inner` 的高度由模板按「行数 × 15px」写死，Chart.js 以它为准排版，
+   所以标签间距恒定，滚动条由外层 `.canvas-wrap` 出。 */
+.chart-box .canvas-wrap.scroll-y{overflow-y:auto;overflow-x:hidden}
+.chart-box .canvas-wrap.scroll-y .canvas-inner{position:relative;height:100%}
 
 /* ---------------------------------------------------------------- 个股页 */
 .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}

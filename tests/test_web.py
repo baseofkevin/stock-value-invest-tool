@@ -274,43 +274,66 @@ class TestLabels(WebCase):
 class TestReviewRules(unittest.TestCase):
     """综合评估的规则（`web/review.py`）：纯函数，不碰库、不起服务。
 
-    这一层最容易悄悄松掉的是**风险门槛**：一个"总分高"的票如果命中了致命
-    风险，必须还是排除。这几条钉的就是这件事。
+    这一层最容易悄悄松掉的是**硬门槛**：一个"赔率分很高"的票如果命中了致命
+    风险，必须还是排除。反过来也容易改过头——把软条件又写回否决项。两组都钉住。
     """
 
-    def _row(self, q=None, v=None, conclusion="观察", reason="", fatal=None,
-             is_cycle=False, position="", pos250=-0.20, momentum="低位·走平",
-             earnings="加速", pe_pct=30.0, in_select=True):
+    def _row(self, q=70.0, v=70.0, conclusion="观察", reason="", fatal=None,
+             is_cycle=False, position="", elastic="strong", elasticity=5.0,
+             mcap=120.0, pct_pe=30.0, pct_pb=20.0, pct_ps=25.0, trend_hit=None,
+             upside=0.25, pos250=-0.20, momentum="低位·走平", earnings="加速",
+             pe_pct=30.0, in_select=True, detail=True):
+        """一条合并行。
+
+        默认参数刻意配成「7 分」（市值 1 + 估值 2 + 弹性 2 + 质量 1 + 目标价 1），
+        正好在 `BUY_CUT = 5` 之上——绝大多数用例只想验别的规则，不该被基础分
+        顺手拦下。要验某一项就自己传参。
+        """
         quality = {}
         if conclusion is not None:
+            risks = []
+            for name in (trend_hit or []):
+                risks.append({"group": "趋势", "name": name, "status": "hit"})
+            payload = {"fatal": fatal or [], "label": conclusion, "reason": reason}
+            if detail:
+                payload["detail"] = {
+                    "meta": {"industry": "测试", "mcap_yi": mcap},
+                    "v": {"score": v, "grade": "",
+                          "parts": [{"label": "机构目标价空间", "score": 100.0,
+                                     "raw": "目标价 10.00 元（+25.0%）"}],
+                          "historical": {"available": True, "metrics": [
+                              {"key": "pe", "label": "PE(TTM)", "percentile": pct_pe},
+                              {"key": "pb", "label": "PB", "percentile": pct_pb},
+                              {"key": "ps", "label": "PS(TTM)", "percentile": pct_ps}]}},
+                    "risks": risks, "fatal": fatal or [],
+                }
             quality = {"symbol": "sh600000", "name": "测试", "q": q, "v": v,
                        "q_grade": "", "v_grade": "", "conclusion": conclusion,
                        "reason": reason, "risks_hit": 0, "risks_known": 14,
-                       "data": {"payload": {"fatal": fatal or []}}}
+                       "data": {"payload": payload}}
         top = {}
         if pos250 is not None or momentum or earnings:
             top = {"symbol": "sh600000", "pos250": pos250, "momentum_state": momentum,
                    "turnover_state": "中性", "earnings_state": earnings,
                    "volume_state": "未触发", "cycle_state": "", "pe_pct": pe_pct,
-                   "target_upside": 0.2, "data": {}}
-        return {"symbol": "sh600000", "name": "测试", "select": {"symbol": "sh600000"} if in_select else {},
+                   "target_upside": upside, "data": {}}
+        return {"symbol": "sh600000", "name": "测试",
+                "select": ({"symbol": "sh600000", "market_cap_yi": mcap}
+                           if in_select else {}),
                 "cycle": {"symbol": "sh600000", "is_cycle": is_cycle,
-                          "position_label": position, "position_pct": 10.0},
+                          "position_label": position, "position_pct": 10.0,
+                          "elastic_label": elastic, "elasticity": elasticity},
                 "quality": quality, "top": top}
 
-    def test_all_gates_pass_is_buy(self):
-        from web import review
-        item = review.evaluate(self._row(q=73.8, v=83.2))
-        self.assertEqual(item["tier"], "buy")
-        self.assertEqual(item["gaps"], [])
+    # ---------------------------------------------------------- 硬门槛
 
     def test_hard_floor_is_not_negotiable(self):
-        """Q < 45 就是排除，V 再高也不抵——照抄工具的硬线。"""
+        """Q < 45 就是排除，赔率分再高也不抵——照抄工具的硬线。"""
         from web import review
         item = review.evaluate(self._row(q=42.0, v=96.5, conclusion="回避",
                                         reason="质量分 42.0 低于 45，禁止买入"))
         self.assertEqual(item["tier"], "out")
-        self.assertEqual(item["gaps"][0]["label"], "Q 不足")
+        self.assertEqual(item["notes"][0]["label"], "Q 不足")
 
     def test_fatal_risk_vetoes_even_with_high_scores(self):
         from web import review
@@ -318,59 +341,125 @@ class TestReviewRules(unittest.TestCase):
                                         reason="出现致命风险：利息保障 < 1",
                                         fatal=["利息保障 < 1"]))
         self.assertEqual(item["tier"], "out")
-        self.assertEqual(item["gaps"][0]["label"], "致命风险")
-
-    def test_fatal_written_in_reason_is_recognised(self):
-        """老记录没有 `fatal` 列表，致命项只写在 reason 里，也要认出来。"""
-        from web import review
-        item = review.evaluate(self._row(q=52.0, v=90.0, conclusion="回避",
-                                        reason="出现致命风险：商誉/净资产超过 50%"))
-        self.assertEqual(item["gaps"][0]["label"], "致命风险")
-        self.assertIn("商誉", item["gaps"][0]["detail"])
-
-    def test_cycle_high_downgrades_to_watch(self):
-        from web import review
-        item = review.evaluate(self._row(q=73.8, v=83.2, is_cycle=True,
-                                        position="high"))
-        self.assertEqual(item["tier"], "watch")
-        self.assertEqual([g["label"] for g in item["gaps"]], ["周期高位"])
-
-    def test_missing_v_is_watch_not_buy(self):
-        from web import review
-        item = review.evaluate(self._row(q=70.0, v=None))
-        self.assertEqual(item["tier"], "watch")
-        self.assertEqual(item["gaps"][0]["label"], "缺 V 分")
-        self.assertEqual(item["bucket"], 0.0)      # 缺数据不许排到前头
-
-    def test_v_ladder_requires_more_when_q_low(self):
-        from web import review
-        # Q 56 需要 V≥65：V 60 不够
-        self.assertEqual(review.evaluate(self._row(q=56.0, v=60.0))["tier"], "watch")
-        # Q 72 只需要 V≥50
-        self.assertEqual(review.evaluate(self._row(q=72.0, v=55.0))["tier"], "buy")
-
-    def test_near_high_blocks(self):
-        from web import review
-        self.assertEqual(review.evaluate(self._row(q=73.8, v=83.2,
-                                                   pos250=-0.02))["tier"], "watch")
+        self.assertEqual(item["notes"][0]["label"], "致命风险")
 
     def test_quality_conclusion_missing_is_nodata(self):
         from web import review
         item = review.evaluate(self._row(conclusion=None))
         self.assertEqual(item["tier"], "nodata")
 
-    def test_sort_uses_min_of_q_and_v(self):
-        """档内排序按 min(Q, V)：Q 90/V 60 要排在 Q 66/V 80 后面（木桶原则）。"""
+    # ---------------------------------------------------------- 宽松：软条件不否决
+
+    def test_verdict_avoid_is_watch_not_out(self):
+        """工具判「回避」但 Q 没破 45、也没有致命项：降为观察，不再排除。
+
+        这是"宽松"最直接的一条——20 只这样的票原来直接消失在本页。
+        """
         from web import review
-        a = review.evaluate(self._row(q=90.0, v=60.0))
-        b = review.evaluate(self._row(q=66.0, v=80.0))
-        a["symbol"], b["symbol"] = "sh600001", "sh600002"
-        out = review.build([{"symbol": a["symbol"], "name": "A",
-                             "quality": {"q": 90.0, "v": 60.0, "conclusion": "观察"},
-                             "select": {}, "cycle": {}, "top": {"pos250": -0.3}},
-                            {"symbol": b["symbol"], "name": "B",
-                             "quality": {"q": 66.0, "v": 80.0, "conclusion": "观察"},
-                             "select": {}, "cycle": {}, "top": {"pos250": -0.3}}])
+        item = review.evaluate(self._row(q=68.0, v=70.0, conclusion="回避",
+                                        reason="第二节走弱"))
+        self.assertEqual(item["tier"], "watch")
+        self.assertEqual(item["notes"][0]["label"], "工具判回避")
+        self.assertGreaterEqual(item["score"], review.BUY_CUT)   # 分数照算，只是不进挡
+
+    def test_missing_v_does_not_block_buy(self):
+        """V 缺失不再一票否决——缺 V 的 63 只里 60 只市值<200 亿。"""
+        from web import review
+        item = review.evaluate(self._row(q=70.0, v=None))
+        self.assertEqual(item["tier"], "buy")
+        self.assertIn("缺 V 分", [g["label"] for g in item["notes"]])
+
+    def test_trend_weak_penalises_but_does_not_veto(self):
+        """毛利率走弱只扣 2 分：7 分 → 5 分，仍在优先研究里。"""
+        from web import review
+        base = review.evaluate(self._row())
+        bad = review.evaluate(self._row(trend_hit=["① 毛利率环比改善"]))
+        self.assertEqual(bad["score"], base["score"] + review.TREND_PENALTY)
+        self.assertEqual(bad["tier"], "buy")
+        self.assertIn("趋势走弱", [g["label"] for g in bad["notes"]])
+
+    def test_trend_penalty_can_drop_below_cut(self):
+        """扣分确实能把一只票推到观察档——只是"排后面"，不是"出局"。"""
+        from web import review
+        item = review.evaluate(self._row(mcap=800.0, pct_pe=60.0, pct_pb=60.0,
+                                         pct_ps=60.0, elastic="weak",
+                                         upside=0.05,
+                                         trend_hit=["② 合同负债"]))
+        self.assertEqual(item["tier"], "watch")
+        self.assertNotEqual(item["tier"], "out")
+
+    # ---------------------------------------------------------- 收分项
+
+    def test_small_cap_scores_more(self):
+        from web import review
+        small = review.evaluate(self._row(mcap=40.0))
+        big = review.evaluate(self._row(mcap=800.0))
+        self.assertEqual(small["score"] - big["score"], 3 - 0)
+
+    def test_valuation_percentile_steps(self):
+        from web import review
+        # 三项分位均值 10 / 40 / 60 / 90 → 3 / 2 / 1 / 0 分
+        for pct, want in ((10.0, 3), (40.0, 2), (60.0, 1), (90.0, 0)):
+            with self.subTest(pct=pct):
+                item = review.evaluate(self._row(pct_pe=pct, pct_pb=pct, pct_ps=pct))
+                term = next(t for t in item["terms"] if t["key"] == "value")
+                self.assertEqual(term["points"], want)
+
+    def test_cycle_low_adds_points_for_cycle_stocks_only(self):
+        from web import review
+        low = review.evaluate(self._row(is_cycle=True, position="low"))
+        neutral = review.evaluate(self._row(is_cycle=True, position="neutral"))
+        noncycle = review.evaluate(self._row(is_cycle=False, position="low"))
+        self.assertEqual(low["score"] - neutral["score"], 2)
+        # 非周期股拿到 low（金融股之类）也不加分：这个指标对它没意义
+        self.assertEqual(noncycle["score"], neutral["score"] - 0)
+
+    def test_moat_adds_points(self):
+        from web import review
+        plain = review.evaluate(self._row())
+        moat = review.evaluate(self._row(), moat="独家品种")
+        self.assertEqual(moat["score"] - plain["score"], 2)
+        self.assertTrue(moat["has_moat"])
+        self.assertIn("独家品种", [h["text"] for h in moat["highlights"]])
+
+    def test_moat_none_is_not_penalised(self):
+        """「无标注」和"没查过"同等待遇：0 分，不扣分。"""
+        from web import review
+        blank = review.evaluate(self._row(), moat="")
+        reviewed = review.evaluate(self._row(), moat="无标注")
+        self.assertEqual(blank["score"], reviewed["score"])
+        self.assertFalse(blank["has_moat"])
+
+    def test_unstable_elasticity_gets_half_credit(self):
+        """「算不出来」给 1 分而不是 0：营收走平的公司往往是稳的。"""
+        from web import review
+        item = review.evaluate(self._row(is_cycle=True, elastic="unstable",
+                                         elasticity=9.0))
+        term = next(t for t in item["terms"] if t["key"] == "elastic")
+        self.assertEqual(term["points"], review.ELASTIC_POINTS["unstable"])
+        self.assertEqual(
+            review.evaluate(self._row(is_cycle=True, elastic="weak",
+                                      elasticity=1.2))["score"] + 1,
+            item["score"])
+
+    # ---------------------------------------------------------- 分档与排序
+
+    def test_score_text_explains_the_number(self):
+        from web import review
+        item = review.evaluate(self._row(mcap=40.0))
+        self.assertIn("市值小 +3", item["score_text"])
+        self.assertIn("40 亿", item["score_text"])
+
+    def test_sort_uses_score_desc(self):
+        from web import review
+        out = review.build([
+            {"symbol": "sh600001", "name": "低分",
+             "quality": {"q": 70.0, "v": 70.0, "conclusion": "观察"},
+             "select": {"market_cap_yi": 900.0}, "cycle": {}, "top": {}},
+            {"symbol": "sh600002", "name": "高分",
+             "quality": {"q": 70.0, "v": 70.0, "conclusion": "观察"},
+             "select": {"market_cap_yi": 30.0}, "cycle": {}, "top": {}},
+        ])
         self.assertEqual([it["symbol"] for it in out["rows"]], ["sh600002", "sh600001"])
 
     def test_out_comes_before_watch_in_ranking(self):
@@ -381,11 +470,29 @@ class TestReviewRules(unittest.TestCase):
              "cycle": {}, "top": {"pos250": -0.3}},
             {"symbol": "sh600002", "name": "好", "select": {"symbol": "sh600002"},
              "quality": {"q": 70.0, "v": 80.0, "conclusion": "观察"},
-             "cycle": {}, "top": {"pos250": -0.3}},
+             "cycle": {"is_cycle": False, "elastic_label": "strong", "elasticity": 5.0},
+             "top": {"pos250": -0.3}},
         ])
         self.assertEqual([it["symbol"] for it in out["rows"]], ["sh600002", "sz000001"])
-        self.assertEqual(out["counts"]["buy"], 1)
         self.assertEqual(out["counts"]["out"], 1)
+        self.assertEqual(out["counts"]["buy"] + out["counts"]["watch"], 1)
+
+    def test_cut_is_the_only_knob(self):
+        """分档只由 `BUY_CUT` 决定——改它一个数，档位跟着变。"""
+        from web import review
+        item = review.evaluate(self._row())
+        self.assertEqual(item["tier"],
+                         "buy" if item["score"] >= review.BUY_CUT else "watch")
+        self.assertEqual(review.build([self._row()])["cut"], review.BUY_CUT)
+
+    def test_build_accepts_moat_map(self):
+        """`build(rows, moats)` 把标注注入进来，`evaluate` 本身不连库。"""
+        from web import review
+        row = self._row()
+        row["symbol"] = "sh600519"
+        plain = review.build([dict(row)])
+        rich = review.build([dict(row)], {"sh600519": "独家品种"})
+        self.assertEqual(rich["rows"][0]["score"] - plain["rows"][0]["score"], 2)
 
 
 class TestReviewPage(WebCase):

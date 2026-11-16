@@ -18,10 +18,10 @@
     <p class="sub">右上角才是"又波动又敏感"的强周期股。横轴 σ&lt;5pp 且靠左的，多属稳定生意。</p>
     <div class="canvas-wrap"><canvas id="scatter"></canvas></div>
   </div>
-  <div class="chart-box rows-lg">
+  <div class="chart-box tall">
     <h3>产能周转率分位</h3>
     <p class="sub">判断③：产能利用率处在自身十年分位。&lt;40 低位、&gt;60 高位（虚线）。</p>
-    <div class="canvas-wrap"><canvas id="position"></canvas></div>
+    <div class="canvas-wrap scroll-y"><div class="canvas-inner"><canvas id="position"></canvas></div></div>
   </div>
 </div>
 
@@ -109,6 +109,18 @@ const posIdx = pos.map((p, i) => i)
   .sort((a, b) => pos[b] - pos[a]);
 const posColor = posIdx.map(i => posL[i] === 'high' ? COLORS.warn
   : (posL[i] === 'low' ? COLORS.info : COLORS.muted));
+
+// 高度跟着条数走（2026-11-16 反馈：一批 147 只挤在 640px 里，每条只剩 4px，
+// 名字叠成一条黑带）。画布按「行数 × 15px」撑高，**框固定 330px 不跟着长**
+// （与左边那张散点图同高）：超出的部分在外层 `.canvas-wrap.scroll-y` 里滚，
+// 这样每个名字都有 15px 的行高，又不会把整页拉长。
+// 票少到塞不满一屏时，让画布至少占满框，免得底下留一块空白。
+const ROW_H = 15;                         // 一行标签至少要 15px 才看得清
+const posWrap = document.getElementById('position').closest('.canvas-wrap');
+const nBar = posIdx.length;
+posWrap.firstElementChild.style.height =
+  Math.max(posWrap.clientHeight, nBar * ROW_H) + 'px';
+
 new Chart(document.getElementById('position'), {
   type: 'bar',
   data: { labels: posIdx.map(i => name[i]),
@@ -121,7 +133,7 @@ new Chart(document.getElementById('position'), {
     scales: {x: {min: 0, max: 100, grid: {color: '#eef2f7'},
                  title: {display: true, text: '产能周转率分位'}},
              y: {grid: {display: false},
-                 ticks: {font: {size: 10}, autoSkip: false}}}
+                 ticks: {font: {size: 10}, padding: 4, autoSkip: false}}}
   }
 });
 </script>

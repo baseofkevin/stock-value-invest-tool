@@ -241,7 +241,9 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         with conn() as c:
             date, _run_id = _pick(c)
             date = date or db.batch_date(c)
-            report = review.build(db.merged(c, date))
+            # 垄断性标注在 `shared.db`（不是结果库），单独读一次带进来——
+            # `review.py` 保持纯函数，不自己连库。
+            report = review.build(db.merged(c, date), db.moats())
             return render_template("review.html", meta=None, cur_date=date,
                                    batches=db.batches(c), review=report,
                                    summary=db.summary(c, date),

@@ -21,7 +21,7 @@
   <div class="chart-box tall">
     <h3>一级行业分布</h3>
     <p class="sub">入选名单的行业集中度；单一行业过多时，名单更容易被板块行情带偏。</p>
-    <div class="canvas-wrap"><canvas id="industry"></canvas></div>
+    <div class="canvas-wrap scroll-y"><div class="canvas-inner"><canvas id="industry"></canvas></div></div>
   </div>
 </div>
 
@@ -100,6 +100,16 @@ new Chart(document.getElementById('scatter'), {
 const counts = {};
 industry.forEach(x => { const k = x || '未分类'; counts[k] = (counts[k] || 0) + 1; });
 const labels = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+
+// 行业个数跟着名单走（申万一级 20 来个），全挤在 330px 里 Chart.js 会自动
+// 丢掉一半标签（autoSkip），看着就是"字只剩一半"。做法同周期页：框固定
+// 330px 不动（与左边散点图同高），画布按「行数 × 20px」撑高，超出就在框里滚。
+// 一行给 20px（比周期/顶部页的 15px 松）：行业名短、行数少，字号能大一号。
+const ROW_H = 20;
+const indWrap = document.getElementById('industry').closest('.canvas-wrap');
+indWrap.firstElementChild.style.height =
+  Math.max(indWrap.clientHeight, labels.length * ROW_H) + 'px';
+
 new Chart(document.getElementById('industry'), {
   type: 'bar',
   data: { labels,
@@ -107,7 +117,10 @@ new Chart(document.getElementById('industry'), {
   options: {
     maintainAspectRatio: false, indexAxis: 'y',
     plugins: { legend: {display: false} },
-    scales: { x: {ticks: {precision: 0}, grid: {color: '#eef2f7'}}, y: {grid: {display: false}} }
+    // 横轴放顶上：画布被撑高后底部要滚出来才看得到，放顶上它就一直在。
+    scales: { x: {position: 'top', ticks: {precision: 0}, grid: {color: '#eef2f7'}},
+             y: {grid: {display: false},
+                 ticks: {font: {size: 11}, padding: 3, autoSkip: false}}}
   }
 });
 </script>

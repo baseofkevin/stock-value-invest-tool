@@ -1,29 +1,41 @@
-"""综合评估：把四个工具对同一只票的结论并排，按**显式规则**分档、排序。
+"""综合评估：把四个工具对同一只票的结论并排，算一个**赔率分**再排序。
 
-为什么要这一层
+这一页是什么、不是什么
+----------------------
+它是**候选池排序器**，不是买入清单。排序靠前的票仍然要自己深入研究才决定。
+
+为什么从「逐条必过」改成「加减分」
+--------------------------------
+早期的规则是「硬门槛 → 逐条差距 → 差一条就降档」。它有一个副作用：软条件
+变成了事实上的否决项——市值大、弹性弱、机构没覆盖，任何一条都能把一只
+本来值得看的票挡在门外，而这三件事没有一件是"会亏钱"。
+
+现在的分工是：
+
+    硬门槛（一票否决）  —— 只留"会不会亏光"：Q < 45、命中致命风险。
+    赔率分（0~15）      —— 其余全部按"赚得多不多"加减分，分低就排后面，
+                           **但不消失**。差一条只扣几分，不影响它被看见。
+
+阈值刻意"模糊"
 --------------
-四个工具各说各的：选股管"有没有启动"，周期管"是不是周期股、在哪个位置"，
-质量管"公司好不好、贵不贵"，顶部管"离一年高点还有多远"。真正要买的时候
-得把这几句话放在一起看，而且**顺序**很关键——先排除、再谈便宜、最后看位置。
+`BUY_CUT = 5` 是唯一的切点旋钮：调大更严格，调小更宽松。加分项也是分档
+（<50 亿 / <100 亿 / <200 亿）而不是精确门槛——这一页给的是**优先级**，
+不是"合格 / 不合格"的判决。
 
-这里刻意**不做一个加权总分**。加权分的问题是：一个致命风险可以和一堆小优点
-互相抵消，而"风险检查命中了"这种事在买入决策里是**一票否决**，不能抵消。
-所以规则是：硬门槛（一票否决）→ 逐条差距 → 分档 → 档内按"木桶"排序。
-
-一句话：**能不能买，先看有没有被否决；买不买得下手，看质量和估值是否都够；
-什么时候买，看周期位置和离一年高点还有多少空间。**
+四项数据的来源（都由工具算好了，这里只读）
+------------------------------------------
+    市值        `select_result.market_cap_yi`（选股工具）
+    垄断性      `shared.db` 的 `annotation` 表（质量工具的标注，人工维护）
+    股价低位    `quality.detail.v.historical` 的 PE/PB/PS 历史分位
+                （机构目标价只做加分——它只覆盖一半的票）
+    周期底部    `cycle_result.position_label`（产能周转率分位 < 40）
 
 档位
 ----
-    优先研究   四条都通过，可以直接进你的研究清单
-    观察       过了质量硬门槛，但还差 1 条以上——差什么写在「差距」列里
+    优先研究   赔率分 ≥ BUY_CUT，且工具没有判回避 / 数据不足
+    观察       过了质量硬门槛，但分数不够或工具自己没下结论
     排除       质量已否决（Q < 45 / 命中致命风险 / 工具结论就是回避）
-    待补数据   质量没结论（V 缺、数据缺口太大），先补齐数据再谈
-
-排在同一档里怎么排
-------------------
-按 `min(Q, V)` 从高到低——**木桶原则**：两者都高的排前面，只有一项高不占便宜。
-这也是"不合并总分"的另一种写法：不求和、不加权，只看短板。
+    待补数据   这一批没有质量结果（工具没跑或这只票失败）
 """
 from __future__ import annotations
 
@@ -35,38 +47,81 @@ from .db import inner
 #: 这里是**读**它的结论，绝不比工具更宽松。
 Q_HARD = 45.0
 
-#: Q 到这个数才算"站得住"。45～55 之间是刚过线，不当成优选。
-Q_GOOD = 55.0
+#: 唯一的分档切点：赔率分到多少算「优先研究」。
+#: 2026-11-06 批（151 只）实测：5 分 → 14 只，4 分 → 19 只，6 分 → 8 只。
+BUY_CUT = 5
 
-#: 质量与估值的互换表：(Q 下限, 需要的 V)。工具本身的口径就是"Q 越低要求 V 越高"，
-#: 这里把它写成三条明确的阶梯，而不是一条斜线——阶梯看得懂、也好解释。
-V_LADDER = ((70.0, 50.0), (60.0, 60.0), (0.0, 65.0))
+#: 满分。改任何一档权重都要同步改这里，否则页面上「11/15」的比例会算错。
+SCORE_MAX = 15
 
-#: 离一年高点不到 10%（`pos250 > -0.10`）就不再算"提前"了：买点已经过去一段。
+#: 市值档（越小越好）：`(上限, 分数)`，None（没有市值）给 0 分——"不知道"不加分。
+MCAP_STEPS = ((50.0, 3), (100.0, 2), (200.0, 1))
+
+#: 估值位置档：PE/PB/PS 三项历史分位的均值，越低越便宜。
+#: 用分位而不用机构目标价：分位 151/151 都有，目标价真实值只有 79/151
+#: （48 只"无目标价"，24 只"现价缺失"的空壳）。
+PCT_STEPS = ((25.0, 3), (50.0, 2), (70.0, 1))
+
+#: 质量档（越高越好）：Q ≥ 80 给 2 分、≥ 65 给 1 分。
+#: 给质量留一点分是刻意的：否则福耀（Q 80.7）这种公司会因为市值大而沉底，
+#: 而"好公司"本身确实是用户观点里的一条。
+Q_STEPS = ((80.0, 2), (65.0, 1))
+
+#: 趋势走弱扣分。**不否决**——毛利率一个季度走弱不等于公司坏了，
+#: 但用户观点里"财务要有走好的趋势"是明确的一条，所以扣 2 分（最重的单项）。
+TREND_PENALTY = -2
+
+#: V 分低于这个数扣 1 分。不否决：V 缺的 63 只里 60 只市值 <200 亿，
+#: 把 V 当门槛等于系统性排除小市值（这正是上一版的毛病）。
+V_WEAK = 55.0
+V_PENALTY = -1
+
+#: 离一年高点不到 10%（`pos250 > -0.10`）只作提示，不再参与分档。
 NEAR_HIGH = -0.10
 
-#: 历史 PE 分位高于这个数，就算 V 还行也降一档——V 是机构口径的预测，
-#: 而 PE 分位是这只票自己跟自己的历史比，两个都贵才叫真贵。
+#: 历史 PE 分位高于这个数只作提示。
 PE_PCT_HIGH = 90.0
 
+#: 盈利弹性的标签与文案。阈值**不在这里定**——`strong/weak` 是
+#: `stock_cycle_elastic` 按 `ELASTIC_RATIO_MIN = 2.0` 判好的，这里只读它的标签。
+#:
+#: 三个标签的语义差别很大，不能合并成一个"好不好"：
+#:   strong   —— 比值 ≥ 2，周期反转时利润弹得比营收快
+#:   weak     —— 比值 < 2，营收动利润不动
+#:   unstable —— **算不出来**（营收长期走平 / 季度利润频繁跨零，分母趋零）：
+#:                它不是"弹性差"，是"这个比值没意义"
+ELASTIC_CN = {"strong": "强", "weak": "弱", "unstable": "不稳定"}
+ELASTIC_TONE = {"strong": "good", "weak": "muted", "unstable": "warn"}
 
-def v_need(q: float | None) -> float:
-    """这个 Q 分要求多高的 V 分。Q 为 None 时给最严的一档（宁严勿松）。"""
-    for q_floor, need in V_LADDER:
-        if (q or 0) >= q_floor:
-            return need
-    return V_LADDER[-1][1]
+#: 弹性加分：强 2 分、"算不出来" 1 分。
+#: 给 unstable 分是刻意的——营收长期走平、利润不跨零的公司往往是稳的，
+#: 只是这个比值没意义。当 0 分罚它，会误杀最稳的那批。
+ELASTIC_POINTS = {"strong": 2, "unstable": 1}
+
+#: 同分时的次序：弹性强的靠前，"不知道"的排最后。
+ELASTIC_RANK = {"strong": 0, "weak": 1, "unstable": 2, "": 3}
+
+#: 垄断性枚举，与 `stock_quality_screen` 的 `MOAT_TYPES` 一致。
+#: `"无标注"` 是**结论**（查过、没有），`""` 是**缺口**（没查过）——两者在
+#: 分数上同等待遇（都 0 分），但在页面上说法不同。
+MOAT_NONE = "无标注"
+
+
+def _has_moat(moat: str) -> bool:
+    return bool(moat) and moat not in (MOAT_NONE, "未标注")
 
 
 TIERS = {
     "buy": {"label": "优先研究", "tone": "ok", "order": 0,
-            "hint": "四条都过：质量站得住、估值够便宜、周期不在高位、离一年高点还有空间"},
+            "hint": f"赔率分 ≥ {BUY_CUT}：质量站得住的前提下，小市值 / 估值低位 / "
+                    "周期底部 / 弹性强 / 有垄断性 里占得越多越靠前"},
     "watch": {"label": "观察", "tone": "info", "order": 1,
-              "hint": "过了质量硬门槛，但还差一条以上——看「差距」列"},
+              "hint": f"过了质量硬门槛，但赔率分不到 {BUY_CUT}，或者工具自己"
+                      "还没下结论——看「提示」列里缺什么"},
     "out": {"label": "排除", "tone": "warn", "order": 2,
             "hint": "质量已否决（Q < 45 / 命中致命风险 / 结论就是回避）"},
     "nodata": {"label": "待补数据", "tone": "muted", "order": 3,
-               "hint": "质量没给出结论（V 缺、数据缺口太大），先补齐再谈"},
+               "hint": "这一批没有质量结果（工具没跑或这只票失败），先补齐再谈"},
 }
 
 
@@ -83,20 +138,38 @@ def _num(value):
 
 
 def _quality(row) -> dict:
-    """质量行 + 它内部的 `fatal`（致命风险清单）。
+    """质量行 + 内层 `detail` 里的三样东西：估值分位、致命项、趋势。
 
     `fatal` 只在内层 payload 里（页面上那一列是 `risks_hit`，含义是"命中几条"，
     分不清哪条是致命的）。买入判断必须看到"哪条"，所以这里往下剥一层。
+
+    `detail` 结构（`stock_quality_screen/screen/detail.py`）：
+        v.historical.metrics[] —— [{key: pe/pb/ps, label, percentile}]
+        v.parts[]              —— [{label: 机构目标价空间, raw}]
+        risks[]                —— [{group, name, status: hit/watch/unknown/clear}]
     """
     q = row.get("quality") or {}
     if not q:
         return {"q": None, "v": None, "q_grade": "", "v_grade": "",
                 "conclusion": "", "reason": "", "risks_hit": None,
-                "risks_known": None, "fatal": []}
-    inner_payload = inner(q)
-    fatal = inner_payload.get("fatal") or []
+                "risks_known": None, "fatal": [], "pct_pe": None,
+                "pct_pb": None, "pct_ps": None, "pct_avg": None,
+                "trend_bad": [], "has_quality": False}
+    payload = inner(q)
+    fatal = payload.get("fatal") or []
     if isinstance(fatal, str):
         fatal = [fatal]
+    detail = payload.get("detail") or {}
+    hist = (detail.get("v") or {}).get("historical") or {}
+    pct = {m.get("key"): _num(m.get("percentile"))
+           for m in hist.get("metrics") or []}
+    have = [x for x in (pct.get("pe"), pct.get("pb"), pct.get("ps")) if x is not None]
+    # 趋势：只认"命中"，`watch` 不算坏（工具自己也只是提示）。
+    # 这两项是用户观点里"财务要有走好的趋势"的直接对应物。
+    trend_bad = [str(x.get("name") or "") for x in detail.get("risks") or []
+                 if x.get("status") == "hit"
+                 and ("毛利" in str(x.get("name") or "")
+                      or "合同负债" in str(x.get("name") or ""))]
     return {
         "q": _num(q.get("q")),
         "v": _num(q.get("v")),
@@ -107,17 +180,46 @@ def _quality(row) -> dict:
         "risks_hit": q.get("risks_hit"),
         "risks_known": q.get("risks_known"),
         "fatal": [str(x) for x in fatal if x],
+        "pct_pe": pct.get("pe"), "pct_pb": pct.get("pb"), "pct_ps": pct.get("ps"),
+        "pct_avg": (sum(have) / len(have)) if have else None,
+        "trend_bad": trend_bad,
+        "has_quality": True,
     }
 
 
 def _cycle(row) -> dict:
+    """周期行的字段。
+
+    `elastic_label` 的 `na` 归一成空串：`na` 是"工具跑了但算不出来"，
+    与"这一批没跑周期"（整行缺失）是两回事，靠 `has_cycle` 区分。
+    """
     c = row.get("cycle") or {}
+    label = (c.get("elastic_label") or "").lower()
+    if label in ("", "na"):
+        label = ""
+    ratio = _num(c.get("elasticity"))
+    # 表格里那一格：「强 5.3×」。弱/不稳定也照样显示原值
+    # （弱的 0.68× 比一个"弱"字有信息量）。
+    text = ""
+    if label:
+        text = ELASTIC_CN.get(label, label)
+        if ratio is not None:
+            text = f"{text} {ratio:.1f}×"
+    # 色调跟着"这一关管不管它"走：非周期股的弱/不稳定与本页无关，
+    # 涂成橙色会让人以为它拖了后腿（橙色在这页一直是"有问题"的意思）。
+    tone = ELASTIC_TONE.get(label, "muted")
+    if label and not c.get("is_cycle") and label != "strong":
+        tone = "muted"
     return {
         "is_cycle": bool(c.get("is_cycle")),
         "position": (c.get("position_label") or "").lower(),
         "position_pct": _num(c.get("position_pct")),
-        "elastic": c.get("elastic_label") or "",
+        "elastic": label,
+        "ratio": ratio,
+        "text": text,
+        "tone": tone,
         "gm_cv": _num(c.get("gm_cv_pct")),
+        "has_cycle": bool(c),
     }
 
 
@@ -132,6 +234,7 @@ def _top(row) -> dict:
         "cycle_state": t.get("cycle_state") or "",
         "pe_pct": _num(t.get("pe_pct")),
         "upside": _num(t.get("target_upside")),
+        "has_top": bool(t),
     }
 
 
@@ -139,6 +242,7 @@ def _select(row) -> dict:
     s = row.get("select") or {}
     return {
         "in_select": bool(s),
+        "mcap": _num(s.get("market_cap_yi")),
         "turn_rank": _num(s.get("pool_turnover_rank")),
         "stars": s.get("stars") or "",
         "industry": s.get("industry") or "",
@@ -150,116 +254,187 @@ def _select(row) -> dict:
 POSITION_CN = {"low": "低位", "high": "高位", "neutral": "中位", "na": "不适用"}
 
 
-# ---------------------------------------------------------------- 规则
+# ---------------------------------------------------------------- 赔率分
 
-def _excluded(qua: dict) -> dict | None:
-    """质量这一关的否决理由；没被否决给 None。
+def _steps(value, steps) -> int:
+    """分档给分：`value` 落在哪一档就给那一档的分。`None` → 0（不知道不加分）。"""
+    if value is None:
+        return 0
+    for limit, points in steps:
+        if value < limit:
+            return points
+    return 0
 
-    顺序有讲究：先看"工具已经说回避"，再说分数——工具可能因为致命风险
-    直接回避，这时分数可能并不低，只看分数会漏。
 
-    返回 `{"label", "text", "detail"}`：label 是表里那个短胶囊，
-    detail 是短说明（致命项的名字 / 分数对比），text 是完整一句话（悬停看）。
+def _q_points(q) -> int:
+    """质量加分。越高质量分越高，与 `_steps` 方向相反，所以单写。"""
+    if q is None:
+        return 0
+    for floor, points in Q_STEPS:
+        if q >= floor:
+            return points
+    return 0
+
+
+def _score(qua: dict, cyc: dict, top: dict, sel: dict, moat: str) -> dict:
+    """赔率分：0~`SCORE_MAX`。返回 {'total', 'terms', 'penalties'}。
+
+    `terms` 的每一项都是 {key,label,points,note}——页面上悬停能看到
+    「为什么是 11 分」，不用去猜权重。
     """
-    if not qua["conclusion"]:
-        return None
-    # 致命项的两条来源：内层 payload 的 `fatal` 列表（新记录），或者
-    # 工具把致命项直接写进了 reason（`出现致命风险：利息保障 < 1`，老记录）。
-    # 不认第二种的话，30 只回避里绝大多数只会显示一句没信息量的「结论回避」。
-    fatal = list(qua["fatal"])
-    reason = qua["reason"]
-    if not fatal and "致命风险" in reason:
-        fatal = [reason.split("致命风险：", 1)[-1]]
-    if fatal:
-        names = "；".join(fatal[:3])
-        return {"label": "致命风险", "detail": names,
-                "text": f"命中致命风险：{names}"}
-    # 先看分数：Q < 45 是工具里写死的硬线，比"结论回避"这个笼统说法更有信息量。
-    if qua["q"] is not None and qua["q"] < Q_HARD:
-        return {"label": "Q 不足",
-                "detail": f"{qua['q']:.1f} < {Q_HARD:.0f}",
-                "text": f"质量分 {qua['q']:.1f} 低于 {Q_HARD:.0f}，禁止买入"}
-    if qua["conclusion"].startswith("回避"):
-        return {"label": "结论回避", "detail": reason,
-                "text": reason or "质量结论回避"}
-    return None
+    terms = [
+        {"key": "mcap", "label": "市值小",
+         "points": _steps(sel["mcap"], MCAP_STEPS),
+         "note": "—" if sel["mcap"] is None else f"{sel['mcap']:.0f} 亿"},
+        {"key": "value", "label": "估值低位",
+         "points": _steps(qua["pct_avg"], PCT_STEPS),
+         "note": ("—" if qua["pct_avg"] is None
+                  else f"PE/PB/PS 分位均值 {qua['pct_avg']:.0f}%")},
+        {"key": "cycle", "label": "周期低位",
+         "points": 2 if cyc["is_cycle"] and cyc["position"] == "low" else 0,
+         "note": (POSITION_CN.get(cyc["position"], "—") if cyc["is_cycle"]
+                  else "非周期股" if cyc["has_cycle"] else "缺周期数据")},
+        {"key": "elastic", "label": "盈利弹性",
+         "points": ELASTIC_POINTS.get(cyc["elastic"], 0),
+         "note": cyc["text"] or "—"},
+        {"key": "moat", "label": "垄断性",
+         "points": 2 if _has_moat(moat) else 0,
+         "note": moat or "未标注"},
+        {"key": "q", "label": "质量",
+         "points": _q_points(qua["q"]),
+         "note": "—" if qua["q"] is None else f"Q {qua['q']:.1f}"},
+        {"key": "upside", "label": "目标价空间",
+         "points": 1 if (top["upside"] is not None and top["upside"] >= 0.20) else 0,
+         "note": "—" if top["upside"] is None else f"{top['upside'] * 100:+.0f}%"},
+    ]
+
+    penalties = []
+    if qua["trend_bad"]:
+        penalties.append({"key": "trend", "label": "趋势走弱",
+                          "points": TREND_PENALTY,
+                          "note": "；".join(qua["trend_bad"])})
+    if qua["v"] is not None and qua["v"] < V_WEAK:
+        penalties.append({"key": "v", "label": "估值分偏低",
+                          "points": V_PENALTY, "note": f"V {qua['v']:.1f} < {V_WEAK:.0f}"})
+
+    total = sum(t["points"] for t in terms) + sum(p["points"] for p in penalties)
+    return {"total": total, "terms": terms, "penalties": penalties}
 
 
-def _gaps(qua: dict, cyc: dict, top: dict, sel: dict) -> list[dict]:
-    """距"优先研究"还差哪几条。每条 {key,label,text}。
+# ---------------------------------------------------------------- 提示
 
-    label 是给图表/图例用的短词，text 是给人看的整句话。全部可解释——
+def _notes(qua: dict, cyc: dict, top: dict, sel: dict) -> list[dict]:
+    """研究时的提示（**不影响分档**）。每条 {key,label,text,tone}。
+
+    label 是表里那个短胶囊，text 是完整一句话（悬停看）。全部可解释——
     这里出的每一句，用户在个股页都能找到对应的原始结论。
     """
     out: list[dict] = []
-    q, v = qua["q"], qua["v"]
-    need = v_need(q)
+    concl = qua["conclusion"]
 
-    if v is None:
-        out.append({"key": "v", "label": "缺 V 分",
-                    "text": "估值分 V 取不到（多为没有机构覆盖），便宜不便宜算不出来"})
-    elif q is not None and v < need:
-        out.append({"key": "v", "label": "估值不够便宜",
-                    "text": f"V {v:.1f} < {need:.0f}：Q {q:.1f} 要求 V 至少 {need:.0f}"})
+    if concl.startswith("回避"):
+        out.append({"key": "verdict", "label": "工具判回避", "tone": "warn",
+                    "text": qua["reason"] or "质量结论是「回避」，只降档不排除——"
+                                             "自己确认它回避的理由是否已经过去"})
+    elif concl.startswith("数据不足"):
+        out.append({"key": "verdict", "label": "数据不足", "tone": "muted",
+                    "text": qua["reason"] or "质量分或估值分算不出来，工具没下结论"})
 
-    if q is not None and q < Q_GOOD:
-        out.append({"key": "q", "label": "质量刚过线",
-                    "text": f"Q {q:.1f} 只比 45 高一点（到 {Q_GOOD:.0f} 才算站得住）"})
+    if qua["trend_bad"]:
+        out.append({"key": "trend", "label": "趋势走弱", "tone": "warn",
+                    "text": "命中：" + "；".join(qua["trend_bad"])
+                            + "。用户口径里「财务要有走好的趋势」正是这一条，扣 2 分"})
+
+    if qua["v"] is None:
+        out.append({"key": "v", "label": "缺 V 分", "tone": "muted",
+                    "text": "机构覆盖不到 3 家，估值分算不出来；"
+                            "本批 63 只如此，多为小市值——所以不扣分，看 PB/PS 分位代替"})
 
     if cyc["is_cycle"] and cyc["position"] == "high":
-        out.append({"key": "cycle", "label": "周期高位",
-                    "text": "周期股且已在高位：周期的钱主要在低位→高位那一段赚"})
+        out.append({"key": "cycle", "label": "周期高位", "tone": "warn",
+                    "text": "产能周转率已在 60 分位以上：周期的钱主要在低位→高位那一段赚"})
+    if not cyc["has_cycle"]:
+        out.append({"key": "cycle", "label": "缺周期数据", "tone": "muted",
+                    "text": "这一批没跑周期弹性，判断不了它是不是周期股、在周期哪个位置"})
+    elif cyc["is_cycle"] and cyc["elastic"] in ("weak", "unstable"):
+        if cyc["elastic"] == "unstable":
+            out.append({"key": "elastic", "label": "弹性不可信", "tone": "warn",
+                        "text": "营收长期走平或季度利润频繁跨零，比值没有意义"
+                                "——不是弹性差，是算不出来"})
+        else:
+            ratio = cyc["ratio"]
+            out.append({"key": "elastic", "label": "弹性偏弱", "tone": "muted",
+                        "text": f"营业利润对营收的敏感度 "
+                                f"{f'{ratio:.1f}×' if ratio is not None else '不到 2×'}"
+                                "：营收起来了利润跟不上"})
 
-    if not top:
-        out.append({"key": "top", "label": "缺顶部判断",
+    if not top["has_top"]:
+        out.append({"key": "top", "label": "缺顶部判断", "tone": "muted",
                     "text": "这一批没跑顶部判断，离一年高点还有多少空间不知道"})
     else:
         if top["pos250"] is not None and top["pos250"] > NEAR_HIGH:
-            out.append({"key": "pos", "label": "离高点太近",
+            out.append({"key": "pos", "label": "离高点太近", "tone": "muted",
                         "text": f"距 250 日高点 {top['pos250'] * 100:+.1f}%："
-                                f"不到 -10% 就不算「提前」了"})
+                                "不到 -10% 就不算「提前」了"})
         if "高位" in top["momentum"]:
-            out.append({"key": "momentum", "label": "动量高位",
+            out.append({"key": "momentum", "label": "动量高位", "tone": "muted",
                         "text": f"动量 {top['momentum']}：已经涨在前头，追高风险"})
         if top["earnings"] == "盈利为负":
-            out.append({"key": "earnings", "label": "业绩亏损",
+            out.append({"key": "earnings", "label": "业绩亏损", "tone": "warn",
                         "text": "业绩因子是「盈利为负」，亏损期不谈估值便宜"})
         if top["pe_pct"] is not None and top["pe_pct"] >= PE_PCT_HIGH:
-            out.append({"key": "pe", "label": "PE 历史偏贵",
+            out.append({"key": "pe", "label": "PE 历史偏贵", "tone": "muted",
                         "text": f"历史 PE 分位 {top['pe_pct']:.0f}%"
                                 f"（高于 {PE_PCT_HIGH:.0f}% 就算贵）"})
 
     if not sel["in_select"]:
-        out.append({"key": "select", "label": "不在选股名单",
+        out.append({"key": "select", "label": "不在选股名单", "tone": "muted",
                     "text": "这只票不是这一批选股选出来的，只是别的工具算过它"})
     return out
 
 
-def _highlights(qua: dict, cyc: dict, top: dict, sel: dict) -> list[dict]:
-    """加分项（只做展示，不参与分档）：让「为什么值得看」一眼可见。"""
+def _highlights(qua: dict, cyc: dict, top: dict, sel: dict, moat: str) -> list[dict]:
+    """加分项（只做展示，让「为什么值得看」一眼可见）。"""
     out: list[dict] = []
-    if top.get("upside") is not None and top["upside"] >= 0.15:
-        out.append({"key": "upside", "tone": "good",
-                    "text": f"目标价空间 {top['upside'] * 100:+.0f}%"})
-    if top.get("pe_pct") is not None and top["pe_pct"] <= 20:
-        out.append({"key": "pe", "tone": "good",
-                    "text": f"PE 分位 {top['pe_pct']:.0f}%（历史低位）"})
-    if top.get("earnings") == "加速":
-        out.append({"key": "earnings", "tone": "good", "text": "业绩加速"})
+    if moat and _has_moat(moat):
+        out.append({"key": "moat", "tone": "good", "text": moat})
+    if sel["mcap"] is not None and sel["mcap"] < 100:
+        out.append({"key": "mcap", "tone": "good", "text": f"市值 {sel['mcap']:.0f} 亿"})
+    if qua["pct_avg"] is not None and qua["pct_avg"] <= 25:
+        out.append({"key": "value", "tone": "good",
+                    "text": f"估值分位 {qua['pct_avg']:.0f}%（历史低位）"})
     if cyc["is_cycle"] and cyc["position"] == "low":
         out.append({"key": "cycle", "tone": "good", "text": "周期低位"})
+    if cyc["elastic"] == "strong":
+        # 非周期股的强 DOL 工具自己就标「①否②强·存疑」（成本与售价联动），
+        # 这里照抄它的态度：是好事，但别当成周期弹性来理解。
+        out.append({"key": "elastic",
+                    "tone": "good" if cyc["is_cycle"] else "info",
+                    "text": (f"盈利弹性 {cyc['ratio']:.1f}×" if cyc["ratio"] is not None
+                             else "盈利弹性强")
+                            + ("" if cyc["is_cycle"] else "·存疑")})
+    if top.get("upside") is not None and top["upside"] >= 0.20:
+        out.append({"key": "upside", "tone": "good",
+                    "text": f"目标价空间 {top['upside'] * 100:+.0f}%"})
+    if top.get("earnings") == "加速":
+        out.append({"key": "earnings", "tone": "good", "text": "业绩加速"})
     if top.get("volume") == "放量（非高位）":
         out.append({"key": "volume", "tone": "info", "text": "放量（非高位）"})
     if "第二节" in qua["conclusion"]:
         out.append({"key": "sec2", "tone": "info", "text": "第二节有信号"})
     if sel.get("stars"):
         out.append({"key": "stars", "tone": "muted", "text": f"选股 {sel['stars']}"})
-    return out[:4]
+    return out[:6]
 
 
-def evaluate(row: dict) -> dict:
-    """一只票的综合评估结果（纯函数：只吃数据，不碰数据库）。"""
+def evaluate(row: dict, moat: str = "") -> dict:
+    """一只票的综合评估结果（纯函数：只吃数据，不碰数据库）。
+
+    `moat` 是这只票的垄断性标注（`shared.db` 的 `annotation`），由 `build()`
+    查好传进来——这一层不自己去连库，保持可单测。
+    """
     qua, cyc, top, sel = (_quality(row), _cycle(row), _top(row), _select(row))
+    scored = _score(qua, cyc, top, sel, moat)
 
     item = {
         "symbol": row["symbol"], "name": row.get("name") or "",
@@ -267,55 +442,76 @@ def evaluate(row: dict) -> dict:
         "q_grade": qua["q_grade"], "v_grade": qua["v_grade"],
         "conclusion": qua["conclusion"], "reason": qua["reason"],
         "fatal": qua["fatal"],
+        "moat": moat or "未标注",
+        "has_moat": _has_moat(moat),
+        "mcap": sel["mcap"],
+        "pct_avg": qua["pct_avg"],
+        "pct_pe": qua["pct_pe"], "pct_pb": qua["pct_pb"], "pct_ps": qua["pct_ps"],
         "cycle": cyc, "top": top, "select": sel,
         "position_cn": "" if not cyc["is_cycle"]
                        else POSITION_CN.get(cyc["position"], "—"),
-        "gaps": [], "highlights": [],
+        "score": scored["total"], "terms": scored["terms"],
+        "penalties": scored["penalties"],
+        "notes": [], "highlights": [],
     }
+    # 悬停看「这 11 分是怎么来的」：加分项按分数降序，后面接扣分项。
+    parts = [f"{t['label']} {t['points']:+d}（{t['note']}）"
+             for t in sorted(scored["terms"], key=lambda x: -x["points"]) if t["points"]]
+    parts += [f"{p['label']} {p['points']:+d}（{p['note']}）"
+              for p in scored["penalties"]]
+    item["score_text"] = " ｜ ".join(parts) or "没有拿到任何加分项"
 
-    why = _excluded(qua)
-    if not qua["conclusion"]:
+    if not qua["has_quality"]:
         tier = "nodata"
-        item["gaps"] = [{"key": "q", "label": "缺质量结论",
-                         "text": "这一批没有质量结果（工具没跑或这只票失败）"}]
-    elif qua["conclusion"].startswith("数据不足"):
-        tier = "nodata"
-        item["gaps"] = [{"key": "q", "label": "质量没结论",
-                         "text": qua["reason"] or "质量分或估值分算不出来"}]
-    elif why:
+        item["notes"] = [{"key": "q", "label": "缺质量结论", "tone": "muted",
+                          "text": "这一批没有质量结果（工具没跑或这只票失败）"}]
+    elif qua["fatal"]:
         tier = "out"
-        item["gaps"] = [{"key": "out", **why}]
+        names = "；".join(qua["fatal"][:3])
+        item["notes"] = [{"key": "out", "label": "致命风险", "tone": "warn",
+                          "detail": names, "text": f"命中致命风险：{names}"}]
+    elif qua["q"] is not None and qua["q"] < Q_HARD:
+        tier = "out"
+        item["notes"] = [{"key": "out", "label": "Q 不足", "tone": "warn",
+                          "detail": f"{qua['q']:.1f} < {Q_HARD:.0f}",
+                          "text": f"质量分 {qua['q']:.1f} 低于 {Q_HARD:.0f}，禁止买入"}]
+    elif qua["conclusion"].startswith("回避"):
+        # 工具判回避但 Q 没有低于硬线、也没有致命项：降为观察而不是排除。
+        # 用户会在个股页看到回避的理由，自己判断它是否已经过去。
+        tier = "watch"
+        item["notes"] = _notes(qua, cyc, top, sel)
+    elif qua["conclusion"].startswith("数据不足"):
+        tier = "watch"
+        item["notes"] = _notes(qua, cyc, top, sel)
     else:
-        item["gaps"] = _gaps(qua, cyc, top, sel)
-        tier = "buy" if not item["gaps"] else "watch"
+        item["notes"] = _notes(qua, cyc, top, sel)
+        tier = "buy" if item["score"] >= BUY_CUT else "watch"
 
     item["tier"] = tier
     item["tier_label"] = TIERS[tier]["label"]
     item["tier_tone"] = TIERS[tier]["tone"]
     item["tier_hint"] = TIERS[tier]["hint"]
-    item["highlights"] = _highlights(qua, cyc, top, sel)
-    # 木桶：两个分数里偏低的那一个。缺 V 时按 0 算——缺数据的票不该排到
-    # 前面去（"不知道便不便宜"和"便宜"是两回事）。
-    q, v = item["q"], item["v"]
-    if q is None:
-        item["bucket"] = None
-    elif v is None:
-        item["bucket"] = 0.0
-    else:
-        item["bucket"] = min(q, v)
+    item["highlights"] = _highlights(qua, cyc, top, sel, moat)
     return item
 
 
-def build(rows: list[dict]) -> dict:
-    """整批评估：分档 + 排序 + 统计。返回 {'rows', 'tiers', 'counts', 'buy'}。"""
-    items = [evaluate(r) for r in rows]
+def build(rows: list[dict], moats: dict[str, str] | None = None) -> dict:
+    """整批评估：分档 + 排序 + 统计。返回 {'rows','tiers','counts','buy'}。
+
+    `moats` 是 `{symbol: moat_type}`（`web/db.py: moats()` 读 `shared.db`）。
+    没传就全部当"未标注"——不加分，也不影响分档，只是失去那一项。
+    """
+    known = {str(k).lower(): v for k, v in (moats or {}).items()}
+    items = [evaluate(r, known.get(str(r.get("symbol", "")).lower(), "")) for r in rows]
 
     def key(it):
         tier = TIERS[it["tier"]]["order"]
         if it["tier"] in ("buy", "watch"):
-            # 档内按木桶分从高到低；同分再按 Q，最后按代码（保证顺序稳定）
-            return (tier, -(it["bucket"] or 0.0), -(it["q"] or 0.0), it["symbol"])
-        return (tier, 0.0, 0.0, it["symbol"])
+            # 档内按赔率分从高到低；同分看弹性（强的靠前），然后 Q，最后代码
+            return (tier, -it["score"],
+                    ELASTIC_RANK.get(it["cycle"]["elastic"], 3),
+                    -(it["q"] or 0.0), it["symbol"])
+        return (tier, 0, 0, 0.0, it["symbol"])
 
     items.sort(key=key)
     counts = {k: 0 for k in TIERS}
@@ -327,6 +523,8 @@ def build(rows: list[dict]) -> dict:
     return {
         "rows": items,
         "counts": counts,
+        "cut": BUY_CUT,
+        "score_max": SCORE_MAX,
         "tiers": [{"key": k, **v, "count": counts[k]} for k, v in
                   sorted(TIERS.items(), key=lambda kv: kv[1]["order"])],
         "buy": [it for it in items if it["tier"] == "buy"],

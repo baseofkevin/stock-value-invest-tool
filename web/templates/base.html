@@ -10,7 +10,7 @@
 <body class="{% block bodyclass %}{% endblock %}">
 <div class="topbar">
   <div class="topbar-inner">
-    <div class="brand">个股研究看板<small>RESULTS.DB · 只读</small></div>
+    <div class="brand">《股市真规则》的实践运用<small>RESULTS.DB · 只读</small></div>
     <nav class="nav">
       {% for href, label in nav %}
       <a href="{{ href }}" class="{{ 'on' if request.path == href or (href != '/' and request.path.startswith(href)) else '' }}">{{ label }}</a>
