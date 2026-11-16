@@ -6,6 +6,7 @@ shared.db-shm
 *.db-wal
 *.db-shm
 backup/
+output/
 
 # 运行时状态与日志（日志每次运行一行文件名，带时间戳，不进版本库）
 state/
