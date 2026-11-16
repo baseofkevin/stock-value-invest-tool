@@ -430,6 +430,20 @@ class TestReviewRules(unittest.TestCase):
         self.assertEqual(blank["score"], reviewed["score"])
         self.assertFalse(blank["has_moat"])
 
+    def test_unverified_moat_scores_nothing(self):
+        """「待核实」是占位不是结论：2026-11-16 全市场铺开后必须 0 分。
+
+        这条防的是"铺底数据自带上车"：一旦它被算进垄断分，全市场 4700 多只
+        都会凭空多 2 分，买入门槛就形同虚设。
+        """
+        from web import review
+        blank = review.evaluate(self._row(), moat="")
+        todo = review.evaluate(self._row(), moat="待核实")
+        self.assertEqual(blank["score"], todo["score"])
+        self.assertFalse(todo["has_moat"])
+        self.assertNotIn("待核实", [h["text"] for h in todo["highlights"]])
+        self.assertEqual(todo["moat"], "待核实")   # 但页面上还是能看出"没核过"
+
     def test_unstable_elasticity_gets_half_credit(self):
         """「算不出来」给 1 分而不是 0：营收走平的公司往往是稳的。"""
         from web import review
@@ -749,6 +763,29 @@ class TestReadOnly(WebCase):
             with self.subTest(url=url):
                 resp = client.get(url)
                 self.assertEqual(resp.status_code, 200)
+
+
+class AnnotationStateTest(unittest.TestCase):
+    """`annotation.row_to_moat` 的三种"没有垄断"状态要能分清。
+
+    个股报告靠 `annotated` 决定要不要渲染垄断块；把「待核实」判成 True，
+    等于给 4700 多家没核过的公司印了一份"垄断性"说明。
+    """
+
+    @staticmethod
+    def _rec(moat_type):
+        from stock_data_fetch import annotation as A
+        return A.row_to_moat({"moat_type": moat_type, "verified": "",
+                              "evidence": "", "controller": "", "sources": None})
+
+    def test_unverified_is_not_annotated(self):
+        rec = self._rec("待核实")
+        self.assertFalse(rec["annotated"])
+        self.assertEqual(rec["moat_type"], "待核实")
+
+    def test_none_and_moat(self):
+        self.assertFalse(self._rec("无标注")["annotated"])
+        self.assertTrue(self._rec("技术壁垒")["annotated"])
 
 
 if __name__ == "__main__":

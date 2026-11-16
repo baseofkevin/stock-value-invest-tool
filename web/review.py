@@ -101,14 +101,16 @@ ELASTIC_POINTS = {"strong": 2, "unstable": 1}
 #: 同分时的次序：弹性强的靠前，"不知道"的排最后。
 ELASTIC_RANK = {"strong": 0, "weak": 1, "unstable": 2, "": 3}
 
-#: 垄断性枚举，与 `stock_quality_screen` 的 `MOAT_TYPES` 一致。
-#: `"无标注"` 是**结论**（查过、没有），`""` 是**缺口**（没查过）——两者在
-#: 分数上同等待遇（都 0 分），但在页面上说法不同。
+#: 垄断性枚举，与 `stock_data_fetch.config.MOAT_TYPES` 一致。
+#: 三种"没有垄断分"的状态要分开看：`"无标注"` 是**结论**（查过、没有），
+#: `""` 是**缺口**（表里没这只票），`"待核实"` 是**占位**（有记录、没核过，
+#: 2026-11-16 全市场铺开后的默认态）。分数上都是 0 分，页面说法不同。
 MOAT_NONE = "无标注"
+MOAT_UNVERIFIED = "待核实"
 
 
 def _has_moat(moat: str) -> bool:
-    return bool(moat) and moat not in (MOAT_NONE, "未标注")
+    return bool(moat) and moat not in (MOAT_NONE, MOAT_UNVERIFIED, "未标注")
 
 
 TIERS = {

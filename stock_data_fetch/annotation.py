@@ -129,7 +129,8 @@ def row_to_moat(row: Any) -> dict[str, Any]:
     vdate = _parse_date(verified)
     stale = bool(vdate and (dt.date.today() - vdate).days > ANNOTATION_STALE_DAYS)
     out = {
-        "annotated": moat_type != "无标注",
+        # 「待核实」不是结论：报告里不该出现垄断块，否则等于替没核过的票背书。
+        "annotated": moat_type not in ("无标注", "待核实"),
         "moat_type": moat_type,
         "evidence": str(row["evidence"] or "") if "evidence" in row.keys() else "",
         "controller": str(row["controller"] or "") if "controller" in row.keys() else "",

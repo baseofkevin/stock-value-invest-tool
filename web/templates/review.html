@@ -62,8 +62,10 @@
               {% else %}<span class="chip muted"
                    title="{% if r.cycle.has_cycle %}营收长期走平或季度利润跨零，比值算不出来{% else %}这一批没有周期结果{% endif %}">—</span>{% endif %}</td>
           <td>{% if r.has_moat %}<span class="chip good">{{ r.moat }}</span>
+              {% elif r.moat == '待核实' %}<span class="chip muted"
+                   title="已建记录、还没核实——全市场铺开后的默认状态，不参与打分">待核实</span>
               {% else %}<span class="chip muted"
-                   title="{% if r.moat == '无标注' %}查过，没发现垄断性——这是结论，不是缺口{% else %}annotation 表里没有这只票，还没人工核实过{% endif %}">—</span>{% endif %}</td>
+                   title="{% if r.moat == '无标注' %}查过，没发现垄断性——这是结论，不是缺口{% else %}annotation 表里没有这只票，还没核实过{% endif %}">—</span>{% endif %}</td>
           <td>{% for h in r.highlights %}<span class="chip {{ h.tone }}" style="margin:0 4px 3px 0">{{ h.text }}</span>{% endfor %}</td>
         </tr>
         {% endfor %}
@@ -119,6 +121,7 @@
           <td>{% if r.cycle.elastic %}<span class="chip {{ r.cycle.tone }}">{{ r.cycle.text }}</span>
               {% else %}<span class="chip muted">—</span>{% endif %}</td>
           <td>{% if r.has_moat %}<span class="chip good">{{ r.moat }}</span>
+              {% elif r.moat == '待核实' %}<span class="chip muted">待核实</span>
               {% else %}<span class="chip muted">—</span>{% endif %}</td>
           <td class="gap-cell">
             {% for g in r.notes %}<span class="gap">
