@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>金钼股份 601958 · 周期弹性初筛</title>
+<style>
+:root{
+  --bg:#f5f6f4; --card:#fff; --ink:#1f2933; --muted:#66727f; --line:#e3e8ee;
+  --primary:#2f6152;   /* 主色：墨绿 */
+  --primary-dark:#1d4034;
+  --low:#1f7a4d;       /* 低位：绿 */
+  --high:#b3261e;      /* 高位：红 */
+  --warn:#9a6700;      /* 不稳定/不适用：琥珀 */
+  --soft:#f7f9fb;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC","Microsoft YaHei",sans-serif}
+.wrap{max-width:1040px;margin:0 auto;padding:26px 20px 56px}
+
+/* ---- Hero ---- */
+.hero{background:linear-gradient(135deg,var(--primary-dark),var(--primary));color:#fff;
+  border-radius:14px;padding:26px 30px;margin-bottom:18px}
+.hero h1{margin:0 0 4px;font-size:27px;letter-spacing:.4px}
+.hero .code{font-variant-numeric:tabular-nums;opacity:.82;font-size:16px;margin-left:8px;font-weight:400}
+.hero .headline{margin-top:12px;font-size:15px;opacity:.94;font-variant-numeric:tabular-nums}
+.hero .headline b{font-weight:700}
+.hero .headline .na-hint{opacity:.78;font-size:12.5px}
+.hero .badges{margin-top:14px}
+.badge{display:inline-block;border-radius:999px;padding:4px 12px;font-size:12px;font-weight:700;margin-right:8px}
+.badge-cycle-yes{background:rgba(255,255,255,.92);color:var(--primary-dark)}
+.badge-cycle-no{background:rgba(255,255,255,.55);color:#33413c}
+.badge-elastic-strong{background:#fff;color:var(--primary-dark)}
+.badge-elastic-weak{background:rgba(255,255,255,.55);color:#33413c}
+.badge-unstable{background:#fdf0d0;color:var(--warn)}
+.badge-low{background:#dff3e7;color:var(--low)}
+.badge-high{background:#fbe3e1;color:var(--high)}
+.badge-muted{background:rgba(255,255,255,.28);color:#fff}
+.badge-cv-channel{background:rgba(255,255,255,.35);color:#fff;font-weight:600}
+.badge-contradiction{background:rgba(255,255,255,.16);color:#fff;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.55)}
+.badge-capacity{background:rgba(255,255,255,.20);color:#fff;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.45);font-weight:600}
+
+/* ---- 卡片 ---- */
+section{background:var(--card);border:1px solid var(--line);border-radius:12px;
+  padding:20px 22px;margin:14px 0;box-shadow:0 1px 2px rgba(20,40,60,.03)}
+h2{font-size:18px;margin:0 0 12px;padding-bottom:8px;border-bottom:2px solid #eef1f4;color:#2b3d36}
+h2 .hint{font-size:12px;font-weight:400;color:var(--muted);margin-left:8px}
+p{margin:8px 0}
+.muted{color:var(--muted)}
+.small{font-size:12px;color:var(--muted)}
+.mono{font-variant-numeric:tabular-nums}
+
+/* ---- 三个判断表 ---- */
+table.judge{width:100%;border-collapse:collapse;font-size:14px}
+table.judge th,table.judge td{padding:11px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
+table.judge th{background:var(--soft);color:#40566a;font-weight:600;font-size:12px;white-space:nowrap}
+table.judge tr:last-child td{border-bottom:0}
+table.judge td.j-num{font-variant-numeric:tabular-nums;white-space:nowrap}
+table.judge td.j-res{font-weight:700;white-space:nowrap;width:96px}
+.j-yes{color:var(--primary-dark)}
+.j-no{color:var(--muted)}
+.j-low{color:var(--low)}
+.j-high{color:var(--high)}
+.j-neutral{color:var(--muted)}
+.j-na{color:var(--muted);font-weight:400}
+.j-note{color:var(--muted);font-size:12px;font-weight:400}
+
+/* ---- 判断①②③ 含义说明（共用一套版式） ---- */
+.posmean{margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)}
+.posmean + .posmean{margin-top:10px}
+.posmean .pm-lead{margin:0 0 10px;font-size:12.5px;color:var(--muted);line-height:1.75}
+.posmean .pm-lead b{color:#425466}
+.posmean .pm-lead code{font-family:inherit;background:var(--soft);border-radius:3px;
+  padding:1px 4px;color:#40566a}
+.posmean .pm-formula{margin:9px 0 0;padding:8px 11px;border-radius:8px;
+  background:#fbfcfc;border:1px solid var(--line);font-size:11.5px;
+  color:var(--muted);line-height:1.8}
+.posmean .pm-formula b{color:var(--warn);font-weight:700}
+ul.pm-list{list-style:none;margin:0;padding:0;display:grid;gap:7px}
+ul.pm-list li{position:relative;padding:8px 11px;border-radius:8px;background:var(--soft);
+  border-left:3px solid var(--line);font-size:12.5px;line-height:1.7}
+ul.pm-list li b{color:#33463f;margin-right:6px}
+ul.pm-list li .pm-head{color:#40566a;font-weight:600}
+ul.pm-list li .pm-body{display:block;color:var(--muted);margin-top:2px}
+ul.pm-list li .pm-body b{color:var(--warn);font-weight:700}
+ul.pm-list li.pm-active{background:#f2f7f5;border-left-color:var(--primary);
+  box-shadow:inset 0 0 0 1px rgba(47,97,82,.12)}
+ul.pm-list li.pm-low.pm-active{border-left-color:var(--low)}
+ul.pm-list li.pm-high.pm-active{border-left-color:var(--high)}
+ul.pm-list li.pm-strong.pm-active{border-left-color:var(--primary)}
+ul.pm-list li.pm-weak.pm-active{border-left-color:#8b98a5}
+ul.pm-list li.pm-unstable.pm-active{border-left-color:var(--warn)}
+ul.pm-list li.pm-na.pm-active{border-left-color:var(--warn);background:#fdf9f2}
+.pm-now{background:var(--primary);color:#fff;border-radius:999px;
+  padding:1px 7px;font-size:10.5px;font-weight:700;margin-left:2px}
+ul.pm-list li{padding-left:12px}
+
+/* ---- 图表 ---- */
+.charts{display:grid;gap:18px}
+.chart h3{font-size:14px;margin:0 0 6px;color:#33463f;font-weight:600}
+.chart h3 .sub{font-weight:400;color:var(--muted);font-size:12px;margin-left:8px}
+.chart svg{width:100%;height:auto;display:block}
+.chart .gridline{stroke:#e8edf2;stroke-width:1}
+.chart .axis{stroke:#c9d3dd;stroke-width:1}
+.chart .xaxis{stroke:#c9d3dd;stroke-width:1}
+.chart .tick{fill:#66727f;font-size:10px}
+.chart .xtick{fill:#8b98a5;font-size:9.5px;font-variant-numeric:tabular-nums}
+.chart .empty{fill:#98a4b0;font-size:12px}
+.chart .threshold{stroke:#9aa7b4;stroke-width:1;stroke-dasharray:4 3}
+.chart .threshold-label{fill:#8b98a5;font-size:10px}
+.chart .band-low{fill:#e8f4ec}
+.chart .band-high{fill:#fbeceb}
+
+/* ---- 脚注 ---- */
+.foot{color:var(--muted);font-size:12px;margin-top:22px;line-height:1.85}
+.foot b{color:#425466}
+.foot ol{margin:6px 0 0 18px;padding:0}
+.foot li{margin:3px 0}
+
+@media (max-width:640px){
+  .wrap{padding:12px 10px 36px}
+  .hero{padding:20px 18px}
+  .hero h1{font-size:22px}
+  section{padding:16px 14px}
+  table.judge th,table.judge td{padding:8px 6px;font-size:13px}
+}
+@media print{
+  body{background:#fff}
+  .wrap{max-width:none;padding:0}
+  .hero{border-radius:0}
+  section{break-inside:avoid;box-shadow:none}
+}
+</style>
+</head>
+<body data-code="601958" data-name="金钼股份" data-quarters="43" data-gm-std="7.6417" data-cycle="1" data-elastic="weak" data-elastic-ratio="0.3834" data-position="high" data-position-pct="98.75" data-financial="0" data-gm-cv="18.9485" data-cycle-channel="std" data-capacity-direction="flat" data-elastic-reason="ok">
+<div class="wrap">
+
+  <div class="hero">
+    <h1>金钼股份<span class="code">601958</span></h1>
+    <div class="small" style="color:rgba(255,255,255,.72)">有色金属 · 43 个季度</div>
+    <div class="headline">毛利率σ <b>7.64 pp</b> · 弹性 <b>0.38</b> · 产能分位 <b>98.8%</b></div>
+    <div class="badges"><span class="badge badge-cycle-yes">周期股</span><span class="badge badge-elastic-weak">弹性弱</span><span class="badge badge-high">高位</span></div>
+  </div>
+
+  <section>
+    <h2>三个判断<span class="hint">一个判断，只给一个指标</span></h2>
+    <table class="judge">
+      <thead>
+        <tr><th>判断</th><th>结果</th><th>指标</th><th>数值</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>是不是周期股</td><td class="j-res j-yes">是</td><td>最近 20 季毛利率标准差</td><td class="j-num">7.64 pp <span class="j-note">≥ 5 pp</span></td></tr>
+        <tr><td>弹性</td><td class="j-res j-no">弱</td><td>最近 8 季「利润增速÷收入增速」中位</td><td class="j-num">0.38 <span class="j-note">&lt; 2</span></td></tr>
+        <tr><td>周期位置</td><td class="j-res j-high">高位</td><td>产能周转率的 10 年分位</td><td class="j-num">98.8% <span class="j-note">&gt; 60%</span></td></tr>
+      </tbody>
+    </table>
+    <div class="posmean">
+      <p class="pm-lead"><b>「是不是周期股」看的是毛利率波动，不是股价、不是营收、也不是行业标签。</b>毛利率 = 卖价与原料成本之间那道缝，含<code>（收入−成本）÷收入</code>；周期股的钱就来自这道缝的张开与收窄，非周期股的缝被护城河焊住了。所以本工具用<b>近 20 季（5 年）单季毛利率的波动</b>当指纹，两条通道任一命中即判「是」：<b>绝对</b> σ ≥ 5pp；<b>相对</b> CV = σ÷|毛利率中位| ≥ 20%（且中位 ≥ 5%、σ ≥ 2pp）。相对通道是为低毛利生意准备的 —— 毛利率只有十几点的公司，σ 在数学上就到不了 5pp，但它摆动的<b>比例</b>可能远超 20%。两档具体含义如下：</p><ul class="pm-list"><li class="pm-strong pm-active"><b>是</b><span class="pm-now">当前</span><span class="pm-head">近 20 季毛利率波动大，像「价差型生意」</span><span class="pm-body">毛利率在 5 年里上下摆动超过 5 个百分点，或相对自身水平摆动超过 20%（低毛利生意用相对口径衡量），说明卖价与原料成本之间那道缝<b>经常张开又收窄</b> —— 这正是周期股赚钱与亏钱的同一来源。但<b>「是」不等于「确定是周期股」</b>：文献给了三条判据（毛利率波动、营收行业同步性、利润增速波动），本工具只做了第一条。还有一层：5pp 是按<b>年度</b>数据标定的，本工具用<b>单季</b>数据，季节性天然抬高季度标准差，所以这条线对季度口径<b>偏松</b>——有意为之，初筛宁宽勿严，宁可多放进来看，也不要漏掉。</span></li><li class="pm-weak"><b>否</b><span class="pm-head">近 20 季毛利率波动不大，看不到「价差型生意」的指纹</span><span class="pm-body"><b>不代表</b>这家公司不是周期股，只代表<b>毛利率这一项</b>没波动。绝对与相对两条通道都没命中，所以这个「否」是把两把尺子都用过了。三种常见情形会让周期股被判成「否」：一是成本与售价同步联动（营收大跌、毛利率却稳），波动全落在量上而不在价差上；二是公司有长协、套保、牌照或品牌把价差焊住了；三是毛利率绝对水平太低（中位不到 5%），相对口径也失去分辨率。反过来说，「否」也不代表公司差——恰恰相反，毛利率平滑本身就是护城河的证据。要确认周期性，得自己再看营收增速的波动与行业景气的关系。</span></li></ul><p class="pm-formula">毛利率_q = (单季营业收入 − 单季营业成本) ÷ 单季营业收入；σ = 近 20 季毛利率的<b>样本标准差</b>（分母 n−1，单位：百分点）；CV = σ ÷ |毛利率中位数| × 100（相对波动，单位：%）。<b>用单季值</b>：接口的累计口径（三季度=前三季合计）已把前两季平均掉，用它会系统性抹平波动、直接漏判。<b>缺失季整季剔除、不补 0</b>：补 0 会凭空造出「毛利率归零」的极端值，把 σ 抬高。判断线：<b>σ ≥ 5pp</b>，或 <b>CV ≥ 20%</b>（后者要求 |毛利率中位| ≥ 5% 且 σ ≥ 2pp，防止分母趋零与绝对波动过小）。两条都是闭区间；有效季 &lt; 8 季则不给结论。</p>
+    </div>
+    <div class="posmean">
+      <p class="pm-lead"><b>「弹性」是经营杠杆，衡量收入波动被放大成利润波动的倍数，不衡量公司好坏。</b>指标是<b>利润增速 ÷ 收入增速</b>（逐季环比，取近 8 季中位数，抗单季异常）：≥ 2 为强、&lt; 2 为弱；营收长期不动的公司比值不可信，单独标「不稳定」。三档具体含义如下：</p><ul class="pm-list"><li class="pm-strong"><b>强</b><span class="pm-head">收入每变动 1%，营业利润约变动 2 倍以上</span><span class="pm-body">即典型的经营杠杆放大：成本刚性大（固定成本占比高），所以收入的小幅波动会被放大成利润的大幅波动。<b>涨跌对称</b> ——周期上行放得大，下行也摔得重，不是只赚不赔。注意 DOL 在盈亏平衡点附近天然趋于无穷，<b>不等于</b>这家公司质地好。</span></li><li class="pm-weak pm-active"><b>弱</b><span class="pm-now">当前</span><span class="pm-head">收入每变动 1%，营业利润的变动不到 2 倍（也可能方向相反）</span><span class="pm-body">分母为正时是<b>放大效应有限</b>：成本随收入同比例变动（固定成本占比低），周期来了利润也没多少反应，常说的「赚了吆喝不赚钱」。但中位数为<b>负数</b>时是另一回事 —— 它表示这 8 季里有一半以上的季度营收和利润<b>方向相反</b>（增收不增利，或减产反而增利），根源通常是原料/产品价差在收紧，而不是杠杆小。<b>两种情况都不代表</b>公司差 —— 价格稳定、毛利率平滑本身就是护城河的证据，只是它不适合作为「赚周期弹性」的标的。但具体是哪一种，要自己翻季度报表确认。</span></li><li class="pm-unstable"><b>不稳定</b><span class="pm-head">比值算得出来，但不可信</span><span class="pm-body">近 8 季营收增速的中位数绝对值不到 3%，分母趋近于零，比值会被微小波动放大成几十倍甚至上百倍，那些数字不是「弹性」而是噪声。所以<b>既不说强也不说弱</b>，数值照常显示供参考。</span></li></ul>
+    </div>
+    <div class="posmean">
+      <p class="pm-lead"><b>「周期位置」看的是供给端，不是需求，也不是营收高低。</b>指标是<b>产能周转率</b>（单季营收×4 ÷ 固定资产+在建工程）在自身近 10 年里的排位：&lt;40% 为低位、&gt;60% 为高位，夹在中间不给方向。三档具体含义如下：</p><ul class="pm-list"><li class="pm-low"><b>低位</b><span class="pm-head">产能利用率处于自身近 10 年偏低区间</span><span class="pm-body">即产能相对需求是宽松的、供给端可能已经出清。<b>不代表</b>营收处在低位，也<b>不代表</b>需求正在回暖——本工具只看供给端，需求拐头要自己确认。<b>但「低位」有两种成因，方向相反，必须看旁边的方向标记</b>：需求走了（营收跌、产能不变）→ 供给端在出清；产能来了（营收没跌、资产猛涨）→ 分母变大压低了周转率，公司其实在扩产、未来供给还会增加。实测 49 只低位股里 9 只属于后者。</span></li><li class="pm-neutral"><b>中性</b><span class="pm-head">产能利用率处于自身近 10 年中间区间</span><span class="pm-body">既谈不上紧张也谈不上宽松，供需大致匹配。中间地带不给方向性标签，因为这里本来就没有信息。</span></li><li class="pm-high pm-active"><b>高位</b><span class="pm-now">当前</span><span class="pm-head">产能利用率处于自身近 10 年偏高区间</span><span class="pm-body">即产能相对需求是紧张的、供给端偏紧。<b>不代表</b>业绩见顶或股价见顶——紧张也可能因为需求旺。但此时扩产冲动最强，要留意在建工程转为未来供给。反过来，若旁边标着「<b>产能在退</b>」，说明周转率高是被动的：产能退出或折旧、营收还在，这个「高位」含金量要打折。</span></li></ul>
+    </div>
+  </section>
+
+  <section>
+    <h2>指标历史<span class="hint">看趋势，不看单点</span></h2>
+    <div class="charts">
+      <div class="chart"><h3>毛利率<span class="sub">最近 20 季单季毛利率</span></h3><svg viewBox="0 0 640 182" role="img" aria-label="毛利率（%）" preserveAspectRatio="none"><line class="gridline" x1="46" y1="142.0" x2="628" y2="142.0"/><text class="tick" x="40" y="145.0" text-anchor="end">-1.3</text><line class="gridline" x1="46" y1="78.0" x2="628" y2="78.0"/><text class="tick" x="40" y="81.0" text-anchor="end">31.2</text><line class="gridline" x1="46" y1="14.0" x2="628" y2="14.0"/><text class="tick" x="40" y="17.0" text-anchor="end">63.7</text><line class="threshold" x1="46" y1="129.6" x2="628" y2="129.6"/><text class="threshold-label" x="628" y="125.6" text-anchor="end">σ 门槛 5pp（示意）</text><path d="M 46.0 90.3 L 76.6 79.4 L 107.3 68.3 L 137.9 74.2 L 168.5 63.5 L 199.2 26.4 L 229.8 56.9 L 260.4 49.9 L 291.1 44.8 L 321.7 54.2 L 352.3 62.4 L 382.9 63.5 L 413.6 56.2 L 444.2 66.6 L 474.8 71.2 L 505.5 57.8 L 536.1 34.7 L 566.7 64.0 L 597.4 49.0 L 628.0 44.1" fill="none" stroke="#2f6152" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><circle cx="628.0" cy="44.1" r="3.5" fill="#2f6152"/><line class="xaxis" x1="46" y1="142.0" x2="628" y2="142.0"/><text class="xtick" x="76.6" y="156.0" text-anchor="middle">22Q1</text><text class="xtick" x="137.9" y="156.0" text-anchor="middle">22Q3</text><text class="xtick" x="199.2" y="156.0" text-anchor="middle">23Q1</text><text class="xtick" x="260.4" y="156.0" text-anchor="middle">23Q3</text><text class="xtick" x="321.7" y="156.0" text-anchor="middle">24Q1</text><text class="xtick" x="382.9" y="156.0" text-anchor="middle">24Q3</text><text class="xtick" x="444.2" y="156.0" text-anchor="middle">25Q1</text><text class="xtick" x="505.5" y="156.0" text-anchor="middle">25Q3</text><text class="xtick" x="566.7" y="156.0" text-anchor="middle">26Q1</text><text class="xtick" x="628.0" y="156.0" text-anchor="end">26Q3</text></svg></div><div class="chart"><h3>弹性比值<span class="sub">最近 8 季逐季比值</span></h3><svg viewBox="0 0 640 182" role="img" aria-label="利润增速÷收入增速" preserveAspectRatio="none"><line class="gridline" x1="46" y1="142.0" x2="628" y2="142.0"/><text class="tick" x="40" y="145.0" text-anchor="end">-28.7</text><line class="gridline" x1="46" y1="78.0" x2="628" y2="78.0"/><text class="tick" x="40" y="81.0" text-anchor="end">-10.6</text><line class="gridline" x1="46" y1="14.0" x2="628" y2="14.0"/><text class="tick" x="40" y="17.0" text-anchor="end">7.5</text><line class="axis" x1="46" y1="40.5" x2="628" y2="40.5"/><line class="threshold" x1="46" y1="33.5" x2="628" y2="33.5"/><text class="threshold-label" x="628" y="29.5" text-anchor="end">门槛 2</text><rect x="61.3" y="40.5" width="42.2" height="89.1" fill="#b3261e" rx="1.5"/><rect x="134.0" y="26.9" width="42.2" height="13.7" fill="#2f6152" rx="1.5"/><rect x="206.8" y="38.8" width="42.2" height="1.8" fill="#2f6152" rx="1.5"/><rect x="279.5" y="26.4" width="42.2" height="14.2" fill="#2f6152" rx="1.5"/><rect x="352.3" y="39.6" width="42.2" height="0.9" fill="#2f6152" rx="1.5"/><rect x="425.0" y="40.2" width="42.2" height="0.8" fill="#2f6152" rx="1.5"/><rect x="497.8" y="40.5" width="42.2" height="1.8" fill="#b3261e" rx="1.5"/><rect x="570.5" y="34.0" width="42.2" height="6.5" fill="#2f6152" rx="1.5"/><line class="xaxis" x1="46" y1="142.0" x2="628" y2="142.0"/><text class="xtick" x="82.4" y="156.0" text-anchor="middle">24Q4</text><text class="xtick" x="155.1" y="156.0" text-anchor="middle">25Q1</text><text class="xtick" x="227.9" y="156.0" text-anchor="middle">25Q2</text><text class="xtick" x="300.6" y="156.0" text-anchor="middle">25Q3</text><text class="xtick" x="373.4" y="156.0" text-anchor="middle">25Q4</text><text class="xtick" x="446.1" y="156.0" text-anchor="middle">26Q1</text><text class="xtick" x="518.9" y="156.0" text-anchor="middle">26Q2</text><text class="xtick" x="591.6" y="156.0" text-anchor="middle">26Q3</text></svg></div><div class="chart"><h3>产能周转率<span class="sub">最近 40 季（营收×4 ÷ 固定资产+在建工程）</span></h3><svg viewBox="0 0 640 182" role="img" aria-label="产能周转率（次/年）" preserveAspectRatio="none"><line class="gridline" x1="46" y1="142.0" x2="628" y2="142.0"/><text class="tick" x="40" y="145.0" text-anchor="end">1.0</text><line class="gridline" x1="46" y1="78.0" x2="628" y2="78.0"/><text class="tick" x="40" y="81.0" text-anchor="end">2.2</text><line class="gridline" x1="46" y1="14.0" x2="628" y2="14.0"/><text class="tick" x="40" y="17.0" text-anchor="end">3.5</text><path d="M 46.0 108.0 L 60.9 103.8 L 75.8 105.4 L 90.8 106.3 L 105.7 107.2 L 120.6 113.2 L 135.5 117.7 L 150.5 123.7 L 165.4 120.7 L 180.3 118.8 L 195.2 117.7 L 210.2 118.9 L 225.1 113.1 L 240.0 114.0 L 254.9 115.4 L 269.8 117.6 L 284.8 126.5 L 299.7 129.6 L 314.6 128.8 L 329.5 126.0 L 344.5 117.9 L 359.4 107.1 L 374.3 101.7 L 389.2 102.4 L 404.2 97.3 L 419.1 92.9 L 434.0 92.4 L 448.9 74.6 L 463.8 72.5 L 478.8 69.9 L 493.7 60.7 L 508.6 59.2 L 523.5 48.1 L 538.5 41.1 L 553.4 39.5 L 568.3 36.0 L 583.2 40.9 L 598.2 34.2 L 613.1 33.3 L 628.0 26.4" fill="none" stroke="#2f6152" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><circle cx="628.0" cy="26.4" r="3.5" fill="#2f6152"/><line class="xaxis" x1="46" y1="142.0" x2="628" y2="142.0"/><text class="xtick" x="46.0" y="156.0" text-anchor="start">16Q4</text><text class="xtick" x="90.8" y="156.0" text-anchor="middle">17Q3</text><text class="xtick" x="135.5" y="156.0" text-anchor="middle">18Q2</text><text class="xtick" x="180.3" y="156.0" text-anchor="middle">19Q1</text><text class="xtick" x="225.1" y="156.0" text-anchor="middle">19Q4</text><text class="xtick" x="269.8" y="156.0" text-anchor="middle">20Q3</text><text class="xtick" x="314.6" y="156.0" text-anchor="middle">21Q2</text><text class="xtick" x="359.4" y="156.0" text-anchor="middle">22Q1</text><text class="xtick" x="404.2" y="156.0" text-anchor="middle">22Q4</text><text class="xtick" x="448.9" y="156.0" text-anchor="middle">23Q3</text><text class="xtick" x="493.7" y="156.0" text-anchor="middle">24Q2</text><text class="xtick" x="538.5" y="156.0" text-anchor="middle">25Q1</text><text class="xtick" x="583.2" y="156.0" text-anchor="middle">25Q4</text><text class="xtick" x="628.0" y="156.0" text-anchor="end">26Q3</text></svg></div>
+    </div>
+  </section>
+
+  <div class="foot">
+    <p><b>口径与边界</b></p>
+    <ol>
+      <li>毛利率标准差为季度口径、5 年窗口（20 季），单位百分点。</li>
+      <li>周期性仅以毛利率波动一项判定，不含行业营收同步性；通过不等于"是周期股"，只是"不是非周期"。</li>
+      <li>产能周转率为固定资产+在建工程口径，金融企业不适用。</li>
+      <li><b>周期位置只看供给端</b>：低位=产能利用率处自身历史偏低区、供给端可能已出清，不代表营收低、也不代表需求回暖；高位反之。分子是营收不是产量，涨价会虚高、跌价会虚低，需人工复核。</li>
+      <li>弹性为纯经营杠杆，不含财务杠杆；杠杆请自行参考资产负债率。</li>
+      <li>所有标签为初步筛选，不构成买卖建议。</li>
+    </ol>
+    <p style="margin-top:14px"><b>数据</b> 腾讯自选股 · 43 个季度（2016-03-31 至 2026-09-30）· 生成于 2026-11-13 18:08</p>
+    
+  </div>
+
+</div>
+</body>
+</html>
