@@ -349,6 +349,7 @@ def test_readonly_and_failure(tmp: Path) -> None:
 
             # ---- 盘中：要联网就拦 ----
             hub.intraday = True
+            hub.now = dt.datetime(2026, 11, 13, 10, 0)  # D1 是"今天"，不是历史
             up.by_day[D1] = scan_payload([stock("sh600519")])
             from stock_data_fetch.errors import MarketOpenError
             with patch(W, "call", up):

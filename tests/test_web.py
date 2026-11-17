@@ -169,6 +169,222 @@ class TestPages(WebCase):
         self.assertIn("宝钢股份", html)
 
 
+class TestPricePage(WebCase):
+    """冷热时点页读 `results.db` 的 price + price_stat，不读 shared.db。
+
+    这里造的是 `stock_price_show` 落库后同形状的数据；页面只读，不写任何东西。
+    """
+
+    def _seed(self, days=("2026-11-13", "2026-11-16"), index=True, closes=None):
+        from stock_price_show import store
+        conn = store.connect(self.db_path)
+        try:
+            store.ensure(conn, "results")
+            for day in days:
+                rows = [
+                    {"date": day, "symbol": "sh600519", "name": "贵州茅台",
+                     "close": (closes or {}).get(day, 1453.9), "pct_chg": 1.30,
+                     "pe_ttm": 22.12,
+                     "pb_mrq": 6.70, "ps_ttm": 10.42,
+                     "total_mv": 1.82e12, "circ_mv": 1.82e12},
+                    {"date": day, "symbol": "sz000001", "name": "亏损银行",
+                     "close": 11.20, "pct_chg": -0.89, "pe_ttm": -5.0,
+                     "pb_mrq": 0.52, "ps_ttm": 1.71,
+                     "total_mv": 2.17e11, "circ_mv": 2.17e11},
+                ]
+                store.write_day(conn, day, rows, with_stat=True, src="test")
+                if index:
+                    store.write_index(conn, day, {
+                        "date": day, "symbol": "sh000300", "name": "沪深300",
+                        "close": 3979.80, "pct_chg": -0.91, "src": "test"})
+        finally:
+            conn.close()
+
+    def test_empty_price_table_degrades_to_hint(self):
+        """没跑过 get-price：页面 200 + 一句先跑什么，不是 500。"""
+        resp = self.client().get("/price")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("还没有全市场行情", resp.get_data(as_text=True))
+
+    def test_reads_results_db_not_shared_db(self):
+        """结果库有价格、共享库故意指向不存在的文件：页面仍要出数据。"""
+        self._seed()
+        self._old_shared = os.environ.get("STOCK_SHARED_DB")
+        os.environ["STOCK_SHARED_DB"] = os.path.join(self.tmp, "nope-shared.db")
+        try:
+            html = self.client(with_data=False).get("/price").get_data(as_text=True)
+        finally:
+            if self._old_shared is None:
+                os.environ.pop("STOCK_SHARED_DB", None)
+            else:
+                os.environ["STOCK_SHARED_DB"] = self._old_shared
+        self.assertIn("贵州茅台", html)
+        self.assertIn("2026-11-16", html)
+        self.assertIn("上涨 / 下跌", html)          # price_stat 的四张卡
+
+    def test_index_card_shows_hs300(self):
+        """第五张卡：沪深300 收盘 + 当日涨跌幅 + 000300.SH。"""
+        self._seed()
+        html = self.client(with_data=False).get("/price").get_data(as_text=True)
+        self.assertIn("沪深300", html)
+        self.assertIn("3,979.80", html)
+        self.assertIn("-0.91%", html)
+        self.assertIn("000300.SH", html)
+
+    def test_index_card_missing_degrades(self):
+        """老库没有 index_price：页面仍 200，第五张卡写「—」，不 500。"""
+        self._seed(index=False)
+        html = self.client(with_data=False).get("/price").get_data(as_text=True)
+        self.assertIn("沪深300", html)
+        self.assertIn("还没有沪深300快照", html)
+
+    def test_search_unique_hit_shows_history(self):
+        self._seed()
+        html = self.client(with_data=False).get("/price?q=600519").get_data(as_text=True)
+        self.assertIn("贵州茅台", html)
+        self.assertIn("共有 2 个时点", html)         # 两个交易日都在 price 里
+
+    @staticmethod
+    def _chart_points(html: str) -> list[dict]:
+        import json
+        import re
+        m = re.search(r'id="price-history-data" type="application/json">(.*?)</script>',
+                      html, re.S)
+        if not m:
+            return []
+        return json.loads(m.group(1))
+
+    def test_history_chart_cumulative_and_range(self):
+        """默认三点归一化：100 → 110 → 121 = +10% → +21%。"""
+        self._seed(days=("2026-11-13", "2026-11-16", "2026-11-17"),
+                   closes={"2026-11-13": 100.0, "2026-11-16": 110.0,
+                           "2026-11-17": 121.0})
+        html = self.client(with_data=False).get("/price?q=600519").get_data(as_text=True)
+        self.assertIn('id="price-history-chart"', html)
+        self.assertIn("累计涨跌幅", html)
+        self.assertIn("+21.00%", html)
+        self.assertIn("累计涨跌", html)              # 表格新增列
+        pts = self._chart_points(html)
+        self.assertEqual([p["date"] for p in pts],
+                         ["2026-11-13", "2026-11-16", "2026-11-17"])
+        self.assertEqual([p["close"] for p in pts], [100.0, 110.0, 121.0])
+        self.assertEqual([p["cum"] for p in pts], [0.0, 10.0, 21.0])
+
+        html = self.client(with_data=False).get(
+            "/price?q=600519&start=2026-11-16&end=2026-11-17").get_data(as_text=True)
+        self.assertIn("+10.00%", html)
+        self.assertIn("当前 2 / 3 个时点", html)
+        self.assertEqual([p["date"] for p in self._chart_points(html)],
+                         ["2026-11-16", "2026-11-17"])
+
+    def test_history_table_is_oldest_first(self):
+        """明细表按时间正序：11-13 在 11-16 上面，和曲线方向一致。"""
+        from web import db as webdb
+        self._seed(days=("2026-11-13", "2026-11-16", "2026-11-17"),
+                   closes={"2026-11-13": 100.0, "2026-11-16": 110.0,
+                           "2026-11-17": 121.0})
+        data = webdb.price_page(q="600519", db=self.db_path)
+        self.assertEqual([r["date"] for r in data["rows"]],
+                         ["2026-11-13", "2026-11-16", "2026-11-17"])
+        self.assertEqual([r["cum"] for r in data["rows"]],
+                         [0.0, 10.0, 21.0])
+
+    def test_history_range_swaps_and_invalid_falls_back(self):
+        self._seed(days=("2026-11-13", "2026-11-16", "2026-11-17"),
+                   closes={"2026-11-13": 100.0, "2026-11-16": 110.0,
+                           "2026-11-17": 121.0})
+        html = self.client(with_data=False).get(
+            "/price?q=600519&start=2026-11-17&end=2026-11-13").get_data(as_text=True)
+        self.assertIn("起止已对调", html)
+        self.assertIn("+21.00%", html)
+
+        html = self.client(with_data=False).get(
+            "/price?q=600519&start=2020-01-01&end=2026-11-17").get_data(as_text=True)
+        self.assertIn("日期不在该股历史，已显示全部", html)
+        self.assertIn("+21.00%", html)
+
+    def test_history_single_point_has_no_chart(self):
+        self._seed(days=("2026-11-16",), closes={"2026-11-16": 100.0})
+        html = self.client(with_data=False).get("/price?q=600519").get_data(as_text=True)
+        self.assertNotIn('id="price-history-chart"', html)
+        self.assertIn("只有 1 个时点", html)
+
+    def test_history_gap_is_null_not_zero(self):
+        """别的票有 11-14、这只停牌：曲线上是 null，不是 0%。"""
+        from stock_price_show import store
+        self._seed(days=("2026-11-13", "2026-11-16"),
+                   closes={"2026-11-13": 100.0, "2026-11-16": 110.0})
+        conn = store.connect(self.db_path)
+        try:
+            store.write_day(conn, "2026-11-14", [{
+                "date": "2026-11-14", "symbol": "sz000001", "name": "亏损银行",
+                "close": 12.0, "pct_chg": 1.0, "pe_ttm": -5.0,
+                "pb_mrq": 0.52, "ps_ttm": 1.71,
+                "total_mv": 2.17e11, "circ_mv": 2.17e11,
+            }], with_stat=True, src="test")
+        finally:
+            conn.close()
+        html = self.client(with_data=False).get("/price?q=600519").get_data(as_text=True)
+        pts = self._chart_points(html)
+        self.assertEqual(len(pts), 3)
+        self.assertEqual(pts[1]["date"], "2026-11-14")
+        self.assertIsNone(pts[1]["close"])
+        self.assertIsNone(pts[1]["cum"])
+
+    def test_eastmoney_quote_links(self):
+        """全市场表每只票都有「打开」→ 东财行情页；北交所路径与沪深不同。"""
+        from web.app import _quote_url
+        self.assertEqual(_quote_url("sh600519"),
+                         "https://quote.eastmoney.com/sh600519.html#fullScreenChart")
+        self.assertEqual(_quote_url("sz002286"),
+                         "https://quote.eastmoney.com/sz002286.html#fullScreenChart")
+        self.assertEqual(_quote_url("bj920992"),
+                         "https://quote.eastmoney.com/bj/920992.html#fullScreenChart")
+        self.assertEqual(_quote_url("bad"), "")
+        self._seed()
+        html = self.client(with_data=False).get("/price").get_data(as_text=True)
+        self.assertIn('href="https://quote.eastmoney.com/sh600519.html#fullScreenChart"',
+                      html)
+        self.assertIn('target="_blank"', html)
+        self.assertIn("打开 ↗", html)
+
+    def test_all_summary_tables_have_eastmoney_links(self):
+        """周期 / 质量 / 顶部 / 综合评估 四张汇总表都要有「打开 ↗」。"""
+        client = self.client()
+        for url in ("/cycle", "/quality", "/top", "/review"):
+            with self.subTest(url=url):
+                html = client.get(url).get_data(as_text=True)
+                self.assertIn(
+                    'href="https://quote.eastmoney.com/sh600019.html#fullScreenChart"',
+                    html)
+                self.assertIn("打开 ↗", html)
+
+    def test_summary_tables_scroll_and_jump_by_name(self):
+        """四张长表都要有固定高度的滚动框和按名称定位的下拉。"""
+        client = self.client()
+        cases = (("/cycle", "cycle-table"), ("/quality", "quality-table"),
+                 ("/top", "top-table"), ("/review", "review-all-table"))
+        for url, target in cases:
+            with self.subTest(url=url):
+                html = client.get(url).get_data(as_text=True)
+                self.assertIn(f'id="{target}"', html)
+                self.assertIn(f'data-stock-jump="{target}"', html)
+                self.assertIn('class="scroll stock-scroll"', html)
+                self.assertIn("stock-jump.js", html)
+                self.assertIn('data-symbol="sh600019"', html)
+                self.assertIn('<option value="sh600019">', html)
+
+    def test_pe_sort_keeps_losses_last(self):
+        """PE 升序时负值（亏损）排最后，不能冒充"最便宜"。"""
+        self._seed()
+        html = self.client(with_data=False).get(
+            "/price?sort=pe&order=asc").get_data(as_text=True)
+        self.assertLess(html.index("贵州茅台"), html.index("亏损银行"))
+
+    def test_nav_has_price_entry(self):
+        self.assertIn("冷热时点", self.client().get("/review").get_data(as_text=True))
+
+
 class TestBatches(WebCase):
     """批次与单只要分清：这是看板最容易出错的一处。
 
@@ -182,6 +398,39 @@ class TestBatches(WebCase):
         html = client.get("/batches").get_data(as_text=True)
         self.assertIn("2026-11-13", html)
         self.assertIn("2026-11-06", html)
+
+    def test_missing_cell_shows_reason_and_command(self):
+        """缺工具时不是只写「未跑」：给原因，并给可展开的补跑命令。"""
+        client = self.client(with_data=False)
+        results_db.save("select", [{"symbol": "sh600019", "name": "宝钢股份"}],
+                        "2026-11-13", argv="test", db=self.db_path)
+        html = client.get("/batches").get_data(as_text=True)
+        self.assertIn('class="miss-code">未跑</code>', html)
+        self.assertIn("还没有批量周期弹性记录，可直接补跑", html)
+        self.assertIn("点击查看补跑命令", html)
+        self.assertIn("./run.py cycle --date 2026-11-13", html)
+
+    def test_missing_top_says_select_is_the_blocker(self):
+        """没选股名单时，顶部不能直接 --from-select；要先把选股命令一起给出。"""
+        client = self.client(with_data=False)
+        results_db.save("quality", [{"symbol": "sz000001", "name": "平安银行"}],
+                        "2026-11-16", argv="test", db=self.db_path)
+        html = client.get("/batches").get_data(as_text=True)
+        self.assertIn("缺少 2026-11-16 的选股名单", html)
+        self.assertIn("顶部判断不能直接批量补跑", html)
+        self.assertIn("./run.py select --date 2026-11-16", html)
+        self.assertIn("./run.py top --from-select --date 2026-11-16", html)
+
+    def test_sunday_batch_explains_why_it_cannot_run(self):
+        """2026-11-15 是周日：选股/顶部都要说明不能补跑，不能给假命令。"""
+        client = self.client(with_data=False)
+        results_db.save("quality", [{"symbol": "sz000001", "name": "平安银行"}],
+                        "2026-11-15", argv="test", db=self.db_path)
+        html = client.get("/batches").get_data(as_text=True)
+        self.assertIn("2026-11-15 是周日", html)
+        self.assertIn("不能补跑选股", html)
+        self.assertIn("不能补跑顶部判断", html)
+        self.assertNotIn("./run.py select --date 2026-11-15", html)
 
     def test_single_run_does_not_join_batch(self):
         """单只跑（kind=single）不进批次统计，也不覆盖批量那一次。"""
@@ -535,7 +784,7 @@ class TestReviewPage(WebCase):
 
 
 class TestNavAndLinks(WebCase):
-    """导航只有 6 项，且都指向真页面；名称的链接行为按页区分（2026-11-15 反馈）。"""
+    """导航只有 7 项，且都指向真页面；名称的链接行为按页区分（2026-11-15 反馈）。"""
 
     def nav_labels(self, html):
         import re
@@ -545,7 +794,8 @@ class TestNavAndLinks(WebCase):
     def test_nav_order_and_removed_pages(self):
         html = self.client().get("/review").get_data(as_text=True)
         self.assertEqual(self.nav_labels(html),
-                         ["批次", "选股", "周期", "质量", "顶部", "综合评估"])
+                         ["批次", "选股", "周期", "质量", "顶部", "综合评估",
+                          "冷热时点"])
         self.assertNotIn("运行记录", html)
 
     def test_select_names_are_not_links(self):
@@ -553,6 +803,19 @@ class TestNavAndLinks(WebCase):
         html = self.client().get("/select").get_data(as_text=True)
         self.assertNotIn("/stock/sh600019", html)
         self.assertIn("宝钢股份", html)
+        # 长表在固定框里滚；图表联动靠行上的 data-*。
+        self.assertIn('class="stock-scroll select-scroll"', html)
+        self.assertIn('id="select-table"', html)
+        self.assertIn('id="select-filter-clear"', html)
+        self.assertIn('id="select-empty"', html)
+        self.assertIn('id="mcap"', html)
+        self.assertIn('data-industry="钢铁"', html)
+        self.assertIn('data-x="1.6"', html)
+        self.assertIn('data-y="0.4"', html)
+        self.assertIn("data-mcap=", html)
+        self.assertIn("pointerdown", html)
+        # 与周期/质量/顶部页一致：代码旁给东财行情页。
+        self.assertIn('href="https://quote.eastmoney.com/sh600019.html#fullScreenChart"', html)
 
     def test_tool_pages_link_into_their_own_section(self):
         """周期/质量/顶部点名称都要带 focus，否则落地页永远先显示四因子。"""
@@ -746,9 +1009,21 @@ class TestStockReports(WebCase):
 class TestReadOnly(WebCase):
     def test_queries_do_not_write(self):
         """看板只读：打开几个页面后，库文件的 mtime 与大小都不变。"""
-        client = self.client()
+        from stock_price_show import store
+        client = self.client()                    # 先落四个工具的演示数据
+        conn = store.connect(self.db_path)
+        try:
+            store.ensure(conn, "results")
+            store.write_day(conn, "2026-11-13", [
+                {"date": "2026-11-13", "symbol": "sh600519", "name": "贵州茅台",
+                 "close": 1453.9, "pct_chg": 1.30, "pe_ttm": 22.12,
+                 "pb_mrq": 6.70, "ps_ttm": 10.42,
+                 "total_mv": 1.82e12, "circ_mv": 1.82e12}], with_stat=True)
+        finally:
+            conn.close()
         before = Path(self.db_path).stat()
-        for url in ("/review", "/top", "/stock/sh600019", "/stock/sh600019?focus=cycle"):
+        for url in ("/review", "/top", "/price", "/price?q=600519",
+                    "/stock/sh600019", "/stock/sh600019?focus=cycle"):
             client.get(url)
         after = Path(self.db_path).stat()
         self.assertEqual(before.st_size, after.st_size)

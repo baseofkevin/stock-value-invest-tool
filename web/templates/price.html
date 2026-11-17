@@ -1,0 +1,330 @@
+{% extends "base.html" %}
+{% block title %}冷热时点{% endblock %}
+{% block body %}
+
+{# 这一页读的是 **results.db**（`price` 一天一份、`price_stat` 一天一行），
+   与四个工具共用一个库：`stock_price_show` 抓完后会把价格镜像过来，看板
+   只读结果层，上游怎么变都不影响已经存下来的时点。
+
+   两种浏览方式共用同一个页面：
+   * **不搜索** → 某个时点的全市场表，表体在框内滚动（5500+ 行整页吐出去浏览器会卡）；
+   * **搜索**   → 唯一命中摊开这只票的区间曲线 + 全部时点；多命中先给清单。
+   形态由 `db.price_page()` 决定（`shape`），模板只管按 shape 摆块。 #}
+
+<section class="hero">
+  <div class="eyebrow">results.db · price</div>
+  <h1>冷热时点</h1>
+  <p>每个交易日一份全市场收盘价与估值。默认<b style="color:#fff">按涨跌幅降序</b>——最热的排在最上面，一路往下翻就是最冷的。</p>
+</section>
+
+{% if shape == 'empty' %}
+
+<div class="empty">
+  结果库里还没有全市场行情：先跑
+  <code>./run.py get-price --date &lt;交易日&gt;</code>（该日收盘后才有数据）。
+</div>
+
+{% else %}
+
+{# ---------------------------------------------------------------- 时点下拉 #}
+{# 不复用 `_bar.html`：那个下拉的选项是"哪天跑过工具"，这里是"哪天有全市场价格"，
+   两个时间轴天然不同步（行情每个交易日都有，工具一周才跑一批）。 #}
+<form class="picker" method="get">
+  <span class="pick-label">时点</span>
+  <select name="date" onchange="this.form.submit()">
+    {% for d in dates %}
+    <option value="{{ d.date }}" {{ 'selected' if d.date == cur_date }}>
+      {{ d.date }}（{{ d.date|weekday }}）· {{ d.n if d.n is not none else '—' }} 只{{ ' · 最新' if loop.first }}
+    </option>
+    {% endfor %}
+  </select>
+  <noscript><button type="submit">切换</button></noscript>
+  {# 换时点时保留排序偏好；搜索词不带过去（换一天基本就是"重新看全市场"） #}
+  <input type="hidden" name="sort" value="{{ sort }}">
+  <input type="hidden" name="order" value="{{ order }}">
+  {% if cur %}
+  <span class="pick-meta">
+    <span class="chip info">{{ cur_date|weekday }}</span>
+    {% if cur.n %}共 {{ cur.n }} 只{% endif %}
+    {% if cur.updated_at %}
+    · 更新 {{ cur.updated_at|clock }}
+    {% else %}
+    · 摘要未生成（跑 <code>get-price --restat</code> 补，不联网）
+    {% endif %}
+  </span>
+  {% endif %}
+  {% if cur_date != dates[0].date %}
+  <a class="pick-latest" href="{{ url_for('price_page') }}">回到最新时点</a>
+  {% endif %}
+</form>
+
+{# ---------------------------------------------------------------- 搜索 #}
+<form class="picker" method="get">
+  <span class="pick-label">搜索</span>
+  <input type="search" name="q" value="{{ q }}"
+         placeholder="股票代码或名称，如 600519 / 茅台" autocomplete="off">
+  <button type="submit">查</button>
+  {% if q %}
+  <span class="pick-meta">当前搜索「{{ q }}」</span>
+  <a class="pick-latest" href="{{ url_for('price_page', date=cur_date) }}">清除搜索</a>
+  {% else %}
+  <span class="pick-meta">查某只票在 <code>price</code> 表里的全部时点</span>
+  {% endif %}
+</form>
+
+{# ---------------------------------------------------------------- 五张汇总卡 #}
+{# 四张全市场卡来自 `price_stat`（一天一行，落库时和 `price` 同事务写）；
+   沪深300 是 `index_price` 单独一行——指数没有 PE/PB/PS，不能混进 `price`。
+   为什么落库不现算：这些数字是"那个时点的结论"，事后拿新算法重算会让
+   历史时点的摘要跟着变，翻旧图就对不上当时看到的东西了。 #}
+{% if stat %}
+<div class="cards cards-5">
+  <div class="card">
+    <div class="k">上涨 / 下跌</div>
+    <div class="v"><span class="price-up">{{ stat.n_up }}</span> / <span class="price-down">{{ stat.n_down }}</span></div>
+    <div class="s">平盘 {{ stat.n_flat }} · 共 {{ stat.n }} 只</div>
+  </div>
+  <div class="card">
+    <div class="k">涨停 / 跌停</div>
+    <div class="v"><span class="price-up">{{ stat.n_limit_up }}</span> / <span class="price-down">{{ stat.n_limit_down }}</span></div>
+    <div class="s">主板 9.8% · 创业科创 19.8% · 北交所 29.8% · ST 4.8%</div>
+  </div>
+  <div class="card">
+    <div class="k">PE(TTM) 中位数</div>
+    <div class="v">{{ stat.pe_median|num(2) }}</div>
+    <div class="s">有效 {{ stat.n_pe }} 只（亏损与缺失不计）</div>
+  </div>
+  <div class="card">
+    <div class="k">PB / PS 中位数</div>
+    <div class="v">{{ stat.pb_median|num(2) }} / {{ stat.ps_median|num(2) }}</div>
+    <div class="s">有效 {{ stat.n_pb }} / {{ stat.n_ps }} 只 · 总市值 {{ stat.mv_sum|yi }} 亿</div>
+  </div>
+  <div class="card">
+    <div class="k">沪深300</div>
+    {% if index %}
+    <div class="v">
+      {{ index.close|num(2) }}
+      <span class="{% if (index.pct_chg or 0) > 0 %}price-up{% elif (index.pct_chg or 0) < 0 %}price-down{% endif %}"
+            style="font-size:13px">{{ index.pct_chg|spct }}</span>
+    </div>
+    <div class="s">{{ index.name or '沪深300' }} · {{ index.symbol[2:] }}.{{ index.symbol[:2]|upper }} · {{ cur_date }}</div>
+    {% else %}
+    <div class="v">—</div>
+    <div class="s">这一天还没有沪深300快照（重跑 get-price 补）</div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{# ---------------------------------------------------------------- 三种形态 #}
+
+{% if shape == 'no_match' %}
+
+<div class="empty">
+  「{{ q }}」在 <code>price</code> 表里没有匹配的代码或名称。换个关键词试试，
+  或者这一天还没跑过 <code>get-price</code>。
+</div>
+
+{% elif shape == 'pick' %}
+
+<section class="panel">
+  <h2>「{{ q }}」命中 {{ matches|length }} 只</h2>
+  <p class="sub">点一只看它在 <code>price</code> 表里的全部时点；输入得越准，候选越少。</p>
+  <div class="scroll">
+    <table class="grid">
+      <thead><tr>
+        <th>代码</th><th>名称</th>
+        <th class="n">最近时点</th><th class="n">最近收盘</th><th class="n">最近涨跌幅</th>
+        <th class="n">有数据的时点</th>
+      </tr></thead>
+      <tbody>
+        {% for m in matches %}
+        <tr>
+          <td class="code">{{ m.symbol }}</td>
+          <td class="name"><a href="{{ url_for('price_page', q=m.symbol) }}">{{ m.name or '—' }}</a></td>
+          <td class="n date">{{ m.last_date }}</td>
+          <td class="n">{{ m.last_close|num(2) }}</td>
+          <td class="n {{ 'price-up' if (m.last_pct or 0) > 0 else ('price-down' if (m.last_pct or 0) < 0 else '') }}">{{ m.last_pct|spct }}</td>
+          <td class="n">{{ m.n_dates }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% elif shape == 'history' %}
+
+<section class="panel">
+  <h2>{{ hist_name or hist_symbol }} <span class="tag">{{ hist_symbol }}</span></h2>
+  <p class="sub">
+    <code>price</code> 表里共有 {{ hist_all_total }} 个时点；默认画出全部，
+    也可以截一段看。曲线是<b>未复权收盘价</b>，点上的百分比是相对起点的累计涨跌幅——
+    跨除权日会失真，长区间请先记住这个口径。表格按时间从早到晚排。
+    点表格里的日期可以跳到那天的全市场表。
+  </p>
+
+  {# 起止日期只列这只票真实有数据的时点；选一个它没有的日期只会得到空白。 #}
+  <form class="picker" method="get">
+    <input type="hidden" name="q" value="{{ hist_symbol }}">
+    <span class="pick-label">区间</span>
+    <select name="start">
+      {% for d in hist_dates %}
+      <option value="{{ d }}" {{ 'selected' if d == range_start }}>{{ d }}（{{ d|weekday }}）</option>
+      {% endfor %}
+    </select>
+    <span class="pick-arrow">→</span>
+    <select name="end">
+      {% for d in hist_dates %}
+      <option value="{{ d }}" {{ 'selected' if d == range_end }}>{{ d }}（{{ d|weekday }}）</option>
+      {% endfor %}
+    </select>
+    <button type="submit">查看</button>
+    <a class="pick-latest" href="{{ url_for('price_page', q=hist_symbol) }}">全部</a>
+    {% if hist_swapped %}<span class="chip warn">起止已对调</span>{% endif %}
+    {% if hist_reset %}<span class="chip warn">日期不在该股历史，已显示全部</span>{% endif %}
+    <span class="pick-meta">当前 {{ hist_count }} / {{ hist_all_total }} 个时点</span>
+  </form>
+
+  {% if hist_count %}
+  <div class="cards">
+    <div class="card">
+      <div class="k">起点 · {{ hist_start }}</div>
+      <div class="v">{{ hist_base_close|num(2) }}</div>
+      <div class="s">区间第一个时点</div>
+    </div>
+    <div class="card">
+      <div class="k">终点 · {{ hist_end }}</div>
+      <div class="v">{{ hist_last_close|num(2) }}</div>
+      <div class="s">区间最后一个时点</div>
+    </div>
+    <div class="card">
+      <div class="k">区间涨跌幅</div>
+      <div class="v {{ 'price-up' if (hist_ret or 0) > 0 else ('price-down' if (hist_ret or 0) < 0 else '') }}">{{ hist_ret|spct }}</div>
+      <div class="s">{{ hist_count }} 个时点 · 未复权收盘价</div>
+    </div>
+    <div class="card">
+      <div class="k">时点数</div>
+      <div class="v">{{ hist_count }} <span style="font-size:13px;color:var(--muted)">/ {{ hist_all_total }}</span></div>
+      <div class="s">当前区间 / 全部历史</div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if hist_count > 1 %}
+  <div class="chart-box tall hist-chart">
+    <h3>收盘价走势</h3>
+    <p class="sub" id="hist-chart-sub">未复权收盘价；点上的百分比为相对起点的累计涨跌幅，停牌缺口断开。</p>
+    <div class="canvas-wrap"><canvas id="price-history-chart"></canvas></div>
+  </div>
+  <script id="price-history-data" type="application/json">{{ hist_series|tojson }}</script>
+  {% elif hist_count == 1 %}
+  <div class="empty">
+    这只票在当前区间里只有 1 个时点，还画不出曲线。换一个更早/更晚的时点，
+    或者继续跑 <code>get-price</code> 攒数据。
+  </div>
+  {% endif %}
+
+  <div class="table-scroll">
+    <table class="grid">
+      <thead><tr>
+        <th>时点</th><th class="n">收盘</th><th class="n">当日涨跌</th>
+        <th class="n">累计涨跌</th>
+        <th class="n">PE</th><th class="n">PB</th><th class="n">PS</th>
+        <th class="n">总市值(亿)</th><th class="n">流通市值(亿)</th>
+      </tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td class="date"><a href="{{ url_for('price_page', date=r.date) }}">{{ r.date }}（{{ r.date|weekday }}）</a></td>
+          <td class="n">{{ r.close|num(2) }}</td>
+          <td class="n {{ 'price-up' if (r.pct_chg or 0) > 0 else ('price-down' if (r.pct_chg or 0) < 0 else '') }}">{{ r.pct_chg|spct }}</td>
+          <td class="n {{ 'price-up' if (r.cum or 0) > 0 else ('price-down' if (r.cum or 0) < 0 else '') }}">{{ r.cum|spct }}</td>
+          <td class="n">{{ r.pe_ttm|pe }}</td>
+          <td class="n">{{ r.pb_mrq|pos }}</td>
+          <td class="n">{{ r.ps_ttm|pos }}</td>
+          <td class="n">{{ r.total_mv|yi }}</td>
+          <td class="n">{{ r.circ_mv|yi }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% else %}
+
+{# ------------------------------------------------------------ market（默认）#}
+{% set order_label = '升序' if order == 'asc' else '降序' %}
+<div class="tabs">
+  {% for key, meta in sorts.items() %}
+  {# 点当前列 = 反向；点别的列 = 按那列降序（"最热/最贵"先看到） #}
+  {% set next_order = ('asc' if order == 'desc' else 'desc') if key == sort else 'desc' %}
+  <a class="tab {{ 'on' if key == sort }}"
+     href="{{ url_for('price_page', date=cur_date, sort=key, order=next_order) }}">{{ meta[1] }}</a>
+  {% endfor %}
+  <span class="tab-meta">
+    按 <b>{{ sorts[sort][1] }}</b> {{ order_label }} · 再点一次当前列切换
+  </span>
+</div>
+
+<section class="panel">
+  <h2>{{ cur_date }}（{{ cur_date|weekday }}）全市场 {{ total }} 只</h2>
+  <p class="sub">
+    表头固定在框顶，表体在框里滚动；点名称看这只票的全部时点，
+    点「打开」去东方财富看它的行情页（新标签页）。
+    PE 写「亏损」表示净利润为负（负 PE 的比值没有意义，排序时也排到最后）；
+    PB/PS 空白表示负值或当期无数据——<b>一律不填 0</b>。
+  </p>
+  <div class="table-scroll">
+    <table class="grid">
+      <thead><tr>
+        <th class="n">#</th><th>代码</th><th>名称</th><th>东财</th>
+        <th class="n">收盘</th><th class="n">涨跌幅</th>
+        <th class="n">PE</th><th class="n">PB</th><th class="n">PS</th>
+        <th class="n">总市值(亿)</th><th class="n">流通市值(亿)</th>
+      </tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td class="n idx">{{ loop.index }}</td>
+          <td class="code">{{ r.symbol }}</td>
+          <td class="name"><a href="{{ url_for('price_page', date=cur_date, q=r.symbol) }}">{{ r.name or '—' }}</a></td>
+          <td>{% if r.symbol|quoteurl %}<a class="quote-link" href="{{ r.symbol|quoteurl }}" target="_blank" rel="noopener noreferrer" title="在东方财富打开 {{ r.name or r.symbol }} 的行情页">打开 ↗</a>{% else %}—{% endif %}</td>
+          <td class="n">{{ r.close|num(2) }}</td>
+          <td class="n {{ 'price-up' if (r.pct_chg or 0) > 0 else ('price-down' if (r.pct_chg or 0) < 0 else '') }}">{{ r.pct_chg|spct }}</td>
+          <td class="n">{{ r.pe_ttm|pe }}</td>
+          <td class="n">{{ r.pb_mrq|pos }}</td>
+          <td class="n">{{ r.ps_ttm|pos }}</td>
+          <td class="n">{{ r.total_mv|yi }}</td>
+          <td class="n">{{ r.circ_mv|yi }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if total > rows|length %}
+  <p class="sub" style="margin:10px 0 0">
+    只渲染了前 {{ rows|length }} 行（上限），库中这一天共 {{ total }} 行。
+  </p>
+  {% endif %}
+</section>
+
+{% endif %}
+
+{% endif %}
+
+{% endblock %}
+
+{% block foot %}
+<div class="foot">
+  <strong>本网页主要用来存储并展示全市场最热、最冷时间段的股票信息</strong><br>
+  数据来自结果库 <code>results.db</code> 的两张表：<code>price</code>（每交易日一份全市场
+  收盘价 + PE/PB/PS，由 <code>shared.db</code> 镜像而来）与 <code>price_stat</code>
+  （同一份数据算出来的每日摘要，落库时与 <code>price</code> 同事务写入）。页面只读，刷新即最新。
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='price-history.js') }}" defer></script>
+{% endblock %}

@@ -44,7 +44,18 @@
               <small>{{ run.started_at|clock }}{% if run.n_fail %} · 失败 {{ run.n_fail }}{% endif %}</small>
             </a>
             {% else %}
-            <span class="miss">未跑</span>
+            {% set info = b.miss[t] %}
+            <div class="miss">
+              <code class="miss-code">未跑</code>
+              <span class="miss-why">{{ info.reason }}</span>
+              {% if info.commands %}
+              <details class="miss-cmds">
+                <summary>点击查看补跑命令</summary>
+                <pre><code>{% for c in info.commands %}{{ c }}{% if not loop.last %}
+{% endif %}{% endfor %}</code></pre>
+              </details>
+              {% endif %}
+            </div>
             {% endif %}
           </td>
           {% endfor %}

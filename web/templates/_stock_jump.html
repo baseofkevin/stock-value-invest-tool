@@ -1,0 +1,15 @@
+{% macro stock_jump(rows, target, label='定位股票') -%}
+{# 长表专用：下拉里按表格当前顺序列出「名称（代码）」，选中后由
+   `stock-jump.js` 把对应滚动容器滚到那一行。不用服务端算偏移：
+   表格可能被浏览器缩放/换行改变行高，滚动时现算最稳。 #}
+<div class="stock-jump">
+  <label for="jump-{{ target }}">{{ label }}</label>
+  <select id="jump-{{ target }}" data-stock-jump="{{ target }}">
+    <option value="">按名称跳转…</option>
+    {% for r in rows|sort(attribute='name') %}
+    <option value="{{ r.symbol }}">{{ r.name or r.symbol }}（{{ r.symbol }}）</option>
+    {% endfor %}
+  </select>
+  <span class="stock-jump-hint">按名称排序，选中即定位</span>
+</div>
+{%- endmacro %}

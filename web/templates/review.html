@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_stock_jump.html" import stock_jump %}
 {% block title %}综合评估{% endblock %}
 {% block body %}
 
@@ -35,20 +36,22 @@
     买卖还是自己判断。
   </p>
   {% if review.buy %}
-  <div class="scroll">
+  {{ stock_jump(review.buy, "review-buy-table") }}
+  <div class="scroll stock-scroll" id="review-buy-table">
     <table class="grid">
       <thead><tr>
-        <th class="n">#</th><th>代码</th><th>名称</th>
+        <th class="n">#</th><th>代码</th><th>名称</th><th>东财</th>
         <th class="n">赔率分</th><th class="n">市值</th>
         <th class="n">Q</th><th class="n">V</th><th class="n">估值分位</th>
         <th>周期</th><th>弹性</th><th>垄断</th><th>为什么值得看</th>
       </tr></thead>
       <tbody>
         {% for r in review.buy %}
-        <tr>
+        <tr data-symbol="{{ r.symbol }}">
           <td class="n">{{ r.rank }}</td>
           <td class="code">{{ r.symbol }}</td>
           <td class="name"><a href="/stock/{{ r.symbol }}">{{ r.name or '—' }}</a></td>
+          <td>{% if r.symbol|quoteurl %}<a class="quote-link" href="{{ r.symbol|quoteurl }}" target="_blank" rel="noopener noreferrer" title="在东方财富打开 {{ r.name or r.symbol }} 的行情页">打开 ↗</a>{% else %}—{% endif %}</td>
           <td class="n" title="{{ r.score_text }}"><b>{{ r.score }}</b><span
               class="muted" style="font-size:11px">/{{ review.score_max }}</span></td>
           <td class="n">{{ r.mcap|num(0) if r.mcap is not none else '—' }}</td>
@@ -97,20 +100,22 @@
     都能在个股页找到原始结论。想更宽松就把 <code>web/review.py</code> 的
     <code>BUY_CUT</code> 调小，更严格就调大。
   </p>
-  <div class="scroll">
+  {{ stock_jump(review.rows, "review-all-table") }}
+  <div class="scroll stock-scroll" id="review-all-table">
     <table class="grid">
       <thead><tr>
-        <th class="n">#</th><th>代码</th><th>名称</th><th>评级</th>
+        <th class="n">#</th><th>代码</th><th>名称</th><th>东财</th><th>评级</th>
         <th class="n">赔率分</th><th class="n">市值</th>
         <th class="n">Q</th><th class="n">V</th><th class="n">估值分位</th>
         <th>周期</th><th>弹性</th><th>垄断</th><th>提示</th>
       </tr></thead>
       <tbody>
         {% for r in review.rows %}
-        <tr class="{{ 'dim' if r.tier in ('out', 'nodata') }}">
+        <tr class="{{ 'dim' if r.tier in ('out', 'nodata') }}" data-symbol="{{ r.symbol }}">
           <td class="n">{{ r.rank }}</td>
           <td class="code">{{ r.symbol }}</td>
           <td class="name"><a href="/stock/{{ r.symbol }}">{{ r.name or '—' }}</a></td>
+          <td>{% if r.symbol|quoteurl %}<a class="quote-link" href="{{ r.symbol|quoteurl }}" target="_blank" rel="noopener noreferrer" title="在东方财富打开 {{ r.name or r.symbol }} 的行情页">打开 ↗</a>{% else %}—{% endif %}</td>
           <td><span class="chip {{ r.tier_tone }}">{{ r.tier_label }}</span></td>
           <td class="n" title="{{ r.score_text }}"><b>{{ r.score }}</b></td>
           <td class="n">{{ r.mcap|num(0) if r.mcap is not none else '—' }}</td>

@@ -15,7 +15,8 @@
 <div class="charts">
   <div class="chart-box tall">
     <h3>换手分位 × 20 日换手</h3>
-    <p class="sub">横轴是这只票在全池里的换手分位（0 = 最冷），越靠左上说明本来就冷、成交也少。</p>
+    <p class="sub">横轴是这只票在全池里的换手分位（0 = 最冷），越靠左上说明本来就冷、成交也少。
+      按住鼠标在图上拖出矩形，可筛选下方名单。</p>
     <div class="canvas-wrap"><canvas id="scatter"></canvas></div>
   </div>
   <div class="chart-box tall">
@@ -23,15 +24,25 @@
     <p class="sub">入选名单的行业集中度；单一行业过多时，名单更容易被板块行情带偏。</p>
     <div class="canvas-wrap scroll-y"><div class="canvas-inner"><canvas id="industry"></canvas></div></div>
   </div>
+  <div class="chart-box wide">
+    <h3>股票市值分布</h3>
+    <p class="sub">按总市值（亿元）分档；点击任意柱子，只看该市值区间的股票。</p>
+    <div class="canvas-wrap mcap-wrap"><canvas id="mcap"></canvas></div>
+  </div>
 </div>
 
 <section class="panel">
-  <h2>名单（{{ rows|length }} 只，池内 {{ rows[0].pool_size or '—' }} 只）</h2>
-  <p class="sub">星级 = 池内换手分位的档位；毛利率改善来自财务域，不参与筛选。</p>
-  <div class="scroll">
-    <table class="grid">
+  <h2>名单（<span id="select-count">{{ rows|length }} 只</span>，池内 {{ rows[0].pool_size or '—' }} 只）</h2>
+  <p class="sub">星级 = 池内换手分位的档位；毛利率改善来自财务域，不参与筛选。
+    图表上框选散点，或点击行业横条、市值柱子，可只看对应的股票。</p>
+  <div class="select-filter" id="select-filter" hidden>
+    <span id="select-filter-text"></span>
+    <button type="button" id="select-filter-clear">显示全部</button>
+  </div>
+  <div class="stock-scroll select-scroll">
+    <table class="grid" id="select-table">
       <thead><tr>
-        <th>代码</th><th>名称</th><th>行业</th>
+        <th>代码</th><th>名称</th><th>东财</th><th>行业</th>
         <th class="n">换手分位</th><th class="n">星级</th>
         <th class="n">20日换手%</th><th class="n">启动日</th>
         <th class="n">距启动</th><th class="n">量能倍数</th>
@@ -40,9 +51,15 @@
       </tr></thead>
       <tbody>
         {% for r in rows %}
-        <tr>
+        <tr class="stock-row"
+            data-symbol="{{ r.symbol }}"
+            data-industry="{{ r.industry or '未分类' }}"
+            data-x="{{ r.pool_turnover_rank if r.pool_turnover_rank is not none else '' }}"
+            data-y="{{ r.turnover20 if r.turnover20 is not none else '' }}"
+            data-mcap="{{ r.market_cap_yi if r.market_cap_yi is not none else '' }}">
           <td class="code">{{ r.symbol }}</td>
           <td class="name">{{ r.name or '—' }}</td>
+          <td>{% if r.symbol|quoteurl %}<a class="quote-link" href="{{ r.symbol|quoteurl }}" target="_blank" rel="noopener noreferrer" title="在东方财富打开 {{ r.name or r.symbol }} 的行情页">打开 ↗</a>{% else %}—{% endif %}</td>
           <td>{{ r.industry or '—' }}</td>
           <td class="n">{{ r.pool_turnover_rank|num(1) }}</td>
           <td class="n">{{ r.stars or '—' }}</td>
@@ -58,6 +75,9 @@
           <td>{{ r.gross_margin_up or '—' }}</td>
         </tr>
         {% endfor %}
+        <tr id="select-empty" hidden><td colspan="16" class="select-empty">
+          没有匹配的股票，换个区域或点「显示全部」。
+        </td></tr>
       </tbody>
     </table>
   </div>
@@ -72,56 +92,330 @@
 {% block scripts %}
 {% if rows %}
 <script>
-const rows = {{ rows|map(attribute='symbol')|list|tojson }};
-const pts = {{ rows|map(attribute='pool_turnover_rank')|list|tojson }};
-const turn = {{ rows|map(attribute='turnover20')|list|tojson }};
+const codes = {{ rows|map(attribute='symbol')|list|tojson }};
+const rawX = {{ rows|map(attribute='pool_turnover_rank')|list|tojson }};
+const rawY = {{ rows|map(attribute='turnover20')|list|tojson }};
 const names = {{ rows|map(attribute='name')|list|tojson }};
-const industry = {{ rows|map(attribute='industry')|list|tojson }};
+const inds = {{ rows|map(attribute='industry')|list|tojson }};
+const points = rawX.map((x, i) => ({
+  x, y: rawY[i], name: names[i], code: codes[i], industry: inds[i] || '未分类',
+})).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
 
-new Chart(document.getElementById('scatter'), {
+const tableRows = Array.from(document.querySelectorAll('#select-table tbody tr.stock-row'));
+const total = tableRows.length;
+const countEl = document.getElementById('select-count');
+const filterBar = document.getElementById('select-filter');
+const filterText = document.getElementById('select-filter-text');
+const emptyRow = document.getElementById('select-empty');
+const scrollBox = document.querySelector('.select-scroll');
+
+let activeIndustry = null;
+let activeMcap = null;
+let brushRect = null;
+let brushDrag = null;
+
+function rowNum(tr, key) {
+  const raw = tr.dataset[key];
+  if (raw === undefined || raw === '') return NaN;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function showFilter(text) {
+  filterText.textContent = text;
+  filterBar.hidden = false;
+}
+
+function filterRows(predicate) {
+  let n = 0;
+  for (const tr of tableRows) {
+    const hit = predicate(tr);
+    tr.hidden = !hit;
+    if (hit) n += 1;
+  }
+  emptyRow.hidden = n > 0;
+  countEl.textContent = n + ' 只';
+  if (scrollBox) scrollBox.scrollTop = 0;
+  return n;
+}
+
+function setScatterHighlight(predicate) {
+  const ds = scatter.data.datasets[0];
+  if (predicate) {
+    ds.pointBackgroundColor = points.map(p => predicate(p) ? '#c2410c' : 'rgba(15,118,110,.22)');
+    ds.pointBorderColor = points.map(p => predicate(p) ? '#9a3412' : 'rgba(15,118,110,.35)');
+    ds.pointRadius = points.map(p => predicate(p) ? 6 : 4);
+  } else {
+    ds.pointBackgroundColor = 'rgba(15,118,110,.65)';
+    ds.pointBorderColor = '#0f766e';
+    ds.pointRadius = 5;
+  }
+  scatter.update('none');
+}
+
+function paintIndustry() {
+  industryChart.data.datasets[0].backgroundColor = labels.map(
+    l => l === activeIndustry ? 'rgba(194,65,12,.85)' : 'rgba(29,78,216,.55)');
+  industryChart.update('none');
+}
+
+function paintMcap() {
+  mcapChart.data.datasets[0].backgroundColor = mcapLabels.map(
+    l => l === activeMcap ? 'rgba(194,65,12,.85)' : 'rgba(15,118,110,.55)');
+  mcapChart.update('none');
+}
+
+function resetAll() {
+  activeIndustry = null;
+  activeMcap = null;
+  brushRect = null;
+  brushDrag = null;
+  for (const tr of tableRows) tr.hidden = false;
+  emptyRow.hidden = true;
+  filterBar.hidden = true;
+  countEl.textContent = total + ' 只';
+  if (scrollBox) scrollBox.scrollTop = 0;
+  setScatterHighlight(null);
+  paintIndustry();
+  paintMcap();
+  scatter.draw();
+}
+
+document.getElementById('select-filter-clear').addEventListener('click', resetAll);
+
+function normRect(a, b) {
+  return {
+    left: Math.min(a.x, b.x), top: Math.min(a.y, b.y),
+    width: Math.abs(a.x - b.x), height: Math.abs(a.y - b.y),
+  };
+}
+
+const brushPlugin = {
+  id: 'brushRect',
+  afterDraw(chart) {
+    const rect = brushDrag ? normRect(brushDrag.start, brushDrag.current) : brushRect;
+    if (!rect || rect.width < 1 || rect.height < 1) return;
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.fillStyle = 'rgba(15,118,110,.10)';
+    ctx.strokeStyle = '#0f766e';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 3]);
+    ctx.fillRect(rect.left, rect.top, rect.width, rect.height);
+    ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
+    ctx.restore();
+  },
+};
+
+const scatter = new Chart(document.getElementById('scatter'), {
   type: 'scatter',
-  data: { datasets: [{
+  plugins: [brushPlugin],
+  data: {datasets: [{
     label: '入选股',
-    data: pts.map((x, i) => ({x: x, y: turn[i], name: names[i], code: rows[i]})),
+    data: points,
     pointRadius: 5, pointHoverRadius: 8,
     backgroundColor: 'rgba(15,118,110,.65)', borderColor: '#0f766e',
   }]},
   options: {
     maintainAspectRatio: false,
-    plugins: { legend: {display: false},
-      tooltip: { callbacks: { label: c => `${c.raw.name} ${c.raw.code}｜分位 ${c.raw.x}｜换手 ${c.raw.y}%` } } },
+    animation: false,
+    plugins: {
+      legend: {display: false},
+      tooltip: {callbacks: {label: c => `${c.raw.name} ${c.raw.code}｜分位 ${c.raw.x}｜换手 ${c.raw.y}%`}},
+    },
     scales: {
-      x: { title: {display: true, text: '池内换手分位（0=最冷）'}, grid: {color: '#eef2f7'} },
-      y: { title: {display: true, text: '20 日换手 %'}, grid: {color: '#eef2f7'} }
-    }
+      x: {title: {display: true, text: '池内换手分位（0=最冷）'}, grid: {color: '#eef2f7'}},
+      y: {title: {display: true, text: '20 日换手 %'}, grid: {color: '#eef2f7'}},
+    },
+  },
+});
+
+const scatterCanvas = document.getElementById('scatter');
+scatterCanvas.style.touchAction = 'none';
+
+function eventPoint(evt) {
+  const rect = scatterCanvas.getBoundingClientRect();
+  return {x: evt.clientX - rect.left, y: evt.clientY - rect.top};
+}
+
+function inChartArea(p) {
+  const a = scatter.chartArea;
+  return !!a && p.x >= a.left && p.x <= a.right && p.y >= a.top && p.y <= a.bottom;
+}
+
+function clampToChart(p) {
+  const a = scatter.chartArea;
+  return {
+    x: Math.max(a.left, Math.min(a.right, p.x)),
+    y: Math.max(a.top, Math.min(a.bottom, p.y)),
+  };
+}
+
+scatterCanvas.addEventListener('pointerdown', evt => {
+  if (evt.button !== 0) return;
+  const p = eventPoint(evt);
+  if (!inChartArea(p)) return;
+  brushDrag = {start: p, current: p};
+  try { scatterCanvas.setPointerCapture(evt.pointerId); } catch (_) { /* 老浏览器忽略 */ }
+  scatterCanvas.style.cursor = 'crosshair';
+  evt.preventDefault();
+});
+
+scatterCanvas.addEventListener('pointermove', evt => {
+  if (!brushDrag) return;
+  brushDrag.current = clampToChart(eventPoint(evt));
+  scatter.draw();
+  evt.preventDefault();
+});
+
+function finishBrush(evt) {
+  if (!brushDrag) return;
+  const rect = normRect(brushDrag.start, brushDrag.current);
+  brushDrag = null;
+  scatterCanvas.style.cursor = 'crosshair';
+  try { scatterCanvas.releasePointerCapture(evt.pointerId); } catch (_) { /* 同上 */ }
+
+  if (rect.width < 8 || rect.height < 8) {
+    scatter.draw();
+    return;
   }
+
+  const x1 = scatter.scales.x.getValueForPixel(rect.left);
+  const x2 = scatter.scales.x.getValueForPixel(rect.left + rect.width);
+  const y1 = scatter.scales.y.getValueForPixel(rect.top + rect.height);
+  const y2 = scatter.scales.y.getValueForPixel(rect.top);
+  const minX = Math.min(x1, x2), maxX = Math.max(x1, x2);
+  const minY = Math.min(y1, y2), maxY = Math.max(y1, y2);
+
+  activeIndustry = null;
+  activeMcap = null;
+  paintIndustry();
+  paintMcap();
+  brushRect = rect;
+  const n = filterRows(tr => {
+    const x = rowNum(tr, 'x'), y = rowNum(tr, 'y');
+    return Number.isFinite(x) && Number.isFinite(y)
+      && x >= minX && x <= maxX && y >= minY && y <= maxY;
+  });
+  setScatterHighlight(p => p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY);
+  showFilter(`散点框选：换手分位 ${minX.toFixed(1)}–${maxX.toFixed(1)}，`
+    + `20 日换手 ${minY.toFixed(2)}%–${maxY.toFixed(2)}%；命中 ${n} / ${total} 只`);
+  scatter.draw();
+}
+
+scatterCanvas.addEventListener('pointerup', finishBrush);
+scatterCanvas.addEventListener('pointercancel', evt => {
+  brushDrag = null;
+  scatterCanvas.style.cursor = 'crosshair';
+  scatter.draw();
+  try { scatterCanvas.releasePointerCapture(evt.pointerId); } catch (_) { /* 同上 */ }
 });
 
 const counts = {};
-industry.forEach(x => { const k = x || '未分类'; counts[k] = (counts[k] || 0) + 1; });
+inds.forEach(x => { const k = x || '未分类'; counts[k] = (counts[k] || 0) + 1; });
 const labels = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
 
 // 行业个数跟着名单走（申万一级 20 来个），全挤在 330px 里 Chart.js 会自动
 // 丢掉一半标签（autoSkip），看着就是"字只剩一半"。做法同周期页：框固定
 // 330px 不动（与左边散点图同高），画布按「行数 × 20px」撑高，超出就在框里滚。
-// 一行给 20px（比周期/顶部页的 15px 松）：行业名短、行数少，字号能大一号。
 const ROW_H = 20;
 const indWrap = document.getElementById('industry').closest('.canvas-wrap');
 indWrap.firstElementChild.style.height =
   Math.max(indWrap.clientHeight, labels.length * ROW_H) + 'px';
 
-new Chart(document.getElementById('industry'), {
+const industryChart = new Chart(document.getElementById('industry'), {
   type: 'bar',
-  data: { labels,
-    datasets: [{ data: labels.map(l => counts[l]), backgroundColor: 'rgba(29,78,216,.6)', borderRadius: 6 }] },
+  data: {labels,
+    datasets: [{
+      data: labels.map(l => counts[l]),
+      backgroundColor: labels.map(() => 'rgba(29,78,216,.55)'),
+      borderRadius: 6,
+    }]},
   options: {
-    maintainAspectRatio: false, indexAxis: 'y',
-    plugins: { legend: {display: false} },
+    maintainAspectRatio: false, indexAxis: 'y', animation: false,
+    plugins: {legend: {display: false}},
+    onClick: (evt, elements) => {
+      if (!elements.length) return;
+      const label = labels[elements[0].index];
+      if (activeIndustry === label) { resetAll(); return; }
+      activeIndustry = label;
+      activeMcap = null;
+      brushRect = null;
+      brushDrag = null;
+      setScatterHighlight(null);
+      const n = filterRows(tr => tr.dataset.industry === label);
+      paintIndustry();
+      paintMcap();
+      showFilter(`行业：${label}；命中 ${n} / ${total} 只`);
+      scatter.draw();
+    },
+    onHover: (evt, elements) => {
+      const target = evt.native && evt.native.target;
+      if (target) target.style.cursor = elements.length ? 'pointer' : 'default';
+    },
     // 横轴放顶上：画布被撑高后底部要滚出来才看得到，放顶上它就一直在。
-    scales: { x: {position: 'top', ticks: {precision: 0}, grid: {color: '#eef2f7'}},
+    scales: {x: {position: 'top', ticks: {precision: 0}, grid: {color: '#eef2f7'}},
              y: {grid: {display: false},
-                 ticks: {font: {size: 11}, padding: 3, autoSkip: false}}}
-  }
+                 ticks: {font: {size: 11}, padding: 3, autoSkip: false}}},
+  },
+});
+
+const mcapBins = [
+  {label: '＜20亿', min: -Infinity, max: 20},
+  {label: '20–50亿', min: 20, max: 50},
+  {label: '50–100亿', min: 50, max: 100},
+  {label: '100–300亿', min: 100, max: 300},
+  {label: '300–1000亿', min: 300, max: 1000},
+  {label: '≥1000亿', min: 1000, max: Infinity},
+];
+const mcapLabels = mcapBins.map(b => b.label);
+const mcapCounts = mcapBins.map(b => tableRows.reduce((n, tr) => {
+  const v = rowNum(tr, 'mcap');
+  return Number.isFinite(v) && v >= b.min && v < b.max ? n + 1 : n;
+}, 0));
+
+const mcapChart = new Chart(document.getElementById('mcap'), {
+  type: 'bar',
+  data: {labels: mcapLabels,
+    datasets: [{
+      data: mcapCounts,
+      backgroundColor: mcapLabels.map(() => 'rgba(15,118,110,.55)'),
+      borderRadius: 6,
+      maxBarThickness: 72,
+    }]},
+  options: {
+    maintainAspectRatio: false, animation: false,
+    plugins: {
+      legend: {display: false},
+      tooltip: {callbacks: {label: c => `${c.raw} 只`}},
+    },
+    onClick: (evt, elements) => {
+      if (!elements.length) return;
+      const bin = mcapBins[elements[0].index];
+      if (activeMcap === bin.label) { resetAll(); return; }
+      activeMcap = bin.label;
+      activeIndustry = null;
+      brushRect = null;
+      brushDrag = null;
+      setScatterHighlight(null);
+      const n = filterRows(tr => {
+        const v = rowNum(tr, 'mcap');
+        return Number.isFinite(v) && v >= bin.min && v < bin.max;
+      });
+      paintIndustry();
+      paintMcap();
+      showFilter(`市值：${bin.label}；命中 ${n} / ${total} 只`);
+      scatter.draw();
+    },
+    onHover: (evt, elements) => {
+      const target = evt.native && evt.native.target;
+      if (target) target.style.cursor = elements.length ? 'pointer' : 'default';
+    },
+    scales: {
+      x: {grid: {display: false}, ticks: {font: {size: 11}, autoSkip: false}},
+      y: {beginAtZero: true, ticks: {precision: 0}, grid: {color: '#eef2f7'}},
+    },
+  },
 });
 </script>
 {% endif %}

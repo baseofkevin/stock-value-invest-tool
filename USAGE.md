@@ -23,7 +23,16 @@
 | 拿自己的名单跑顶部 | `./run.py top --csv 名单.csv --date X` | `X` |
 | 忽略库里的结论重算 | 批量加 `--force`（top 用 `--refresh`） | 同上 |
 | 看结果 | `./run.py web` | — |
+| 拿全市场价格 + PE/PB/PS | `./run.py get-price --date 2026-11-17` | `2026-11-17`（**收盘后**才有） |
+| 重算那天的冷热摘要（**不联网**） | `./run.py get-price --restat`（加 `--date X` 只算一天） | — |
+| 看全市场最热 / 最冷的时点 | `./run.py web` → 导航「冷热时点」 | — |
 | 备份库 | `./run.py backup` | — |
+
+`get-price` 写两个库：`shared.db.price` + `index_price` 是原件，`results.db` 里的同名表
+是看板读的复制品；`results.db.price_stat`（每日涨跌家数 / 涨跌停 / 估值中位数）与价格
+同事务写入，沪深300 单独存 `index_price`。
+复制不联网，失败后可以 `./run.py get-price --sync` 补（或直接重跑 `get-price`，
+库里已有那天时只补复制、不重打上游）。
 
 裸跑 `./run.py` **只打印帮助，什么都不跑**（全流程三十多分钟，防误触）。
 
@@ -316,7 +325,7 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 
 ### `web` / `backup` / `menu`
 
-`web --port --host --debug`；`backup --dir --keep --only --list`；`menu` 无参数（也不接受）。
+`web --port --host --debug/--no-debug`（默认开调试，模板自动重载）；`backup --dir --keep --only --list`；`menu` 无参数（也不接受）。
 
 ---
 
@@ -343,7 +352,7 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 | 非交易日跑出一批"周日批" | CSV 模式基准日 = 运行当天自然日 | 复盘统一钉在周五（真实交易日） |
 | `select --date` 报"不是交易日" | 给了周末/节假日 | 换成最近交易日，或先 `build_calendar` |
 | 产出了上一周的旧报告 | 日历没更新，`hub.target` 回落到上周边 | `python3 -m stock_data_fetch.build_calendar` |
-| 盘中跑，结论不对 | 15:05 前用的是半日数据 | 等收盘后再跑，或显式 `--date 上一交易日` |
+| 盘中跑，结论不对 | 15:05 前用的是半日数据 | 等收盘后再跑；补历史可用 `--date 上一交易日`，当日数据仍要等收盘 |
 | 下游报"没有 X 的选股名单" | 那天选股没跑，或 --date 与选股日不一致 | `./run.py select --date X` 先跑选股 |
 | 单只带 `--date`，报告却是今天的 | `run.py` 吃掉 `--date`，工具内部自己取最新交易日 | 要历史就走批量（`--csv` / `--from-select`） |
 | `ModuleNotFoundError: config` | 直接 `python -m stock_cycle_elastic.cycle_report` 了 | 永远走 `./run.py`，它切好了 cwd |

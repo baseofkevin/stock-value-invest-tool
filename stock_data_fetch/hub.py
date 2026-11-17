@@ -20,7 +20,9 @@
 | 情形 | 盘中能不能跑 |
 |---|---|
 | 库里有、且够新（`coverage.hit` 命中） | **能**。全程只读库，一次上游都不打 |
-| 缺数据 / 数据过期 → 必须联网 | **不能**。`Hub.check_online()` 在 `api._pull()` 里抛 |
+| 缺数据，但 `need.end` 严格早于今天（补历史） | **能**（2026-11-17 起）。K 线/扫描/财报/估值/快照等历史域放行 |
+| 缺当日或未来数据 → 必须联网 | **不能**。`Hub.check_online()` 在 `api._pull()` 里抛 |
+| `quote`（实时行情，无历史版本） | **不能**，即使 `need.end` 是昨天 |
 | `allow_intraday=True` | 能，但会在 `meta` 里留痕 |
 
 拦截点从 `preflight()` 挪到 `api._pull()`——那是**唯一**决定"要不要打上游"的地方，
@@ -60,6 +62,10 @@ class Hub:
 
     intraday: bool = False
     """现在是交易时段且没被显式放行 → **不许联网**，但读库照旧（见模块头闸 1）。"""
+
+    now: dt.datetime | None = None
+    """preflight 的当前时间（测试注入）；None 时用系统时间。
+    `check_online()` 用它判断"要的是不是今天的数据"，避免测试受真实时钟影响。"""
 
     _throttle: Throttle | None = field(default=None, repr=False)
     _router: object | None = field(default=None, repr=False)
@@ -171,18 +177,55 @@ class Hub:
         from . import api
         return api.prune_kline(self, keep_bars)
 
+    #: 只有这些域有"按日期取历史"的语义，允许盘中补 `end < 今天` 的数据。
+    #: `quote` 故意不在里面：它是实时行情，没有历史版本；盘中拿到的是当前价，
+    #: 即使 `need.end` 写的是昨天，也不能当作昨天收盘价。
+    _HISTORY_DOMAINS = frozenset({
+        "kline", "scan", "finance", "valuation", "snapshot", "profile", "dividend",
+    })
+
+    def _history_only(self, need) -> bool:
+        """这次联网请求是否只涉及"今天以前"的历史数据。"""
+        if need is None:
+            return False
+        domain = getattr(need, "domain", "")
+        if domain not in self._HISTORY_DOMAINS:
+            return False
+        end = getattr(need, "end", None)
+        if not end:
+            # profile / dividend 没有上界；它们是静态或历史公司行为，不是当日行情。
+            return domain in ("profile", "dividend")
+        try:
+            return dt.date.fromisoformat(str(end)) < (self.now or dt.datetime.now()).date()
+        except ValueError:
+            return False
+
     def check_online(self, domain: str, symbol: str, need=None) -> None:
         """联网前的最后一道闸。盘中（且未放行）→ 抛 `MarketOpenError`。
 
         调用点在 `api._pull()` —— 只有"库里不满足、确实要打上游"时才会走到那里。
         所以"盘中止步"与"盘中照常用缓存"这两件事互不干扰。
+
+        **盘中允许补历史（2026-11-17 改）**：只要 `need.end` 严格早于今天，
+        且域有历史语义（K 线/扫描/财报/估值/快照/元数据/分红），就放行。
+        当日或未来日期仍然拦；`quote` 是实时行情，始终拦——它没有历史版本。
+        这样 `./run.py select --date 2026-11-16` 在 11-17 盘中可以补昨天的
+        扫描与 K 线；但它若还缺 `quote`（流通市值），仍会等到收盘或缓存命中，
+        不会把 11-17 的盘中价当成 11-16 的收盘价。
         """
         if not self.intraday:
             return
+        if self._history_only(need):
+            return
+        if domain == "quote":
+            why = "quote 是实时行情，没有历史版本，盘中不能取"
+        else:
+            why = ("这次请求包含当日或未来日期的数据；盘中只允许补 end 早于今天的"
+                   "历史数据，当日数据请收盘后重跑")
         raise MarketOpenError(
             f"{domain} {symbol} 的数据不在库里，或已不够新，这次需要联网取数。"
             f"现在是交易时段（{_hhmm(self.cfg.market_open)}–{_hhmm(self.cfg.market_close)}），"
-            "盘中取到的是半成品，请收盘后重跑（或设 STOCKHUB_ALLOW_INTRADAY=1 强行放行）",
+            f"{why}（或设 STOCKHUB_ALLOW_INTRADAY=1 强行放行）",
             domain=domain, symbol=symbol, need=str(need) if need is not None else None)
 
     # ---- 以下由后续步骤填充（CONTRACT §16 第 5 步）----
@@ -322,7 +365,7 @@ def preflight(*, allow_intraday: bool | None = None,
     log.debug("preflight ok: db=%s target=%s intraday=%s", path, target,
               intraday and not allow_intraday)
     return Hub(conn=conn, cfg=cfg, cal=cal, target=target,
-               intraday=intraday and not allow_intraday)
+               intraday=intraday and not allow_intraday, now=now)
 
 
 def _free_mb(path: Path) -> float | None:

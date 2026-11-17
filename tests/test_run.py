@@ -364,6 +364,13 @@ class ParserTest(unittest.TestCase):
         p = run.build_parser()
         self.assertNotIn("calendar", p._subparsers._group_actions[0].choices)
 
+    def test_web_debug_default_on(self) -> None:
+        """`run.py web` 默认等同旧 `--debug`；要关得显式 --no-debug。"""
+        p = run.build_parser()
+        self.assertTrue(p.parse_args(["web"]).debug)
+        self.assertTrue(p.parse_args(["web", "--debug"]).debug)
+        self.assertFalse(p.parse_args(["web", "--no-debug"]).debug)
+
     def test_all_is_full_pipeline(self) -> None:
         """全流程 = 日历 → 选股 → 周期 → 质量 → 顶部 → 看板，一步不缺。"""
         a = run.build_parser().parse_args(["all"])

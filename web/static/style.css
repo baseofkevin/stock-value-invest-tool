@@ -59,6 +59,8 @@ a:hover{text-decoration:underline}
 
 /* ---------------------------------------------------------------- 卡片 */
 .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px}
+/* 冷热时点：四张全市场卡 + 沪深300，宽屏一行摆五张 */
+.cards.cards-5{grid-template-columns:repeat(5,1fr)}
 .card{
   background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px 16px;
   box-shadow:0 2px 10px rgba(16,32,54,.04);display:block;color:inherit;
@@ -77,6 +79,34 @@ a:hover{text-decoration:underline}
 
 /* ---------------------------------------------------------------- 表格 */
 .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+
+/* 长表：框内滚动 + 按名称定位。四张汇总表动辄 100~260 行，整页铺开
+   要滑很久；框高固定后表头 sticky，滚动条只出现在框里。 */
+.stock-scroll{
+  max-height:62vh;overflow-y:auto;overflow-x:auto;
+  border:1px solid var(--line);border-radius:12px;background:var(--panel);
+  scrollbar-width:thin;-webkit-overflow-scrolling:touch}
+.stock-scroll table.grid thead th{position:sticky;top:0;z-index:2;background:#f8fafc}
+.stock-scroll table.grid tbody tr.jump-hit td{background:#fff7d6;transition:background .35s}
+.stock-jump{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 10px}
+.stock-jump label{font-size:12px;font-weight:600;color:var(--muted)}
+.stock-jump select{
+  font:inherit;font-size:13px;padding:5px 10px;border:1px solid #cbd5e1;
+  border-radius:8px;background:#fff;color:var(--ink);
+  flex:0 1 320px;min-width:200px;max-width:360px}
+.stock-jump-hint{font-size:11.5px;color:var(--muted)}
+/* 选股名单：15 列，宽表在框里横向滚，纵向滚时表头贴顶。 */
+.select-scroll table.grid{min-width:1230px}
+#scatter{cursor:crosshair}
+.select-filter{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  margin:0 0 10px;padding:7px 10px;border:1px solid #ccfbf1;border-radius:10px;
+  background:#f0fdfa;color:#115e59;font-size:12px;font-weight:600;line-height:1.5}
+.select-filter[hidden]{display:none}
+.select-filter button{font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;
+  color:#0f766e;background:#fff;border:1px solid #99f6e4;border-radius:7px;
+  padding:3px 9px}
+.select-filter button:hover{background:#ccfbf1}
+.select-empty{padding:26px;text-align:center;color:var(--muted);font-size:12.5px}
 table.grid{width:100%;border-collapse:collapse;font-size:13px}
 table.grid th{
   text-align:left;font-weight:600;font-size:11.5px;color:var(--muted);
@@ -109,10 +139,16 @@ table.grid tr.dim td{opacity:.55}
 .chart-box .sub{font-size:11.5px;color:var(--muted);margin:0 0 10px}
 .chart-box .canvas-wrap{position:relative;height:240px}
 .chart-box.tall .canvas-wrap{height:330px}
+/* 单股区间曲线：与上面的卡片留一点距离，别让图表贴着数字。 */
+.hist-chart{margin:0 0 18px}
+.hist-chart .canvas-wrap{height:330px}
 /* 横向长条图（顶部/周期）每只一行，高度得跟着行数走：
    rows = 20 只，rows-lg = 30 只上下，别让标签被挤掉。 */
 .chart-box.rows .canvas-wrap{height:430px}
 .chart-box.rows-lg .canvas-wrap{height:640px}
+/* 市值分布：横跨两张图下方，一行放六个区间；和上面两张保持同样的卡片间距。 */
+.chart-box.wide{grid-column:1 / -1}
+.chart-box.wide .canvas-wrap{height:190px}
 /* 票数超过框高时：框不动，图在里面滚。
    `.canvas-inner` 的高度由模板按「行数 × 15px」写死，Chart.js 以它为准排版，
    所以标签间距恒定，滚动条由外层 `.canvas-wrap` 出。 */
@@ -145,6 +181,7 @@ table.grid tr.dim td{opacity:.55}
 .picker select{font:inherit;padding:4px 8px;border:1px solid #cbd5e1;border-radius:8px;
   background:#fff;color:var(--ink);font-variant-numeric:tabular-nums}
 .picker .pick-label{color:var(--muted);font-weight:600}
+.picker .pick-arrow{color:var(--muted)}
 .picker .pick-meta{color:#475569;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .picker .pick-latest{margin-left:auto;color:#0f766e;font-weight:600;text-decoration:none}
 .picker .pick-latest:hover{text-decoration:underline}
@@ -154,7 +191,15 @@ table.grid.batch td{vertical-align:top}
 table.grid .cellrun{display:block;text-decoration:none;color:inherit}
 table.grid .cellrun small{display:block;color:var(--muted);font-size:11px;font-weight:400}
 table.grid .cellrun:hover{color:#0f766e}
-table.grid .miss{color:#cbd5e1;font-size:12px}
+table.grid .miss{display:flex;flex-direction:column;align-items:flex-start;gap:4px;max-width:340px}
+table.grid .miss-code{font:600 11.5px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+  color:#64748b;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:5px;
+  padding:1px 5px;white-space:nowrap}
+table.grid .miss-why{color:#64748b;font-size:11.5px;line-height:1.45}
+table.grid .miss-cmds summary{cursor:pointer;color:#0f766e;font-size:11.5px;font-weight:600}
+table.grid .miss-cmds pre{margin:5px 0 0;padding:6px 8px;background:#f8fafc;
+  border:1px solid var(--line);border-radius:6px;color:#334155;
+  font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all}
 .tag{font-size:11px;font-weight:600;color:#475569;background:#eef2f7;
   border-radius:6px;padding:2px 7px;vertical-align:middle;margin-left:6px}
 tr.dim td{color:#94a3b8}
@@ -253,8 +298,12 @@ table.grid tr.grouprow td{background:#f8fafc;font-weight:700;color:#334155;
 }
 
 /* ---------------------------------------------------------------- 小屏 */
+@media (max-width:1100px){
+  .cards.cards-5{grid-template-columns:repeat(3,1fr)}
+}
 @media (max-width:900px){
   .cards{grid-template-columns:1fr 1fr}
+  .cards.cards-5{grid-template-columns:1fr 1fr}
   .charts,.two{grid-template-columns:1fr}
 }
 @media (max-width:600px){
@@ -263,6 +312,7 @@ table.grid tr.grouprow td{background:#f8fafc;font-weight:700;color:#334155;
   .hero{padding:20px 18px;border-radius:18px}
   .hero h1{font-size:21px}
   .cards{grid-template-columns:1fr}
+  .cards.cards-5{grid-template-columns:1fr}
   table.grid th,table.grid td{padding:7px 8px}
 }
 @media print{
@@ -338,4 +388,35 @@ body.stock-report .foot strong{color:#425466}
   body.stock-report .panel{margin:12px 10px;padding:16px 14px;border-radius:12px}
   body.stock-report .panel>h2{font-size:16px}
   body.stock-report .foot{margin:18px 10px 0}
+}
+
+/* ---------------------------------------------------------------- 冷热时点 */
+/* 这一页读的是 results.db 的 `price`：一天 5500+ 行，整页吐出去浏览器滚动起来
+   会明显发涩。做法是**把表体放进一个固定高度的框里滚**，表头 sticky 在框顶
+   （不是吸在窗口上——吸窗口会和 topbar 抢位置）。 */
+.picker input[type=search]{
+  font:inherit;padding:4px 10px;border:1px solid #cbd5e1;border-radius:8px;
+  background:#fff;color:var(--ink);
+  flex:1 1 220px;min-width:180px;max-width:320px}
+.picker button{
+  font:inherit;padding:5px 14px;border:1px solid var(--navy);border-radius:8px;
+  background:var(--navy);color:#fff;cursor:pointer;font-weight:600}
+.picker button:hover{background:#16304f}
+.table-scroll{
+  max-height:68vh;overflow-y:auto;overflow-x:auto;
+  border:1px solid var(--line);border-radius:12px;background:var(--panel);
+  -webkit-overflow-scrolling:touch}
+.table-scroll table.grid{min-width:820px}
+.table-scroll thead th{position:sticky;top:0;z-index:2;background:#f8fafc}
+table.grid td.idx{color:var(--muted);font-size:11.5px}
+/* 东财行情外链：单独一列，别让"打开"跟着名称一起变粗/变色 */
+table.grid td .quote-link{white-space:nowrap;font-size:12px}
+/* A 股习惯：涨红跌绿。注意 `.card .v` 里的 span 也用它，两处同一套颜色。 */
+.price-up{color:#c62828;font-weight:600}
+.price-down{color:#0e8a5f;font-weight:600}
+@media (max-width:600px){
+  .table-scroll{max-height:60vh}
+  .table-scroll table.grid{min-width:680px}
+  .stock-scroll{max-height:55vh}
+  .stock-jump select{flex:1 1 100%;max-width:none}
 }

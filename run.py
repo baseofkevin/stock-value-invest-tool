@@ -12,6 +12,7 @@
     python3 run.py quality --stock 600519   # 质量初筛单只
     python3 run.py top sh600519    # 顶部判断（stock_judge_top，单只，随时可跑）
     python3 run.py top --from-select            # 顶部判断批量：读结果库的名单
+    python3 run.py get-price --date 2026-11-17  # 全市场快照（价 + PE + PB + PS + 沪深300）
     python3 run.py web                          # 打开看板（Flask + Chart.js）
 
 ## 为什么要有这个脚本
@@ -646,6 +647,51 @@ def step_top(tee: Tee, day: str, codes: list[str], extra: list[str],
     return 0
 
 
+def step_get_price(tee: Tee, day: str | None, extra: list[str]) -> int:
+    """全市场价格/估值快照：`price` + `price_stat` + `index_price`，一天一份。
+
+    跑的是 `stock_price_show` 子进程——它是独立工具，自己抓东财、自己写两个库，
+    入口这边只负责"把日期定下来、把输出收进日志、画进度条"。
+
+    `day=None` 只出现在 `--restat` / `--sync`（纯本地动作，按库里已有的数据算或复制）：
+    那时不该塞 `--date`，也不该去数"这天入库了几只"。
+
+    **不套 `tool=`/`day=`**：那两个参数是给四个工具数"成功几只"用的，本步的产出
+    不在 `*_result` 表里。子进程自己也打了 `✅ 5579 只…`，但屏幕上除 `[n/m]`
+    之外的行都会被 Tee 收进日志，所以入库只数在这里补一行（`_price_count`）。
+    """
+    argv = py_module("stock_price_show") + (
+        ["--date", day] if day else []) + extra
+    label = day or "按已有数据"
+    code, _ = run_step(tee, f"全市场价格 get-price（{label}）", argv, ROOT,
+                       short=f"全市场价格（{label}）")
+    if code == 0 and day:
+        n = _price_count(day)
+        if n > 0:
+            # 子进程那行 "✅ 5579 只…" 只进了日志（屏幕上 `[n/m]` 之外的行都被收掉）。
+            # 这一步的结果恰恰就是"入了多少只"，所以在这里补一行上屏幕。
+            say(f"  {day} · {n} 只已入库（价 / PE / PB / PS + 沪深300，results.db）")
+    return code
+
+
+def _price_count(day: str) -> int:
+    """results.db 里 `price` 表这天有多少行；读不到就 0（只是页面提示，不该报错）。
+
+    `STOCK_RESULTS_DB` 优先：与 `stock_price_show` / `stock_data_fetch.results`
+    读同一个环境变量，拿副本调试时这行提示不会指向另一个库。
+    """
+    try:
+        path = Path(os.environ.get("STOCK_RESULTS_DB") or DB_PATH).expanduser()
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            row = conn.execute("SELECT COUNT(*) FROM price WHERE date=?", (day,)).fetchone()
+        finally:
+            conn.close()
+        return int(row[0]) if row else 0
+    except Exception:                        # noqa: BLE001 - 提示失败不该影响退出码
+        return 0
+
+
 def step_calendar(tee: Tee) -> int:
     code, _ = run_step(tee, "⓪ 更新交易日历 build_calendar",
                        py_module("stock_data_fetch.build_calendar"), ROOT,
@@ -774,6 +820,12 @@ def cmd_all(args, tee: Tee) -> int:
 
 def cmd_single(action: str):
     def run(args, tee: Tee) -> int:
+        if action == "get-price" and (getattr(args, "restat", False)
+                                      or getattr(args, "sync", False)):
+            # 纯本地动作（重算摘要 / 原始库补到结果库）：不联网、不需要日历，
+            # 所以不跑 ensure_calendar（那一步在日历过期时会去打上游）。
+            extra = ["--sync"] if getattr(args, "sync", False) else ["--restat"]
+            return step_get_price(tee, args.date, extra)
         day, rc = ensure_calendar(tee, args.date, auto=not args.no_calendar)
         if not day:
             return rc or 1
@@ -782,6 +834,14 @@ def cmd_single(action: str):
                 "上面的日期只作运行标记，不会改变名单。")
         if action == "select":
             return step_select(tee, day, args.extra)
+        if action == "get-price":
+            extra = list(args.extra)
+            if getattr(args, "force", False):
+                extra.append("--force")
+            keep = int(getattr(args, "prune_keep", 0) or 0)
+            if keep > 0:
+                extra += ["--prune-keep", str(keep)]
+            return step_get_price(tee, day, extra)
         if action in ("cycle", "quality"):
             stock = getattr(args, "stock", None)
             csv_path = None
@@ -850,7 +910,7 @@ def cmd_web(args) -> int:
     app = create_app(DB_PATH)
     say(f"看板：http://{args.host}:{args.port}   结果库 {DB_PATH}")
     say("       Ctrl-C 退出")
-    app.run(host=args.host, port=args.port, debug=getattr(args, "debug", False))
+    app.run(host=args.host, port=args.port, debug=getattr(args, "debug", True))
     return 0
 
 
@@ -993,7 +1053,7 @@ def step_web(args, tee: Tee) -> int:
     tee.close()
     say("")
     try:
-        return cmd_web(argparse.Namespace(host=host, port=port, debug=False))
+        return cmd_web(argparse.Namespace(host=host, port=port, debug=True))
     except KeyboardInterrupt:
         say("")
         say("看板已关闭。")
@@ -1014,6 +1074,7 @@ MENU = """
   3) 周期弹性            stock_cycle_elastic     （回车=批量，或填单只代码）
   4) 质量初筛            stock_quality_screen    （回车=批量，或填单只代码）
   5) 顶部判断            stock_judge_top         （单只/多只；回车=当天选股批量）
+  6) 全市场价格/估值     get-price               （全市场 价/PE/PB/PS + 沪深300，收盘后跑）
   0) 退出
 """
 
@@ -1026,14 +1087,14 @@ def interactive() -> int:
     while True:
         say(MENU)
         try:
-            choice = input("选择 [0-5]: ").strip()
+            choice = input("选择 [0-6]: ").strip()
         except (EOFError, KeyboardInterrupt):
             say("")
             return 130
         if choice in ("0", "q", ""):
             return 0
-        if choice not in {"1", "2", "3", "4", "5"}:
-            say("请输入 0-5。")
+        if choice not in {"1", "2", "3", "4", "5", "6"}:
+            say("请输入 0-6。")
             continue
 
         day_hint = input(f"基准日（回车=自动，今天 {dt.date.today()}）: ").strip() or None
@@ -1060,6 +1121,10 @@ def interactive() -> int:
                                           stock=code or None,
                                           extra=[] if code else ["--workers", "2"])
                 rc = cmd_single("cycle" if choice == "3" else "quality")(args, tee)
+            elif choice == "6":
+                args = argparse.Namespace(date=day_hint, no_calendar=False,
+                                          force=False, prune_keep=0, extra=[])
+                rc = cmd_single("get-price")(args, tee)
             else:
                 raw = input("股票代码（可多个，空格分隔；回车=用当天选股结果批量跑）: ").split()
                 args = argparse.Namespace(date=day_hint, no_calendar=False,
@@ -1098,6 +1163,7 @@ def build_parser() -> argparse.ArgumentParser:
   ./run.py cycle   --stock 600519         # 周期弹性，单只
   ./run.py quality --stock 600519         # 质量初筛，单只
   ./run.py top     600519                 # 顶部判断
+  ./run.py get-price --date 2026-11-17    # 全市场价格/估值快照（价 + PE + PB + PS）
   ./run.py web                            # 只打开看板（读 results.db，只读）
   ./run.py backup                         # 备份数据库（VACUUM INTO + 保留 7 份）
   ./run.py all --no-web                   # 跑完不起看板（放进定时任务时用）
@@ -1217,6 +1283,38 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
                     help="忽略缓存重新取数，并把库里已有结果也重算")
     sp.add_argument("extra", nargs="*", default=[], help="透传给 stock_judge_top 的参数")
 
+    sp = sub.add_parser("get-price",
+                        help="全市场价格/估值快照：价 + PE + PB + PS（写 shared.db + results.db）",
+                        formatter_class=argparse.RawDescriptionHelpFormatter,
+                        epilog="""示例：
+  ./run.py get-price                      # 今天（过了 15:05）或上一交易日
+  ./run.py get-price --date 2026-11-17    # 指定交易日
+  ./run.py get-price --date 2026-11-17 --force       # 忽略库里已有，重取整天
+  ./run.py get-price --prune-keep 30      # 顺手删掉 30 天之前的 price 行
+  ./run.py get-price --restat             # 只按结果库已有 price 重算每日摘要，不联网
+  ./run.py get-price --sync               # 原始库 → 结果库，不联网
+
+一天一份、一股一行，全市场约 5500 只（含北交所），约 6 个上游请求。
+字段：收盘价 / 涨跌幅 / PE(TTM) / PB(MRQ) / PS(TTM) / 总市值 / 流通市值。
+落两个库：shared.db 的 price 是原件；results.db 的 price 是看板读的复制品，
+同一天还会写 price_stat（涨跌家数 / 涨跌停 / 估值中位数 / 总市值合计），
+与 price 同事务写入。抓取与落库都在独立工具 `stock_price_show` 里。
+
+⚠️ 这是**收盘快照**：上游当天收盘后才发布，盘中跑「今天」会报
+「上游没有这一天的数据」。要么收盘后再跑，要么显式给上一个交易日。""")
+    add_date(sp)
+    sp.add_argument("-v", "--verbose", action="store_true",
+                    help="把子进程的原始输出全部打到屏幕上（默认只有进度条，明细在日志里）")
+    sp.add_argument("--force", action="store_true",
+                    help="忽略库里已有的那一天，重新取一次（整天整份替换）")
+    sp.add_argument("--prune-keep", type=int, default=0, metavar="天",
+                    help="取完之后删掉这么多天之前的 price 行；0 = 不清理（默认）")
+    sp.add_argument("--restat", action="store_true",
+                    help="只按结果库已有 price 数据重算每日摘要（price_stat），不联网")
+    sp.add_argument("--sync", action="store_true",
+                    help="把 shared.db 已有的 price 复制/覆盖到 results.db（不联网）")
+    sp.add_argument("extra", nargs="*", default=[], help="透传给 stock_price_show 的参数")
+
     sp = sub.add_parser("backup", help="备份 shared.db / results.db 到 backup/（VACUUM INTO）")
     sp.add_argument("--dir", default=None,
                     help="备份目录，默认 backup/（可用绝对路径，如 ~/MyData/backups）")
@@ -1230,7 +1328,8 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
     sp = sub.add_parser("web", help="打开看板：Flask + Chart.js，读 results.db")
     sp.add_argument("--port", type=int, default=5000, help="端口，默认 5000")
     sp.add_argument("--host", default="127.0.0.1", help="监听地址，默认只本机")
-    sp.add_argument("--debug", action="store_true", help="Flask 调试模式（改模板自动重载）")
+    sp.add_argument("--debug", action=argparse.BooleanOptionalAction, default=True,
+                    help="Flask 调试模式（默认开，改模板/代码自动重载；--no-debug 关闭）")
 
     sub.add_parser("menu", help="交互菜单（0-5 选择）")
     return p

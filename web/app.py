@@ -15,6 +15,7 @@
     /quality     质量：Q × V 散点（结论用颜色区分）+ 结论分布
     /top         顶部：距 250 日高点的横条（谁在高位）+ 四因子状态矩阵
     /review      综合评估：四边结论拼成优先级排序，标出「可以开始研究」的票
+    /price       冷热时点：**results.db** 的全市场价格/估值（按日横截面 + 每日摘要）
     /stock/<code> 个股：四边结论并排 + 旁证/周期 + **历次结果（按时间）**
                  `?focus=cycle|quality|top` 决定哪一块排最上面（从哪个工具页点进来的）
 
@@ -79,6 +80,80 @@ def _fmt_ratio(value, digits=2):
         return "—"
     try:
         return f"{float(value):.{digits}f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _fmt_yi(value, digits=0):
+    """元 → 亿元。市值动辄 1.1e14，用"元"写在表里没人读得出来。"""
+    if value is None:
+        return "—"
+    try:
+        return f"{float(value) / 1e8:,.{digits}f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _quote_url(symbol):
+    """`sh600519` / `sz002286` / `bj920992` → 东方财富行情页。
+
+    东财的路径并不统一：沪深是 `quote.eastmoney.com/sh600519.html`，
+    北交所是 `quote.eastmoney.com/bj/920992.html`（少了斜杠会 404）。
+    末尾 `#fullScreenChart` 是"打开就是全屏 K 线"，与用户手点进去的页面一致。
+
+    认不出的代码返回空串：模板据此不渲染链接，而不是给一个必然 404 的地址。
+    """
+    s = str(symbol or "").strip().lower()
+    if len(s) < 3:
+        return ""
+    code = s[2:]
+    if not code.isdigit():
+        return ""
+    if s.startswith("bj"):
+        return f"https://quote.eastmoney.com/bj/{code}.html#fullScreenChart"
+    if s.startswith(("sh", "sz")):
+        return f"https://quote.eastmoney.com/{s}.html#fullScreenChart"
+    return ""
+
+
+def _fmt_pe(value, digits=2):
+    """PE(TTM)：负值是亏损，写「亏损」而不是一个看不懂的负号数字。
+
+    `-70,160.44` 这种数只会让人以为"便宜到极致"——分子是负的，比值本身
+    没有意义。缺数据仍然是 `—`：亏损和没数据是两回事。
+    """
+    if value is None:
+        return "—"
+    try:
+        return "亏损" if float(value) <= 0 else f"{float(value):,.{digits}f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _fmt_pos(value, digits=2):
+    """只对正值有意义的比率（PB / PS）：负值给 `—`，不摆一个负数上去。
+
+    与 `price_stat` 算中位数只取正值、`db.price_rows` 把 `<= 0` 排到最后
+    是同一套口径：这三处对"什么算有效估值"必须一致。
+    """
+    if value is None:
+        return "—"
+    try:
+        return f"{float(value):,.{digits}f}" if float(value) > 0 else "—"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _fmt_spct(value, digits=2):
+    """带符号的百分数：`+2.31%` / `-1.07%`。冷热页要看方向，符号不能省。
+
+    恰好为 0 时不带符号（`0.00%`）——"+0.00%" 看着像涨了一点点。
+    """
+    if value is None:
+        return "—"
+    try:
+        num = float(value)
+        return f"{num:+.{digits}f}%" if abs(num) >= 0.005 else f"{0.0:.{digits}f}%"
     except (TypeError, ValueError):
         return str(value)
 
@@ -157,7 +232,8 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     # Jinja 里要用的格式化/配色工具，一次性注入，模板里不用 import
     app.jinja_env.filters.update(pct=_fmt_pct, num=_fmt_num, ratio=_fmt_ratio,
                                  date=_date, clock=_clock, tone=tone,
-                                 weekday=_weekday,
+                                 weekday=_weekday, yi=_fmt_yi, spct=_fmt_spct,
+                                 pe=_fmt_pe, pos=_fmt_pos, quoteurl=_quote_url,
                                  poslabel=_poslabel, cycle_state=_cycle_state,
                                  detail=_detail, hasreport=_has_report)
     app.jinja_env.globals.update(TOOLS=db.TOOLS, ORDER=db.ORDER, TODAY=dt.date.today,
@@ -182,7 +258,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         return {"nav": [
             ("/batches", "批次"), ("/select", "选股"),
             ("/cycle", "周期"), ("/quality", "质量"), ("/top", "顶部"),
-            ("/review", "综合评估"),
+            ("/review", "综合评估"), ("/price", "冷热时点"),
         ]}
 
     def _pick(conn):
@@ -248,6 +324,27 @@ def create_app(db_path: str | Path | None = None) -> Flask:
                                    batches=db.batches(c), review=report,
                                    summary=db.summary(c, date),
                                    counts=db.counts(c, date))
+
+    @app.route("/price")
+    def price_page():
+        """冷热时点：`results.db` 的 `price`（全市场价格/估值）+ `price_stat`（每日摘要）。
+
+        与四个工具页**不共用** `_bar.html` 那个批次选择器：它的选项是"哪天跑过工具"，
+        这里是"哪天有全市场价格"，两者天然不同步——`price` 每个交易日都能有，
+        而四个工具一周才跑一批。混用一个下拉会让人误以为"没跑工具的日子没行情"。
+
+        `?q=` 搜索把页面切成三种形态（唯一命中看历史 / 多命中给清单 / 没命中），
+        判断全在 `db.price_page()` 里，这里只负责把参数交过去。
+        """
+        data = db.price_page(
+            date=(request.args.get("date") or "").strip() or None,
+            q=(request.args.get("q") or "").strip(),
+            sort=(request.args.get("sort") or "pct").strip(),
+            order=(request.args.get("order") or "desc").strip(),
+            start=(request.args.get("start") or "").strip() or None,
+            end=(request.args.get("end") or "").strip() or None,
+            db=app.config["DB_PATH"])
+        return render_template("price.html", **data)
 
     @app.route("/batches")
     def batches():
@@ -353,7 +450,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="监听地址，默认 127.0.0.1（只本机可访问）")
     ap.add_argument("--port", type=int, default=5000, help="端口，默认 5000")
     ap.add_argument("--db", default=None, help="结果库路径（默认 results.db）")
-    ap.add_argument("--debug", action="store_true", help="Flask 调试模式（改模板自动重载）")
+    ap.add_argument("--debug", action=argparse.BooleanOptionalAction, default=True,
+                    help="Flask 调试模式（默认开，改模板/代码自动重载；--no-debug 关闭）")
     a = ap.parse_args(argv)
 
     app = create_app(a.db)

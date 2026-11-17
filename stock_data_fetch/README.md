@@ -788,7 +788,9 @@ hub = preflight()
 | 情形 | 盘中能不能跑 |
 |---|---|
 | 库里有且够新（`hit` 命中） | **能**，全程只读库 |
-| 缺数据 / 不够新 → 必须联网 | **不能**，`Hub.check_online()` 在 `api._pull()` 里抛 |
+| 缺数据，但 `need.end` 严格早于今天（补历史） | **能**（2026-11-17 起）；K 线/扫描/财报/估值/快照等历史域放行 |
+| 缺当日或未来数据 → 必须联网 | **不能**，`Hub.check_online()` 在 `api._pull()` 里抛 |
+| `quote`（实时行情，无历史版本） | **不能**，即使 `need.end` 是昨天 |
 | `allow_intraday=True`（`STOCKHUB_ALLOW_INTRADAY=1`） | 能，但会在 `meta` 里留痕 |
 
 拦截点挪到 `api._pull()` —— 那是**唯一**决定"要不要打上游"的地方。放在那里才和真实意图一致：
@@ -1052,7 +1054,7 @@ STOCKHUB_LIVE=1 python3 -m stock_data_fetch.tests.test_westock   # 额外跑 4 �
 - `PRAGMA user_version = 2` 后 `preflight()` → `SchemaMismatch`，且**库内任何表行数不变**；
 - 上游这次没给资产负债表 → 已有的 `TotalFixedAsset` / `CIP` **不被抹成 NULL**；
 - 上游连续 3 次失败后第 4 只**不再白打上游**（`strikes` 必须跨股票累积）；
-- 盘中要联网 → `MarketOpenError`，且**一次上游都没打**；盘中数据已在库里 → 照跑；
+- 盘中补历史（`need.end` 早于今天）→ 放行；盘中要当日/未来数据 → `MarketOpenError`，且**一次上游都没打**；`quote` 始终拦；
 - 同一除权日的两条方案 → 派息 `6.957`（不是 `4.779`），且 `plan_text` 两条都在；
 - 估值起点 `2016-11-15` 而日历首日是 `2022-11-14` → **证明起点没被夹**；
 - 第一次瞬断 → 第 2 次就成功、**冷却一次都没睡**（基准 30s，睡过就不算"立刻"）。
@@ -1108,7 +1110,7 @@ STOCKHUB_LIVE=1 python3 -m stock_data_fetch.tests.test_westock   # 额外跑 4 �
 | 5 | `fp` 含 `src` 吗？ | **不含**。换源作废靠 `meta`，只对 `finance`/`valuation` |
 | 6 | 财报能不能删期？ | **不能**，append-only；门槛 `>= 40` 期 |
 | 7 | K 线深度？ | 300 根（`KLINE_LOOKBACK_DAYS=450` 换算，`KLINE_MAX_BARS=300`） |
-| 8 | 盘中能跑吗？ | **读库能跑，联网不能**：`hit` 命中就照常返回，要取数才抛 `MarketOpenError` |
+| 8 | 盘中能跑吗？ | **读库能跑；补历史能联网；取当日不能**：`hit` 命中照常返回，`need.end < 今天` 放行，当日/未来抛 `MarketOpenError`；`quote` 始终拦 |
 | 9 | 建不建 daemon / cron？ | **不建** |
 | 10 | 版本不符怎么办？ | **拒绝启动 + 提示重建**，不写迁移脚本 |
 | 11 | `kline` 主源？ | **westock**（多码批量，20 只 0.6 秒）；东财退为第一备源（单只、逐只 HTTP，4304 只要 50–75 分钟）。见 `sources.PREFERRED` |
@@ -1144,6 +1146,25 @@ STOCKHUB_LIVE=1 python3 -m stock_data_fetch.tests.test_westock   # 额外跑 4 �
 | **`valuation.circ_mv` 恒为 NULL** | 东财 `RPT_VALUEANALYSIS_DET` **没有流通市值列**（`CIRCULATE_MARKET_CAP` / `CIRC_MARKET_CAP` / `FLOAT_MARKET_CAP` / `FREE_MARKET_CAP` / `NOTLIMITED_MARKET_CAP` 全部返回 `9501 字段不存在`）。`total_mv` 有（`TOTAL_MARKET_CAP`）。**不拿 `total_mv` 顶替**：对不全流通的股票那是个偏大的数，会让换手率偏小 | 真要就用 `quote.circ_mv`（westock 有），或其他报告名，先验再用 |
 | **`mainop` 每次运行都重取** | 覆盖 `as_of` 记的是"哪一天问的"，隔天就过期。这是有意的（问的是"有没有新披露"），代价是每天每股 1 个请求 | 若测得浪费，改成"报告期 + 披露截止日"判过期 |
 | **`tdx` 令牌落盘** | 宿主若将来落盘，`available()` 自动启用，无需改代码 | 等 |
+
+### 10.1 全市场价格/估值快照**不在本层**（2026-11-17 拆出）
+
+曾经在 `stock_data_fetch` 里加过第 8 个域 `price`（schema v7），当天就拆走了：
+抓全市场一天只有 6 个上游请求、不需要 hub / router / coverage / throttle 那一整套，
+更不该让"取一天价格"被这里的 schema 版本闸卡住。现在它在独立的
+**`stock_price_show`** 包里，本层回到 `SCHEMA_VERSION = 6`。
+
+| 项 | 现在在哪 |
+|---|---|
+| 抓取（东财 `RPT_VALUEANALYSIS_DET` 按日横截面） | `stock_price_show/source.py` |
+| 落库（`shared.db.price` + `results.db.price` / `price_stat`） | `stock_price_show/store.py` |
+| 冷热摘要口径（涨跌停 / 中位数） | `stock_price_show/stat.py` |
+| CLI | `python3 -m stock_price_show`（日常用 `./run.py get-price`） |
+
+所以本层的 `need` / `router` / `coverage` / `sources` 里**没有** `price` 域，
+`shared.db` 也**不需要**为它升到 v7。两边的唯一约定是文件路径（同一个仓库根、
+同样的 `STOCK_SHARED_DB` / `STOCK_RESULTS_DB` / `STOCKHUB_CALENDAR` 环境变量名），
+刻意不互相 import。详见 `stock_price_show/README.md`。
 
 ---
 

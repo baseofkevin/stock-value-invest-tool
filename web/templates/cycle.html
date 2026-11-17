@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_stock_jump.html" import stock_jump %}
 {% block title %}周期{% endblock %}
 {% block body %}
 
@@ -33,10 +34,11 @@
     / 弱 {{ rows|selectattr('elastic_label','equalto','weak')|list|length }}
     / 不稳定 {{ rows|selectattr('elastic_label','equalto','unstable')|list|length }}。
   </p>
-  <div class="scroll">
+  {{ stock_jump(rows, "cycle-table") }}
+  <div class="scroll stock-scroll" id="cycle-table">
     <table class="grid">
       <thead><tr>
-        <th>代码</th><th>名称</th>
+        <th>代码</th><th>名称</th><th>东财</th>
         <th>是否周期股</th>
         <th class="n">毛利率σ(pp)</th><th class="n">CV%</th><th class="n">毛利率中位</th>
         <th class="n">弹性比值</th><th>弹性</th>
@@ -44,9 +46,10 @@
       </tr></thead>
       <tbody>
         {% for r in rows %}
-        <tr>
+        <tr data-symbol="{{ r.symbol }}">
           <td class="code">{{ r.symbol }}</td>
           <td class="name"><a href="/stock/{{ r.symbol }}?focus=cycle">{{ r.name or '—' }}</a></td>
+          <td>{% if r.symbol|quoteurl %}<a class="quote-link" href="{{ r.symbol|quoteurl }}" target="_blank" rel="noopener noreferrer" title="在东方财富打开 {{ r.name or r.symbol }} 的行情页">打开 ↗</a>{% else %}—{% endif %}</td>
           <td>{% if r.is_cycle %}<span class="chip warn">周期股</span>{% else %}<span class="chip muted">非周期</span>{% endif %}</td>
           <td class="n">{{ r.gm_std_pp|num(2) }}</td>
           <td class="n">{{ r.gm_cv_pct|num(1) }}</td>

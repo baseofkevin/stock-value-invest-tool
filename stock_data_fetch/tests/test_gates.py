@@ -28,6 +28,7 @@ from stock_data_fetch import config, db                       # noqa: E402
 from stock_data_fetch.calendar import TradingCalendar, target_date  # noqa: E402
 from stock_data_fetch.errors import HubNotReady, MarketOpenError, SchemaMismatch  # noqa: E402
 from stock_data_fetch.hub import preflight                    # noqa: E402
+from stock_data_fetch.need import want                        # noqa: E402
 
 def mkdtemp(prefix: str) -> Path:
     """测试临时目录。
@@ -188,6 +189,21 @@ def main() -> int:
     h = preflight(cfg=c, now=dt.datetime(2026, 11, 13, 10, 0))
     expect_raise("盘中 check_online → MarketOpenError", MarketOpenError,
                  h.check_online, "kline", "sh600519")
+    # 2026-11-17：盘中允许补**历史**（end < 今天），但当日数据仍拦。
+    check("盘中补 11-12 的 scan 放行",
+          h.check_online("scan", "*", want.scan("2026-11-12")) is None)
+    check("盘中补 11-12 的 K 线放行",
+          h.check_online("kline", "sh600519",
+                         want.kline(h.cal, "2026-11-12", bars=5, min_bars=1)) is None)
+    check("盘中取 profile（静态）放行",
+          h.check_online("profile", "sh600519", want.profile()) is None)
+    expect_raise("盘中要当日 scan → 仍拦", MarketOpenError,
+                 h.check_online, "scan", "*", want.scan("2026-11-13"))
+    expect_raise("盘中要当日 K 线 → 仍拦", MarketOpenError,
+                 h.check_online, "kline", "sh600519",
+                 want.kline(h.cal, "2026-11-13", bars=5, min_bars=1))
+    expect_raise("quote 没有历史版本，盘中始终拦", MarketOpenError,
+                 h.check_online, "quote", "sh600519", want.quote("2026-11-12"))
     h.close()
     h = preflight(cfg=c, now=dt.datetime(2026, 11, 13, 15, 6))
     check("15:06 放行且 target=当日", h.target == "2026-11-13", h.target)

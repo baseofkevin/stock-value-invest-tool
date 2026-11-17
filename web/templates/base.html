@@ -6,6 +6,7 @@
 <title>{% block title %}看板{% endblock %} · stock-value-invest</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 <script src="{{ url_for('static', filename='chart.umd.min.js') }}"></script>
+<script src="{{ url_for('static', filename='stock-jump.js') }}" defer></script>
 </head>
 <body class="{% block bodyclass %}{% endblock %}">
 <div class="topbar">
@@ -22,11 +23,15 @@
 <main class="page">
   {% block body %}{% endblock %}
 
+  {# 脚注默认讲结果库；个别页面（如 `/price`）的脚注要讲另一段数据来源，
+     自己覆盖这一块，免得页脚写着"数据来自 results.db"而页面并不是。 #}
+  {% block foot %}
   <div class="foot">
     <strong>说明</strong>：数据全部来自 <code>results.db</code>——它是四个工具的派生结果库，
     每跑一次工具就多一批记录，本页不缓存、刷新即最新。
     页面只做展示，不合并总分、不输出买卖结论。
   </div>
+  {% endblock %}
 </main>
 
 <footer class="footer-note"></footer>
