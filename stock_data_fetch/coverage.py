@@ -502,6 +502,17 @@ def settle(conn: sqlite3.Connection, domain: str, symbol: str, fp: str,
 
 
 def touch_access(conn: sqlite3.Connection, symbol: str, now: dt.datetime | None = None) -> None:
-    """记一次访问。GC 靠它判"90 天没用的股票"（`SCHEMA` §9）。"""
+    """记一次访问，写 `stock.last_access_at`。
+
+    **这一列目前只写不读**（2026-11-17 核实）。设计里那句"`last_access_at`
+    早于 90 天 → 删该股的 `kline`/`valuation`"从未实现过：全项目没有一处
+    `DELETE FROM stock`，也没有任何代码按这个时间回收数据。所以它现在只是
+    留痕，别当作"已经在 GC"来理解。
+
+    真要实现时注意两件事：删 `kline` 必须**同事务**重算 coverage，否则
+    `hit()` 会拿着一条指向空表的覆盖记录去放行；`prune_kline` 那套按根数
+    滚动裁剪已经够用，股票级回收只在"几千只票的库里绝大多数再也不会被看"
+    时才划算。见 `stock_data_fetch/README.md` §10「已知遗留」。
+    """
     stamp = (now or dt.datetime.now()).isoformat(timespec="seconds")
     conn.execute("UPDATE stock SET last_access_at=? WHERE symbol=?", (stamp, symbol))

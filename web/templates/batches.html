@@ -15,7 +15,7 @@
   <h2>最近 {{ batches|length }} 个批次</h2>
   <p class="sub">
     批次只统计<b>批量运行</b>。单只随手的结论（<code>--stock</code>）不进批次统计，
-    它们出现在个股页的历次记录里。同一批重跑会在同一格里留下最新那次。
+    只进结果库、在个股页单独看得见（页面只摆最近一份）。同一批重跑会在同一格里留下最新那次。
   </p>
   <div class="scroll">
     <table class="grid batch">
@@ -80,7 +80,7 @@
     </div>
     <div class="tile">
       <h3>单只运行<span class="chip muted" style="margin-left:8px">不占批次</span></h3>
-      <p class="sub">按<b>跑的时刻</b>归档。随时想看某只票就单跑一次，结论进个股页的历次记录；
+      <p class="sub">按<b>跑的时刻</b>归档。随时想看某只票就单跑一次，结论会盖住个股页上那一份（页面只摆最近一份）；
       它不改变任何一批的统计，也不会被当成那天的批量结果。</p>
     </div>
   </div>

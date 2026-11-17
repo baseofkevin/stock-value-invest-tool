@@ -3,8 +3,10 @@
 个人股票研究工具箱：每周五收盘后跑一遍选股 + 质量 + 周期，买入后按需查顶部。
 四个工具的结论都写进 `results.db`，用 `./run.py web` 打开看板读。
 
-四个功能模块，共用一套本地数据层（`stock_data_fetch` + `shared.db`）——库里有的
+**四个**功能模块共用一套本地数据层（`stock_data_fetch` + `shared.db`）——库里有的
 数据直接用，没有的才联网，拿到的写回库，下次（乃至其它三个模块）复用。
+第五个包 `stock_price_show` 是**旁路**：它只写 `shared.db.price` 与 `results.db`，
+不 import 数据层（抓一天全市场只要 6 个请求，用不上 hub / 路由 / 覆盖那一整套）。
 
 | 模块 | 干什么 | 入口 |
 |---|---|---|
@@ -12,7 +14,7 @@
 | `stock_cycle_elastic` | 周期弹性：是不是周期股 / 弹性强弱 / 周期位置 | `run.py cycle [--stock 代码]` |
 | `stock_quality_screen` | 质量初筛：质量分 Q + 估值分 V + 14 项风险检查 | `run.py quality [--stock 代码]` |
 | `stock_judge_top` | 顶部判断：四因子观察股票是否到顶部 | `run.py top <代码>` / `top --from-select` |
-| `stock_price_show` | 全市场价格/估值快照：一天一份全市场（独立工具，不走共享数据层） | `run.py get-price` |
+| `stock_price_show` | 全市场价格/估值快照：一天一份全市场（独立工具，不走共享数据层） | `run.py price` |
 
 ## 每周五收盘后（15:10 之后）
 
@@ -110,24 +112,38 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ## 单独跑某一步
 
 ```bash
-./run.py select  --date 2026-11-20         # 只选股（只能批量）
+./run.py select  --date 2026-11-13         # 只选股（只能批量）
 ./run.py cycle                             # 周期弹性批量（用库里的选股名单）
 ./run.py quality                           # 质量初筛批量（用库里的选股名单）
-./run.py get-price --date 2026-11-17       # 全市场价格/估值快照（价 + PE + PB + PS）
+./run.py price --date 2026-11-13       # 全市场价格/估值快照（价 + PE + PB + PS）
+./run.py price --code 002096 --date 2026-11-03  # 只补一只股票的某一天
 ./run.py web                               # 只打开看板
 ```
 
-`get-price` 与四个工具不属于同一条链：它不依赖选股名单，抓的是"某个交易日的
+> 示例日期一律用**已经过去的交易日**（`2026-11-13` 是周五）。写未来日期会被直接拒掉：
+> 显式 `--date` 不在交易日历里就报错，不会猜"最近的交易日"。
+
+`price` 与四个工具不属于同一条链：它不依赖选股名单，抓的是"某个交易日的
 全市场"（约 5500 只，含北交所，约 6 个上游请求）。字段是收盘价、涨跌幅、
 PE(TTM)、PB(MRQ)、PS(TTM)、总市值、流通市值。**它取的是收盘快照**——上游当天
 收盘后才发布，盘中跑「今天」会直接报「没有这一天的数据」，并告诉你最近一份是哪天；
 `--force` 整天重取，`--prune-keep 30` 顺手清理旧日子。
 
+单只补数用 `--code`：
+
+```bash
+./run.py price --code 002096 --date 2026-11-03
+```
+
+它只 upsert `(2026-11-03, sz002096)` 这一行，**不会删掉当天其它股票**；结果库的
+`price_stat` 会按当天已有的全部行重算。若这天原本没有全市场数据，摘要就会只有这一只，
+要补全市场仍用 `--date` 整天跑。
+
 抓取与落库在独立工具 `stock_price_show` 里，**不经过** `stock_data_fetch` 的
 hub / router / schema 版本闸：
 
 ```bash
-python3 -m stock_price_show --date 2026-11-16   # 与 ./run.py get-price 等价
+python3 -m stock_price_show --date 2026-11-16   # 与 ./run.py price 等价
 ```
 
 它一次写两个库：`shared.db.price` + `index_price` 是原件，`results.db` 里的同名表是
@@ -137,8 +153,8 @@ python3 -m stock_price_show --date 2026-11-16   # 与 ./run.py get-price 等价
 摘要事后可从库里现成的 `price` 重算，**不联网**：
 
 ```bash
-./run.py get-price --restat                # 全部时点重算摘要
-./run.py get-price --date 2026-11-16 --restat   # 只重算那一天
+./run.py price --restat                # 全部时点重算摘要
+./run.py price --date 2026-11-16 --restat   # 只重算那一天
 ```
 
 日历没有单独的子命令——它只是全流程的第 0 步，`all` 会在过期时自己更新。
@@ -201,7 +217,7 @@ python3 -m stock_data_fetch.build_calendar
 `price` 在两个库各存一份是刻意的：`shared.db` 那份是"从上游原样抓回的原件"，
 `results.db` 那份是"看板要的复制品"。看板只读结果库，所以上游清理、抓取失败
 都不会让页面上已经存下来的历史时点跟着消失；原件丢了也能用 `--force` 重抓。
-复制这一步不联网（`get-price --sync` 就是同一段代码），结果库写失败时
+复制这一步不联网（`price --sync` 就是同一段代码），结果库写失败时
 原始层照样保留，事后补一次即可。
 
 `results.db` 每工具一张表（`select_result` / `cycle_result` / `quality_result` /
@@ -391,7 +407,8 @@ python3 -m stock_kline_screen.tests                # 选股 4 个文件
 python3 -m unittest discover -s stock_quality_screen/tests -t stock_quality_screen
 python3 -m unittest discover -s stock_cycle_elastic/tests -t stock_cycle_elastic
 python3 -m stock_judge_top.tests
-python3 -m unittest discover -s tests -t .         # 入口脚本
+python3 -m stock_price_show.tests.test_price_show  # 全市场快照（87 项）
+python3 -m unittest discover -s tests -t .         # 入口脚本 + 看板
 ```
 
 ## 维护

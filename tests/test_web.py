@@ -201,7 +201,7 @@ class TestPricePage(WebCase):
             conn.close()
 
     def test_empty_price_table_degrades_to_hint(self):
-        """没跑过 get-price：页面 200 + 一句先跑什么，不是 500。"""
+        """没跑过 price：页面 200 + 一句先跑什么，不是 500。"""
         resp = self.client().get("/price")
         self.assertEqual(resp.status_code, 200)
         self.assertIn("还没有全市场行情", resp.get_data(as_text=True))
@@ -479,19 +479,6 @@ class TestStockHistorySections(WebCase):
         self.assertNotIn("历次结果", html)
         self.assertNotIn("结论怎么变的", html)
         self.assertNotIn('id="hist"', html)
-
-    def test_brief_formats_percent(self):
-        """距 250 日高点在库里是小数（-0.21），时间线上要显示成 -21.0%。"""
-        from web.db import _brief
-        self.assertIn("-21.0%", _brief("top", {"pos250": -0.21,
-                                               "momentum_state": "低位·走平"}))
-
-    def test_unknown_values_do_not_crash(self):
-        from web.db import _brief
-        for tool in ("select", "cycle", "quality", "top"):
-            with self.subTest(tool=tool):
-                self.assertIsInstance(_brief(tool, {}), str)
-
 
 class TestLabels(WebCase):
     """枚举 → 中文。库里存英文，页面上必须写中文。"""

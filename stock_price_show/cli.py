@@ -6,8 +6,9 @@
     python3 -m stock_price_show --restat                        # 只重算摘要（不联网）
     python3 -m stock_price_show --sync                          # 原始库 → 结果库（不联网）
     python3 -m stock_price_show --prune-keep 30                 # 顺手删 30 天前的
+    python3 -m stock_price_show --code 002096 --date 2026-11-03 # 只补这一只（不删当天其它行）
 
-日常用 `./run.py get-price`（带进度条、把输出收进日志），这个模块负责真干活。
+日常用 `./run.py price`（带进度条、把输出收进日志），这个模块负责真干活。
 
 ## 一次运行干了什么
 
@@ -26,6 +27,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import sys
 import time
 
@@ -43,6 +45,11 @@ def _m(v, digits: int = 2) -> str:
 
 def _pct(v) -> str:
     return "—" if v is None else f"{float(v):+.2f}%"
+
+
+def _money(v) -> str:
+    """元 → 亿元；单只查询用，和看板/表格一个口径。"""
+    return "—" if v is None else f"{float(v) / 1e8:,.2f} 亿"
 
 
 def _stat_line(s: dict) -> str:
@@ -66,6 +73,8 @@ def main(argv: list[str] | None = None) -> int:
     cal = cal_mod.Calendar.load(args.calendar)
 
     try:
+        if args.code:
+            return _do_symbol(args, cal)
         if args.restat:
             return _do_restat(args)
         if args.sync:
@@ -195,6 +204,78 @@ def _check_day(cal, day: str) -> bool:
     return True
 
 
+# ---------------------------------------------------------------- 单只查询
+
+def _do_symbol(args, cal) -> int:
+    """`--code`：抓一只票的某一天，打印并 upsert 进两个库。
+
+    **只改这一只，不整天替换**：`price` 里同一天的其它股票必须保留；
+    结果库的 `price_stat` 按写入后当天已有的全部行重算。若这天原本没有
+    全市场数据，摘要会诚实地只有这一只——要补全市场仍然跑 `--date`。
+    """
+    if args.restat or args.sync:
+        _say("❌ --code 只能单独查询，不能和 --restat / --sync 一起用")
+        return 2
+    if args.force or args.prune_keep:
+        _say("❌ --code 只改这一只，不能用 --force / --prune-keep；"
+             "整市场更新请去掉 --code")
+        return 2
+
+    day = (args.date or "").strip() or (cal_mod.target(cal) if cal else "")
+    if not day:
+        _say("❌ 没有交易日历，定不出「今天」，请显式给 --date YYYY-MM-DD")
+        return 2
+    if not _check_day(cal, day):
+        return 2
+
+    symbol = source.normalize_symbol(args.code)
+    if not symbol:
+        _say(f"❌ 股票代码认不出：{args.code!r}（要 002096 / sz002096 / 002096.SZ）")
+        return 2
+
+    try:
+        row = source.fetch_symbol(day, symbol)
+    except source.SourceError as e:
+        _say(f"❌ {e}")
+        return 1
+    if not row:
+        _say(f"❌ {day} 没有 {symbol} 的数据。")
+        if day == dt.date.today().isoformat():
+            _say("   当天要等收盘后才发布；也可以显式给上一个交易日：--date YYYY-MM-DD")
+        return 1
+
+    _say(f"{row['date']}  {row['symbol']}  {row.get('name') or '—'}")
+    _say(f"  收盘 {_m(row.get('close'))}    涨跌幅 {_pct(row.get('pct_chg'))}")
+    _say(f"  PE(TTM) {_m(row.get('pe_ttm'))}    PB(MRQ) {_m(row.get('pb_mrq'))}    "
+         f"PS(TTM) {_m(row.get('ps_ttm'))}")
+    _say(f"  总市值 {_money(row.get('total_mv'))}    流通市值 {_money(row.get('circ_mv'))}")
+
+    shared = store.connect(config.shared_db(args.shared_db))
+    store.ensure(shared, "shared")
+    results = None
+    try:
+        try:
+            store.write_symbol(shared, day, row)
+        except Exception as e:                   # noqa: BLE001 - 原始库写失败必须报错
+            _say(f"❌ 原始库写入失败：{e}")
+            return 1
+        _say(f"  → {config.shared_db(args.shared_db)} · price 1 行（只改这一只）")
+        try:
+            results = store.connect(config.results_db(args.results_db))
+            store.ensure(results, "results")
+            store.write_symbol(results, day, row, with_stat=True)
+        except Exception as e:                   # noqa: BLE001 - 原件已落库，复制失败不整体失败
+            store.warn(f"结果库写入失败（{e}）；原始库已有这一只")
+        else:
+            _say(f"  → {config.results_db(args.results_db)} · price 1 行 + "
+                 "price_stat（按当天已有全部行重算）")
+    finally:
+        shared.close()
+        if results is not None:
+            results.close()
+    return 0
+
+
 # ---------------------------------------------------------------- 只重算摘要
 
 def _do_restat(args) -> int:
@@ -273,6 +354,7 @@ def _parser() -> argparse.ArgumentParser:
   python3 -m stock_price_show                        # 今天（过了 15:05）或上一交易日
   python3 -m stock_price_show --date 2026-11-16
   python3 -m stock_price_show --date 2026-11-16 --force
+  python3 -m stock_price_show --code 002096 --date 2026-11-03   # 只补这一只
   python3 -m stock_price_show --restat               # 只按结果库的 price 重算摘要
   python3 -m stock_price_show --sync                 # 原始库 → 结果库，不联网
   python3 -m stock_price_show --prune-keep 30
@@ -280,6 +362,9 @@ def _parser() -> argparse.ArgumentParser:
 ⚠️ 这是**收盘快照**：上游当天收盘后才发布，盘中跑「今天」会报「没有这一天的数据」。""")
     p.add_argument("--date", default=None,
                    help="交易日 YYYY-MM-DD；不给就用交易日历定（今天过 15:05 才算今天）")
+    p.add_argument("--code", default=None,
+                   help="只抓一只股票（002096 / sz002096 / 002096.SZ）并 upsert 到 "
+                        "price；保留当天其它行，重算 price_stat")
     p.add_argument("--force", action="store_true",
                    help="忽略库里已有的那天，重新取一次（整天整份替换）")
     p.add_argument("--restat", action="store_true",

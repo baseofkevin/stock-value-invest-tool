@@ -64,6 +64,19 @@ def _exit_code(argv: list[str]) -> int:
         return doctor.main(argv)
 
 
+def _cal_file(tmp: Path, days: list[str], name: str = "cal.json") -> Path:
+    """把一份日历写成真文件。
+
+    跨度告警（`cal.short`）只能靠**真文件**触发——默认日历 2026-11-17 起是 12 年那份，
+    不再短，所以"短日历是 WARN 不是 ERROR"这条必须自己造一份短的来测。
+    """
+    p = Path(tmp) / name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"days": days, "span": days[0], "end": days[-1]}),
+                 encoding="utf-8")
+    return p
+
+
 def mkcfg(tmp: Path, *, calendar: Path | None = None) -> Config:
     c = Config()
     c.db_path = tmp / "shared.db"
@@ -130,9 +143,16 @@ def test_healthy(tmp: Path) -> None:
           str(rep.facts.get("tables")))
     check("正常库里没有不变式告警",
           not any(c.startswith("inv.") for c in codes(rep)), str(sorted(codes(rep))))
-    # 4 年日历必然触发 cal.short（它就是本机现状），这是 WARN 不是 ERROR
-    check("短日历报 WARN 而不是 ERROR", "cal.short" in codes(rep) and not rep.errors,
-          str(sorted(codes(rep))))
+    # 日历跨度：短的是 WARN（不拦启动），长的不该报。
+    # 2026-11-17 改：默认日历换成项目内 12 年那份后，`mkcfg` 默认指向它，不再触发 cal.short——
+    # 所以这里显式造一份"4 年日历"来测 WARN 分支，同时补一条"长日历不报"的正向断言。
+    long_days = TradingCalendar.load(DEFAULT_CALENDAR).days
+    short_path = _cal_file(tmp, [d for d in long_days if d >= "2022-11-14"], "cal_4y.json")
+    srep = doctor.run(mkcfg(tmp, calendar=short_path))
+    check("短日历报 WARN 而不是 ERROR",
+          "cal.short" in codes(srep) and not srep.errors, str(sorted(codes(srep))))
+    check("长日历（默认那份 12 年）不报 cal.short",
+          "cal.short" not in codes(rep), str(sorted(codes(rep))))
     check("退出码 0", _exit_code(["--db", str(cfg.db_path),
                                  "--calendar", str(cfg.calendar_path)]) == 0)
 

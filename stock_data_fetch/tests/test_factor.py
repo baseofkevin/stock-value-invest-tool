@@ -31,7 +31,7 @@ sys.path.insert(0, str(PROJECT))
 
 from stock_data_fetch import db, factor as F                        # noqa: E402
 from stock_data_fetch.calendar import TradingCalendar               # noqa: E402
-from stock_data_fetch.config import DEFAULT_SCHEMA                  # noqa: E402
+from stock_data_fetch.config import DEFAULT_CALENDAR, DEFAULT_SCHEMA  # noqa: E402
 from stock_data_fetch.errors import FactorError, InsufficientDepth  # noqa: E402
 
 PASS = 0
@@ -338,9 +338,10 @@ def test_cache(cal: TradingCalendar, tmp: Path) -> None:
 def main() -> int:
     tmp = mkdtemp("stockhub-factor-")
     print(f"临时目录：{tmp}")
-    cal = TradingCalendar.load(Path(os.environ.get("STOCKHUB_CALENDAR")
-        or Path.home() / "MyData" / "stock-kline-screen-tool"
-        / "database" / "trading_calendar.json"))
+    # 日历走 `config.DEFAULT_CALENDAR`（项目内 state/ 那份）：
+    # 原来这里硬编码 `~/MyData/stock-kline-screen-tool/...`，那个仓库 2026-11-15
+    # 改名后就不存在了，`STOCKHUB_CALENDAR` 没设时整组测试直接抛 HubNotReady。
+    cal = TradingCalendar.load(Path(os.environ.get("STOCKHUB_CALENDAR") or DEFAULT_CALENDAR))
 
     test_basics(cal, tmp)
     test_guards(cal, tmp)

@@ -69,12 +69,66 @@ def fetch_day(day: str, *, page_size: int | None = None, get=None) -> list[dict]
     `get` 只为测试注入（默认走 `_get`）。空列表表示"这一天上游没有数据"
     ——盘中查今天、非交易日、上游还没算完，都是这种情形，由调用方报错。
     """
+    return _fetch(day, page_size=page_size, get=get)
+
+
+def normalize_symbol(value: str | None) -> str:
+    """把用户输入的代码统一成 `sz002096` / `sh600519` / `bj920992`。
+
+    接受 `002096`、`sz002096`、`002096.SZ` 三种写法。认不出返回空串，
+    由调用方报错——不要猜一个市场前缀去打上游。
+    """
+    s = str(value or "").strip().lower()
+    if not s:
+        return ""
+    if "." in s:
+        code, _, market = s.rpartition(".")
+        market = market.lower()
+        if market in ("sh", "sz", "bj") and len(code) == 6 and code.isdigit():
+            return market + code
+        return ""
+    if s[:2] in ("sh", "sz", "bj"):
+        body = s[2:]
+        return s if len(body) == 6 and body.isdigit() else ""
+    if len(s) != 6 or not s.isdigit():
+        return ""
+    if s.startswith("92") or s.startswith(("4", "8")):
+        return "bj" + s
+    if s.startswith(("6", "9")):
+        return "sh" + s
+    if s.startswith(("0", "3")):
+        return "sz" + s
+    return ""
+
+
+def fetch_symbol(day: str, code: str, *, page_size: int | None = None,
+                 get=None) -> dict | None:
+    """取一只票在 `day` 的估值横截面，返回一行 `price` 数据或 `None`。
+
+    这个函数只负责**取数和解析**，不落库；CLI 拿到行后调用 `store.write_symbol`
+    做单只 upsert（保留当天其它行），补全市场仍用 `--date` 跑整天。
+    """
+    symbol = normalize_symbol(code)
+    if not symbol:
+        raise SourceError(f"股票代码认不出：{code!r}（要 002096 / sz002096 / 002096.SZ）")
+    rows = _fetch(day, page_size=page_size or 50, symbol=symbol, get=get)
+    for row in rows:
+        if row.get("symbol") == symbol:
+            return row
+    return None
+
+
+def _fetch(day: str, *, page_size: int | None = None, symbol: str | None = None,
+           get=None) -> list[dict]:
+    """抓横截面；`symbol` 非空时附加 `SECUCODE` 过滤，只取这一只。"""
     size = int(page_size or config.PAGE_SIZE)
     raw: list[dict] = []
     page = 1
     reader = get or _get
-    while page <= config.MAX_PAGES:
-        body = reader(_url(day, page, size), referer=DATA_REFERER)
+    # 单只只翻一页；上游即使忽略 SECUCODE 过滤，也不会在这里无限翻全市场。
+    max_pages = 1 if symbol else config.MAX_PAGES
+    while page <= max_pages:
+        body = reader(_url(day, page, size, symbol=symbol), referer=DATA_REFERER)
         try:
             payload = json.loads(body)
         except ValueError as e:
@@ -94,7 +148,7 @@ def fetch_day(day: str, *, page_size: int | None = None, get=None) -> list[dict]
             break
         raw.extend(data)
         pages = int(result.get("pages") or 1)
-        if page >= min(pages, config.MAX_PAGES):
+        if page >= min(pages, max_pages):
             break
         page += 1
 
@@ -152,12 +206,18 @@ def _index_url(day: str) -> str:
     return INDEX_URL + "?" + urllib.parse.urlencode(params)
 
 
-def _url(day: str, page: int, size: int) -> str:
+def _url(day: str, page: int, size: int, *, symbol: str | None = None) -> str:
+    filter_expr = f"(TRADE_DATE='{day}')"
+    if symbol:
+        # symbol 已在 normalize_symbol 里校验过，这里只拼 SECUCODE。
+        # 这个接口的 filter 只认双引号包住带点的代码；用单引号会报
+        # `9501 参数预处理错误`，而用 `and` 连接会被静默忽略、返回全市场。
+        filter_expr += f'(SECUCODE="{symbol[2:].upper()}.{symbol[:2].upper()}")'
     params = {"reportName": "RPT_VALUEANALYSIS_DET", "columns": COLUMNS,
               "pageNumber": page, "pageSize": size,
               "sortColumns": "SECURITY_CODE", "sortTypes": "1",
               "source": "HSF10", "client": "PC",
-              "filter": f"(TRADE_DATE='{day}')"}
+              "filter": filter_expr}
     return DATA_URL + "?" + urllib.parse.urlencode(params)
 
 

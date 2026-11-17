@@ -141,23 +141,51 @@ def test_want(cal: TradingCalendar) -> None:
     # 估值：门槛与起点在 2026-11-14 都改过，这两条断言是那次改动的看门人。
     v = want.valuation(cal, end, years=10)
     check("valuation.end == target", v.end == end)
-    # 旧写法 `cal.on_or_after(day) or cal.days[0]` 会返回 2022-11-14（二分插入点 0），
+    # 旧写法 `cal.on_or_after(day) or cal.days[0]` 会返回日历首日（二分插入点 0），
     # 把"日历只有 4 年"伪装成"数据只有 4 年"，于是 480 周门槛永远过不了。
-    expect_start = (dt.date.fromisoformat(end) - dt.timedelta(days=365 * 10 + 3)).isoformat()
-    check("valuation 起点不被短日历夹取", v.start == expect_start,
-          f"{v.start} vs {expect_start}（日历首日 {cal.days[0]}）")
-    check("valuation 起点早于日历首日（证明确实没夹）", v.start < cal.days[0],
-          f"{v.start} vs {cal.days[0]}")
+    # 现在的语义分两种，两种都得成立（2026-11-17 起默认日历是 12 年那份）：
+    #   日历覆盖十年 → 起点对齐到"10 年整那天或之后的第一个交易日"；
+    #   日历更短     → 起点就用 10 年整那天，**原样保留**，不往首日上夹。
+    raw_start = (dt.date.fromisoformat(end) - dt.timedelta(days=365 * 10 + 3)).isoformat()
+    cal_first = cal.days[0]
+    if cal_first <= raw_start:
+        expect_start = cal.on_or_after(raw_start)
+        check("valuation 起点对齐到交易日（日历覆盖十年）", v.start == expect_start,
+              f"{v.start} vs {expect_start}（日历首日 {cal_first}）")
+    else:
+        expect_start = raw_start
+        check("valuation 起点不被短日历夹取", v.start == raw_start,
+              f"{v.start} vs {raw_start}（日历首日 {cal_first}）")
+    # 无论哪条分支，起点都该落在"10 年整"附近；被夹到日历首日会差出整整几年。
+    check("valuation 起点没被砍到日历首日",
+          v.start <= (dt.date.fromisoformat(raw_start) + dt.timedelta(days=7)).isoformat(),
+          f"{v.start} vs 日历首日 {cal_first}")
     check("valuation.points == 520", v.points == 520, str(v.points))
     check("valuation 默认门槛 430（上游最多 454 周，480 不可达）",
           v.min_points == 430, str(v.min_points))
     check("valuation.fp == freq=week", v.fp == "freq=week", v.fp)
 
-    # 日历够长时才对齐到交易日：给一份覆盖到 2016 年的日历，起点应当落在交易日上。
-    long_cal = TradingCalendar([expect_start, "2016-11-16", end], expect_start, end)
+    # 日历够长时才对齐到交易日：给一份"首日显著早于 10 年窗口"的日历（工作日即交易日），
+    # 起点应当落在交易日上，且不早于 10 年整那天。
+    # 2026-11-17 改：原来用 `[expect_start, "2016-11-16", end]` 三天构造，首日恰好等于
+    # 对齐结果，`cal.days[0] <= day` 不成立——走的仍是"短日历"分支，断言反而在考错重点。
+    long_days, _d = [], dt.date.fromisoformat(raw_start) - dt.timedelta(days=30)
+    while _d <= dt.date.fromisoformat(end):
+        if _d.weekday() < 5:
+            long_days.append(_d.isoformat())
+        _d += dt.timedelta(days=1)
+    long_cal = TradingCalendar(long_days, long_days[0], end)
     v2 = want.valuation(long_cal, end, years=10)
     check("日历够长 → 起点对齐到交易日", long_cal.is_trading(v2.start), str(v2.start))
+    check("日历够长 → 起点不早于 10 年整那天", v2.start >= raw_start,
+          f"{v2.start} vs {raw_start}")
     check("日历够长 → 起点仍在日历内", v2.start >= long_cal.days[0], str(v2.start))
+
+    # 反过来：日历首日比 10 年窗口晚（真实场景是只有 4 年那份日历），起点必须原样保留。
+    short_cal = TradingCalendar(["2022-11-14", "2022-11-15", end], "2022-11-14", end)
+    v3 = want.valuation(short_cal, end, years=10)
+    check("日历比 10 年窗口短 → 起点保留 10 年整那天（不夹到首日）", v3.start == raw_start,
+          f"{v3.start} vs {raw_start}（日历首日 {short_cal.days[0]}）")
 
     dv = want.dividend(k.start)
     check("dividend 无上界", dv.end is None)
@@ -450,7 +478,7 @@ def test_store(cal: TradingCalendar, tmp: Path) -> None:
     with db.tx(conn):
         C.touch_access(conn, sym, now=dt.datetime(2026, 11, 14, 14, 0))
     got = conn.execute("SELECT last_access_at FROM stock WHERE symbol=?", (sym,)).fetchone()[0]
-    check("touch_access 写了 last_access_at（GC 靠它）", got == "2026-11-14T14:00:00", str(got))
+    check("touch_access 写了 last_access_at（只留痕，股票级 GC 未实现）", got == "2026-11-14T14:00:00", str(got))
 
     # 不存在的域必须报错，而不是静默写空覆盖
     expect_raise("merge 对 quote 报错（要用 merge_point）", ValueError, C.merge,

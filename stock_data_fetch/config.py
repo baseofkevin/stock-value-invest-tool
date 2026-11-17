@@ -180,7 +180,7 @@ HUB_ROOT = PKG.parent
 """项目根（`stock-value-invest-tool/`）。
 
 **从包的物理位置推导，不写死 `~/MyData/xxx`**：2026-11-15 项目从
-`stock-value-invest-tool` 改名成 `stock-value-invest-tool`，旧写法让两处路径当场失效，
+`stock-kline-screen-tool` 改名成 `stock-value-invest-tool`，旧写法让两处路径当场失效，
 改了名就跑不起来。推导出来的路径会跟着目录走，改名/换机器/软链都不受影响。
 """
 
@@ -195,24 +195,29 @@ DEFAULT_STATE = HUB_ROOT / "state"
 
 CALENDAR_NAME = "trading_calendar.json"
 
-DEFAULT_CALENDAR = (Path.home() / "MyData" / "stock-kline-screen-tool"
-                    / "database" / "trading_calendar.json")
-"""兜底日历：kline-screen 自带的那份，**只有 4 年**。
+DEFAULT_CALENDAR = DEFAULT_STATE / CALENDAR_NAME
+"""默认日历：项目内 `state/trading_calendar.json`（`build_calendar.py` 生成，12 年）。
 
-4 年对 kline-screen 的 300 根够用，对估值（要 10 年）不够。所以 hub 自己生成一份
-长日历（`build_calendar.py`）放 `state/`，优先用它。保留这条兜底路径是为了
-"新环境还没生成日历时四个工具照样能起"——只是会退回 4 年深度。
+**2026-11-17 改**：原来指向 `~/MyData/stock-kline-screen-tool/database/trading_calendar.json`
+（kline-screen 时代那份 4 年日历）做"新环境兜底"。那个目录已经不存在了，
+于是所有**直接构造 `Config()`** 的路径——首当其冲是六个测试文件——都在
+`TradingCalendar.load()` 抛 `HubNotReady`，`python3 -m stock_data_fetch.tests` 整体报错，
+而日常运行不受影响（`Config.from_env()` 走 `resolve_calendar()`，本来就用这份）。
+保持"路径可从代码推导"的同一原则：跟着 `HUB_ROOT` 走，不依赖别的仓库是否还在。
+文件不存在时给的是明确的一句「交易日历不存在… 先跑 build_calendar」，
+不是悄悄退回 4 年深度——4 年会让估值必然 `InsufficientDepth`（§6.6）。
 """
 
 DEFAULT_SCHEMA = PKG / "schema.sql"
 
 
 def resolve_calendar(state_dir: Path | None = None) -> Path:
-    """优先 hub 自己生成的长日历，没有就用 kline-screen 的 4 年那份。
+    """`state_dir` 下有日历就用它，否则用项目内默认那份（`DEFAULT_CALENDAR`）。
 
-    **只在 `Config.from_env()` 里调用**，不放进 `preflight()`——测试直接构造
-    `Config()` 时应当拿到确定的 `DEFAULT_CALENDAR`，不然结果取决于机器上有没有
-    生成过日历文件，测试会变得不可复现。
+    只在 `Config.from_env()` 里调用，不放进 `preflight()`——测试直接构造
+    `Config()` 时应当拿到确定的路径，不然结果取决于机器上有没有生成过日历文件，
+    测试会变得不可复现。`STOCKHUB_STATE` 指向别处（调试/临时库）时，
+    那个目录里没日历就退回项目内这份，不至于因为换目录就没有日历可用。
     """
     own = Path(state_dir or DEFAULT_STATE) / CALENDAR_NAME
     return own if own.exists() else DEFAULT_CALENDAR

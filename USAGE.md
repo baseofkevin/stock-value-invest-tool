@@ -23,15 +23,16 @@
 | 拿自己的名单跑顶部 | `./run.py top --csv 名单.csv --date X` | `X` |
 | 忽略库里的结论重算 | 批量加 `--force`（top 用 `--refresh`） | 同上 |
 | 看结果 | `./run.py web` | — |
-| 拿全市场价格 + PE/PB/PS | `./run.py get-price --date 2026-11-17` | `2026-11-17`（**收盘后**才有） |
-| 重算那天的冷热摘要（**不联网**） | `./run.py get-price --restat`（加 `--date X` 只算一天） | — |
+| 拿全市场价格 + PE/PB/PS | `./run.py price --date 2026-11-17` | `2026-11-17`（**收盘后**才有） |
+| 单只股票补某天价格 | `./run.py price --code 002096 --date 2026-11-03` | `2026-11-03` |
+| 重算那天的冷热摘要（**不联网**） | `./run.py price --restat`（加 `--date X` 只算一天） | — |
 | 看全市场最热 / 最冷的时点 | `./run.py web` → 导航「冷热时点」 | — |
 | 备份库 | `./run.py backup` | — |
 
-`get-price` 写两个库：`shared.db.price` + `index_price` 是原件，`results.db` 里的同名表
+`price` 写两个库：`shared.db.price` + `index_price` 是原件，`results.db` 里的同名表
 是看板读的复制品；`results.db.price_stat`（每日涨跌家数 / 涨跌停 / 估值中位数）与价格
 同事务写入，沪深300 单独存 `index_price`。
-复制不联网，失败后可以 `./run.py get-price --sync` 补（或直接重跑 `get-price`，
+复制不联网，失败后可以 `./run.py price --sync` 补（或直接重跑 `price`，
 库里已有那天时只补复制、不重打上游）。
 
 裸跑 `./run.py` **只打印帮助，什么都不跑**（全流程三十多分钟，防误触）。
@@ -120,15 +121,16 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ```
 
 ```
-1) 全流程
-2) 只跑选股
-3) 周期弹性   ← 问代码：回车=批量跑当天名单，填代码=只跑那一只
-4) 质量初筛   ← 同上
-5) 顶部判断   ← 问代码：回车=用当天选股批量，填代码=单只/多只
-0) 退出
+  1) 全流程：日历 → 选股 → 周期弹性 → 质量初筛 → 顶部判断 → 看板  ← 每周五盘后
+  2) 只跑选股            stock_kline_screen
+  3) 周期弹性            stock_cycle_elastic     （回车=批量，或填单只代码）
+  4) 质量初筛            stock_quality_screen    （回车=批量，或填单只代码）
+  5) 顶部判断            stock_judge_top         （单只/多只；回车=当天选股批量）
+  6) 全市场价格/估值     price               （全市场 价/PE/PB/PS + 沪深300，收盘后跑）
+  0) 退出
 ```
 
-每一步都会先问「基准日（回车=自动）」。
+选完序号会再问一次「基准日（回车=自动）」；第 3/4/5 项还会再问股票代码（**回车 = 批量跑当天的选股名单**）。
 
 ### C. 只有选股，要补下游三格（2026-11-06 那种情况）
 
@@ -190,7 +192,8 @@ cd /home/kevin/MyData/stock-value-invest-tool
   **`--date` 在这里不生效**，别拿它当回溯。只有 `top` 单只真的用 `--date`。
   想按历史某天出报告：走批量（`--csv` / `--from-select`）。
 - 单只模式的输出是**整份报告直接打在屏幕上**（这是唯一不画进度条、不打进日志的路径）。
-- 单只结果 `kind='single'`，不进批次统计，但会留在个股页的历次记录里。
+- 单只结果 `kind='single'`，不进批次统计。个股页只摆**最近一次**那一份（批量或单只都算，
+  取 `run.id` 最大的那条）；想看这只票被批量算过、又被单只重算过几次，走批次页或对应工具页。
 
 ### F. 我自己有一份名单（持仓、自选、别人给的）
 
@@ -323,6 +326,24 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 | `--date X` | 真基准日（单只、批量都生效） |
 | `--workers N` `--refresh` | 并发 / 重取并重算 |
 
+### `price`（全市场价格 / 估值快照，独立工具 `stock_price_show`）
+
+| 参数 | 说明 |
+|---|---|
+| `--date X` | 基准日；不给就按「今天过了 15:05」或上一交易日 |
+| `--code C` | 只抓一只股票（`002096` / `sz002096` / `002096.SZ`），upsert 到两个库；不删当天其它行 |
+| `--force` | 忽略库里已有那一天，重取整天（整天整份替换） |
+| `--restat` | **不联网**：只按结果库已有 `price` 重算每日摘要（`price_stat`） |
+| `--sync` | **不联网**：`shared.db.price` → `results.db.price` 补复制 |
+| `--prune-keep N` | 取完顺手删 N 天之前的 `price` 行（默认 0 = 不清） |
+| `-v` | 全量输出 |
+
+一天一份、一股一行（全市场约 5,500 只，含北交所），**约 6 个上游请求**。
+字段：收盘价 / 涨跌幅 / PE(TTM) / PB(MRQ) / PS(TTM) / 总市值 / 流通市值。
+单只补数示例：`./run.py price --code 002096 --date 2026-11-03`；它只改这一只，
+`price_stat` 按当天已有全部行重算，**不能**和 `--force` / `--prune-keep` 混用。
+**盘中跑「今天」会失败**——它取的是收盘快照，上游收盘后才发布。
+
 ### `web` / `backup` / `menu`
 
 `web --port --host --debug/--no-debug`（默认开调试，模板自动重载）；`backup --dir --keep --only --list`；`menu` 无参数（也不接受）。
@@ -334,12 +355,20 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 | 码 | 含义 | `all` 里会怎样 |
 |---|---|---|
 | 0 | 成功 | 继续下一步 |
-| 1 | 有票失败（但已写入一部分） | **继续**，最后汇总里标 ⚠️ |
-| 2 | 用法错误（日期不在日历、名单为空、参数冲突） | 停 |
+| 1 | 有票失败（但已写入一部分） | 继续，最后汇总标 ⚠️ |
+| 2 | 用法错误：没有那天的选股名单、参数冲突、裸跑没给子命令 | 停 |
 | 3 | 选股 0 只（交接处拦下） | 停 |
+| 4 | 日期定不下来：`--date` 不在交易日历 / 没有日历 / 日历早于今天 | 第 0 步就停，任何取数都没发生 |
 | 130 | 用户 Ctrl-C | 停，已算完的已落库 |
 
 想改成"任何失败都停"：`--strict`。
+
+> 4 是 2026-11-17 从 1 里拆出来的。这类错 **改参数就能解决**（换一天，或先跑
+> `build_calendar`），和"上游缺数据、过一会儿再跑也许就好"的 1 不是一回事；
+> 混在一个码里时，`./run.py all && 下一步` 会以为"跑了一半"，其实一步都没跑。
+> 现在不用翻日志判断：`rc=4` 就是日期问题。
+>
+> 屏幕上的表现不变，仍然在任何取数之前打印「错误：X 不在交易日历里」。
 
 ---
 
@@ -353,6 +382,8 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 | `select --date` 报"不是交易日" | 给了周末/节假日 | 换成最近交易日，或先 `build_calendar` |
 | 产出了上一周的旧报告 | 日历没更新，`hub.target` 回落到上周边 | `python3 -m stock_data_fetch.build_calendar` |
 | 盘中跑，结论不对 | 15:05 前用的是半日数据 | 等收盘后再跑；补历史可用 `--date 上一交易日`，当日数据仍要等收盘 |
+| `price` 盘中报"上游没有这一天的数据" | 它取的是**收盘快照**，上游收盘后才发布 | 收盘后再跑；或显式 `--date 上一个交易日` |
+| `price` 跑完了但看板「冷热时点」没更新 | 只写了原件，复制品没同步 | `./run.py price --sync`（不联网），或 `--restat` 重算摘要 |
 | 下游报"没有 X 的选股名单" | 那天选股没跑，或 --date 与选股日不一致 | `./run.py select --date X` 先跑选股 |
 | 单只带 `--date`，报告却是今天的 | `run.py` 吃掉 `--date`，工具内部自己取最新交易日 | 要历史就走批量（`--csv` / `--from-select`） |
 | `ModuleNotFoundError: config` | 直接 `python -m stock_cycle_elastic.cycle_report` 了 | 永远走 `./run.py`，它切好了 cwd |
@@ -383,6 +414,9 @@ cd /home/kevin/MyData/stock-value-invest-tool
 
 ./run.py quality --csv 名单.csv --workers 8    # 自备名单
 ./run.py top     --csv 名单.csv --date 2026-11-13
+
+./run.py price                         # 全市场收盘快照（价 / PE / PB / PS），收盘后跑
+./run.py price --restat                # 只重算冷热摘要，不联网
 
 ./run.py web                               # 看板 http://127.0.0.1:5000
 ./run.py backup                            # 备份两个库

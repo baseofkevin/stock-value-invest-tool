@@ -1087,7 +1087,9 @@ def _write_profile(conn, symbol: str, rows: list[dict], src: str) -> None:
       quality 靠 `industry` 判"是不是同一个行业"、靠 `business` 渲染报告的
       「生意本身」一节，抹一次就等于这些结论全部降级。上游偶发少给一个字段
       是常事，这种"降级"完全不可见，所以在这里挡住；
-    - **不碰 `last_access_at`**：那是 GC 的存活标记，被"刷新元数据"重置等于永不回收。
+    - **不碰 `last_access_at`**：它记的是"这只票最后一次被 `ensure()` 读到"，
+      被"刷新元数据"重置就等于把访问时间刷成假的新值。股票级 GC 目前还没实现
+      （见 `stock_data_fetch/README.md` §10），所以这条暂时只是"别把数据写脏"。
     """
     stamp = _now()
     for r in rows:

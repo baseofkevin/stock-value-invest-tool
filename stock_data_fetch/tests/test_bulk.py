@@ -10,7 +10,8 @@
 2026-11-15 实测后果：日增量该回 4304 行，实际请求 1,291,200 行（300 倍），
 一次批量就把上游配额桶打穿，4304 只要跑 50–75 分钟。本文件把那三条语义钉住：
 
-1. 只缺最后一天 → 只请求那一天（`start = 覆盖末端 + 1 天`），不是整段；
+1. 只缺最后一天 → 只请求那一天（`start = 覆盖末端之后的下一个交易日`；
+   日历末端不够时退回自然日 +1，见 `coverage._next_trading`），不是整段；
 2. 完全没有覆盖 → 才整段取；
 3. 批量里大面积丢码 → 拆半再取（原版 `_kline_fetch` 的做法），而不是整批重试。
 
@@ -120,9 +121,13 @@ def main() -> int:
     conn = db.connect(db_path)
     cal = TradingCalendar.load(DEFAULT_CALENDAR)
 
-    end = cal.days[-1]                          # 2026-11-13，日历末端
+    # 锚点必须固定在**日历内部**，不能用 `cal.days[-1]`。
+    # 2026-11-17 改：默认日历已由 `build_calendar.py` 生成到当天（末端 2026-11-17），
+    # 旧写法 `end = cal.days[-1]` 会把锚点推到 11-17——比下面的 horizon(11-16) 还晚，
+    # 于是用例 1 变成"已命中、零请求"，`rows.calls[0]` 直接 IndexError。
+    end = "2026-11-13"                          # 周五，日历内部的固定锚点
     need = want.kline(cal, end, bars=300, min_bars=250)
-    horizon = "2026-11-16"                      # 日历之后的下一交易日（人为越过末端）
+    horizon = "2026-11-16"                      # 下一交易日（人为越过覆盖末端）
 
     # ---------------------------------------------------------------- 用例 1
     print("\n用例 1：只缺最后一天 → 只请求那一天")
@@ -142,7 +147,12 @@ def main() -> int:
 
     check("确实取了一次", len(rows.calls) == 1, str(len(rows.calls)))
     codes, used = rows.calls[0]
-    check("请求的是增量段（起点=覆盖末端+1天）", used.start == "2026-11-14", str(used.start))
+    # 起点 = 覆盖末端（2026-11-13 周五）之后的**下一个交易日** 11-16。
+    # 2026-11-17 改：旧断言写死 "2026-11-14"，那是 `_next_trading()` 的**退路**——
+    # 当时日历末端正好是 11-13，`cal.on_or_after("2026-11-14")` 返回 None 才退回自然日 +1。
+    # 日历现在覆盖到 11-17，对齐到交易日 11-16 才是主线行为（也是更省的请求）。
+    check("请求的是增量段（起点=覆盖末端之后的下一个交易日）", used.start == "2026-11-16",
+          str(used.start))
     check("请求段终点=need.end", used.end == horizon, str(used.end))
     check("配额估算按增量算（points ≤ 3，而不是 300）", int(used.points) <= 3,
           str(used.points))

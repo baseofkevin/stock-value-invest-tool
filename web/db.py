@@ -15,7 +15,10 @@
    看板默认停在最新批次，也能往上翻历史批次。批次只统计 `kind='batch'`
    的运行，单只随手的结论不混进周五那一批。
 3. **单只 = `kind='single'`**。同一只票可能在不同时间被跑过很多次，
-   个股页按"跑的时间"逐条列出来，不退化成"只留最后一次"。
+   个股页**只摆最近一份**（`symbol_row()`，取 `run.id` 最大的那条）。
+   原来还有一张"历次结果"时间线（`symbol_timeline()` + `symbol_history()`
+   + `_brief()`），2026-11-15 页面去掉后没有任何调用者，2026-11-17 一并删掉——
+   留着只会让下一个读代码的人以为页面还有这一块。
 4. **payload 是任意 JSON**：工具加字段不必改库表，网站按需读取。
    读不到就给 None，页面显示 `—`，不报错。
 """
@@ -131,7 +134,7 @@ def moats(db: str | Path | None = None) -> dict[str, str]:
 #
 # 三条与 `moats()` 一致的约定：
 # 1. 只读（`mode=ro`），打不开就返回 None，页面降级成"还没有数据"而不是 500；
-# 2. 表可能不存在（`get-price` 还没跑过）：所有查询都先探表，缺就返回空；
+# 2. 表可能不存在（`price` 还没跑过）：所有查询都先探表，缺就返回空；
 # 3. **排序字段走白名单**，绝不把 `?sort=` 拼进 SQL。
 
 #: `?sort=` → (列名, 页面上的中文)。顺序就是页面上按钮的顺序。
@@ -384,7 +387,7 @@ def price_page(*, date: str | None = None, q: str = "", sort: str = "pct",
 
     | shape | 什么时候 | 页面上是 |
     |---|---|---|
-    | `empty` | 结果库没有 price 表 / 一行都没有 | 一句"先跑 get-price" |
+    | `empty` | 结果库没有 price 表 / 一行都没有 | 一句"先跑 price" |
     | `no_match` | 搜索没命中 | 搜索框 + 一句"没找到" |
     | `pick` | 搜索命中多只 | 候选清单（点一只看历史） |
     | `history` | 搜索唯一命中 | 这只票的区间曲线 + 全部时点 |
@@ -679,7 +682,7 @@ def report_html(row: dict | None) -> str:
 
 
 def row_of_run(conn, tool: str, run_id: int, symbol: str) -> dict | None:
-    """指定那一次运行里这只票的结果（"历次结果"里点进来的那个时间点）。"""
+    """指定那一次运行里这只票的结果（`?run=<id>` 定向到某个时间点）。"""
     table = TOOLS[tool][0]
     row = conn.execute(
         f"select t.*, r.id as run_id, r.target_date, r.started_at, "
@@ -773,95 +776,6 @@ def symbol_row(conn, tool: str, symbol: str) -> dict | None:
         return None
     out = _load(row)
     out["kind_label"] = KIND_LABEL.get(out.get("kind") or KIND_BATCH, out.get("kind"))
-    return out
-
-
-def symbol_history(conn, tool: str, symbol: str) -> list[dict]:
-    """这只票在该工具上的历次结果（旧→新），带这次运行的时间与来源。
-
-    同一只票可能被"周五批量"算过、又被"周三单只"重算过：两条都留着，
-    页面上按时间排开，否则"我刚刚跑的为什么没生效"永远说不清。
-    """
-    table = TOOLS[tool][0]
-    rows = conn.execute(
-        f"select t.*, r.id as run_id, r.target_date, r.started_at, "
-        f"{_kind_expr(conn)} as kind "
-        f"from {table} t join run r on r.id=t.run_id "
-        "where t.symbol=? order by r.id", (symbol,)).fetchall()
-    out = []
-    for row in rows:
-        d = _load(row)
-        d["kind"] = d.get("kind") or KIND_BATCH
-        d["kind_label"] = KIND_LABEL.get(d["kind"], d["kind"])
-        # 只留"有没有原版报告"，不解压：历次结果表只需知道能不能点开
-        d["report_html"] = bool((inner(d) or {}).get("report_html"))
-        out.append(d)
-    return out
-
-
-def symbol_histories(conn, symbol: str) -> dict[str, list[dict]]:
-    return {t: symbol_history(conn, t, symbol) for t in ORDER}
-
-
-def _brief(tool: str, row: dict) -> str:
-    """一行结论摘要（个股页的时间线用）。认不出的字段给 —，不抛。"""
-    def n(key, digits=1):
-        v = row.get(key)
-        if v is None:
-            return "—"
-        try:
-            return f"{float(v):.{digits}f}"
-        except (TypeError, ValueError):
-            return str(v)
-
-    if tool == "select":
-        stars = row.get("stars") or ""
-        return f"入选 · 换手分位 {n('pool_turnover_rank')} {stars}".strip()
-    if tool == "cycle":
-        kind = "周期股" if row.get("is_cycle") else "非周期"
-        ela = {"strong": "强", "weak": "弱", "unstable": "不稳定"}.get(
-            row.get("elastic_label") or "", row.get("elastic_label") or "—")
-        pos = {"low": "低位", "high": "高位", "neutral": "中位",
-               "na": "不适用"}.get(row.get("position_label") or "",
-                                   row.get("position_label") or "—")
-        return f"{kind} · 弹性 {ela} · 产能 {pos}"
-    if tool == "quality":
-        if row.get("q") is None and row.get("v") is None:
-            # 早期从 HTML 回读的那几批只有文字，没有结构化字段
-            return "（旧记录：只有报告，没有 Q/V）"
-        return f"Q {n('q')} / V {n('v')} · {row.get('conclusion') or '—'}"
-    if tool == "top":
-        gap = row.get("pos250")
-        gap = f"{float(gap) * 100:+.1f}%" if gap is not None else "—"
-        return (f"距高点 {gap} · 动量 {row.get('momentum_state') or '—'}"
-                f" · 换手 {row.get('turnover_state') or '—'}")
-    return ""
-
-
-def symbol_timeline(conn, symbol: str) -> list[dict]:
-    """这只票在四个工具上的全部运行记录，**按跑的先后倒序**。
-
-    同一只票可能周五批量算过、周一单只又算过：这两条都要出现，
-    而且"什么时候跑的 / 属于哪个批次 / 批量还是单只"要写在同一行上，
-    否则没法解释"为什么结论和周五那批不一样"。
-    """
-    out = []
-    for tool in ORDER:
-        for row in symbol_history(conn, tool, symbol):
-            out.append({
-                "tool": tool, "tool_label": TOOLS[tool][1], "href": TOOLS[tool][3],
-                "run_id": row.get("run_id"),
-                "started_at": row.get("started_at"),
-                "target_date": row.get("target_date"),
-                "kind": row.get("kind"),
-                "kind_label": row.get("kind_label"),
-                "brief": _brief(tool, row),
-                # 这一条记录自己的原版报告（有就能点开，没有就只是没有）
-                "report": f"/stock/{symbol}/report/{tool}?run={row.get('run_id')}"
-                          if row.get("report_html") else "",
-            })
-    out.sort(key=lambda x: (x.get("started_at") or "", x.get("run_id") or 0),
-             reverse=True)
     return out
 
 

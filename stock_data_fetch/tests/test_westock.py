@@ -667,7 +667,7 @@ def test_writers(tmp: Path) -> None:
     st = dict(conn.execute("SELECT * FROM stock WHERE symbol=?", (SYM,)).fetchone())
     check("这次没给行业 → 保留旧行业", st["industry"] == "食品饮料", str(st["industry"]))
     check("这次没给上市日 → 保留旧上市日", st["list_date"] == "2001-08-27", str(st["list_date"]))
-    check("刷新元数据不重置 last_access_at（GC 靠它）",
+    check("刷新元数据不重置 last_access_at（它记的是访问时间，不是元数据时间）",
           st["last_access_at"] == "2020-01-01T00:00:00", str(st["last_access_at"]))
 
     # 行情 / 快照
@@ -1016,7 +1016,7 @@ def test_ensure_points(tmp: Path) -> None:
 
 
 def test_valuation_depth(tmp: Path) -> None:
-    section("7b. 估值深度：按 10 年去取，门槛 430 周（日历只有 4 年也不许夹）")
+    section("7b. 估值深度：按 10 年整去取，门槛 430 周（起点对齐交易日，但不许夹到日历首日）")
 
     def dc_rows(since: str):
         """合成日频估值：`since` 起每个工作日一行。够 `_weekly` 折成周频。"""
@@ -1038,9 +1038,18 @@ def test_valuation_depth(tmp: Path) -> None:
     need = want.valuation(hub.cal, hub.target)
     with patch(em, "_datacenter", dc_rows("2016-11-18")):
         r = hub.ensure("valuation", SYM, need)
-    check("适配器收到的 stop_before 是 10 年前，不是日历首日",
-          dc_rows.stop_before == need.start and need.start < hub.cal.days[0],
-          f"{dc_rows.stop_before} / need.start={need.start} / 日历首日={hub.cal.days[0]}")
+    # `need.start` 是"10 年整那天 → 对齐到之后的第一个交易日"，不是日历首日。
+    # 2026-11-17 改：原来断言 `need.start < hub.cal.days[0]`（那时默认日历只有 4 年，
+    # 首日在 2022 年，条件恒真）。现在默认日历 12 年、首日 2014-11-07，条件反过来才是对的：
+    # 首日早于窗口，起点落在窗口边上——所以断言改成正向三条。
+    raw_start = (dt.date.fromisoformat(TARGET) - dt.timedelta(days=365 * 10 + 3)).isoformat()
+    check("适配器收到的 stop_before 就是 need.start（10 年窗口，不是日历首日）",
+          dc_rows.stop_before == need.start and need.start >= raw_start
+          and need.start <= (dt.date.fromisoformat(raw_start) + dt.timedelta(days=7)).isoformat(),
+          f"{dc_rows.stop_before} / need.start={need.start} / 10 年整={raw_start}"
+          f" / 日历首日={hub.cal.days[0]}")
+    check("10 年窗口确实比日历短（首日更早，才有'不许夹'这回事）",
+          hub.cal.days[0] < raw_start, f"{hub.cal.days[0]} vs {raw_start}")
     check("10 年日频折成 450+ 周", r.n >= 450, str(r.n))
     check("过了 430 周门槛（不再 InsufficientDepth）", r.n >= 430, str(r.n))
     hub.close()

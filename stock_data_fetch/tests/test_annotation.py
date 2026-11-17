@@ -111,8 +111,11 @@ def main() -> int:
     check("合法值原样保留", A.normalize_moat_type("独家资源") == "独家资源")
     rec5 = A.put(conn, "sh600096", moat_type="不存在的类型", evidence="x")
     check("put 时非法值也退化", rec5["moat_type"] == "无标注")
-    check("MOAT_TYPES 有 7 个值且含「无标注」",
-          len(MOAT_TYPES) == 7 and "无标注" in MOAT_TYPES, str(MOAT_TYPES))
+    # 6 类垄断 + 「无标注」（结论）+ 「待核实」（占位，2026-11-16 加）。
+    # 数量钉死是有意的：加一个枚举值就该有人来这里回答"它凭什么参与判定"。
+    check("MOAT_TYPES 有 8 个值，含「无标注」与「待核实」",
+          len(MOAT_TYPES) == 8 and {"无标注", "待核实"} <= set(MOAT_TYPES),
+          str(MOAT_TYPES))
     bad_date = False
     try:
         A.put(conn, "sh600096", verified="2026/13/45")

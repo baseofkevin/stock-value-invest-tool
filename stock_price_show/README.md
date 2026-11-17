@@ -10,9 +10,10 @@ python3 -m stock_price_show --date 2026-11-16 --force
 python3 -m stock_price_show --restat            # 只重算摘要，不联网
 python3 -m stock_price_show --sync              # 原始库 → 结果库，不联网
 python3 -m stock_price_show --prune-keep 30     # 顺手删 30 天前的
+python3 -m stock_price_show --code 002096 --date 2026-11-03  # 只补一只（不删当天其它行）
 ```
 
-日常用 `./run.py get-price`：多一层进度条、日志和交易日历校验，参数一一对应。
+日常用 `./run.py price`：多一层进度条、日志和交易日历校验，参数一一对应。
 
 ## 为什么单独一个包
 
@@ -38,6 +39,9 @@ python3 -m stock_price_show --prune-keep 30     # 顺手删 30 天前的
 **先写原件、再从原件复制**，而不是「抓一次写两个库」。复制这一步就是 `--sync`
 的那段代码，结果库缺一天永远能用同一个动作补上，而且不联网。抓取失败也不会
 影响两个库里已经存下来的历史。
+
+`--code` 是例外下的**单只 upsert**：只改 `(date, symbol)` 这一行，不执行整天替换，
+因此不会把同一天的其它股票删掉；结果库的 `price_stat` 会按当天已有全部行重算。
 
 | 库 | 表 | 粒度 |
 |---|---|---|

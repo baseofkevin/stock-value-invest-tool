@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS stock (
   is_financial INTEGER NOT NULL DEFAULT 0,        -- quality 用于切换估值口径
   list_date    TEXT,                              -- YYYY-MM-DD，判新股/次新
   updated_at   TEXT NOT NULL,
-  last_access_at TEXT                             -- 最近一次被 ensure() 读到；GC 用（§9）
+  last_access_at TEXT                             -- 最近一次被 ensure() 读到；**只写不读，股票级 GC 未实现**
 ) WITHOUT ROWID;
 
 -- ---------------------------------------------------------------- 日 K（域 kline）

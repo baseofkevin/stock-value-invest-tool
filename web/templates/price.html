@@ -21,7 +21,7 @@
 
 <div class="empty">
   结果库里还没有全市场行情：先跑
-  <code>./run.py get-price --date &lt;交易日&gt;</code>（该日收盘后才有数据）。
+  <code>./run.py price --date &lt;交易日&gt;</code>（该日收盘后才有数据）。
 </div>
 
 {% else %}
@@ -49,7 +49,7 @@
     {% if cur.updated_at %}
     · 更新 {{ cur.updated_at|clock }}
     {% else %}
-    · 摘要未生成（跑 <code>get-price --restat</code> 补，不联网）
+    · 摘要未生成（跑 <code>price --restat</code> 补，不联网）
     {% endif %}
   </span>
   {% endif %}
@@ -110,7 +110,7 @@
     <div class="s">{{ index.name or '沪深300' }} · {{ index.symbol[2:] }}.{{ index.symbol[:2]|upper }} · {{ cur_date }}</div>
     {% else %}
     <div class="v">—</div>
-    <div class="s">这一天还没有沪深300快照（重跑 get-price 补）</div>
+    <div class="s">这一天还没有沪深300快照（重跑 price 补）</div>
     {% endif %}
   </div>
 </div>
@@ -122,7 +122,7 @@
 
 <div class="empty">
   「{{ q }}」在 <code>price</code> 表里没有匹配的代码或名称。换个关键词试试，
-  或者这一天还没跑过 <code>get-price</code>。
+  或者这一天还没跑过 <code>price</code>。
 </div>
 
 {% elif shape == 'pick' %}
@@ -221,7 +221,7 @@
   {% elif hist_count == 1 %}
   <div class="empty">
     这只票在当前区间里只有 1 个时点，还画不出曲线。换一个更早/更晚的时点，
-    或者继续跑 <code>get-price</code> 攒数据。
+    或者继续跑 <code>price</code> 攒数据。
   </div>
   {% endif %}
 

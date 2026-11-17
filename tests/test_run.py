@@ -64,15 +64,26 @@ class DatePickTest(unittest.TestCase):
 
     def test_explicit_date_must_be_in_calendar(self) -> None:
         """显式给的日期不在日历里要报错，不许悄悄换成"最近的交易日"。"""
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(run.BadDate) as ctx:
             run.pick_date("2026-11-30", self.days)
+        self.assertIn("不在交易日历里", str(ctx.exception))
 
     def test_explicit_date_passthrough(self) -> None:
         self.assertEqual(run.pick_date("2026-11-18", self.days), "2026-11-18")
 
     def test_empty_calendar_errors(self) -> None:
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(run.BadDate):
             run.pick_date(None, [])
+
+    def test_bad_date_has_its_own_exit_code(self) -> None:
+        """日期错必须退 4，不能和"某步有票失败"的 1 混在一起。
+
+        原来走 `raise SystemExit(字符串)`，而带字符串的 SystemExit 解释器只退 1：
+        `./run.py all && ...` 于是分不清"日期敲错"和"上游缺数据"。
+        """
+        self.assertEqual(run.EXIT_BAD_DATE, 4)
+        self.assertEqual(run.BadDate.code, run.EXIT_BAD_DATE)
+        self.assertNotIn(run.EXIT_BAD_DATE, (1, 2, 3, 130))
 
 
 class SelectCountTest(unittest.TestCase):
@@ -352,8 +363,18 @@ class ParserTest(unittest.TestCase):
     def test_subcommands_exist(self) -> None:
         p = run.build_parser()
         for name in ("all", "weekly", "select", "cycle", "quality", "top",
-                     "backup", "web", "menu"):
+                     "price", "backup", "web", "menu"):
             self.assertIn(name, p._subparsers._group_actions[0].choices)
+
+    def test_price_accepts_single_code(self) -> None:
+        """`price --code` 要由 argparse 吃下，不能漏进 extra 变成子进程参数错。"""
+        a = run.build_parser().parse_args(
+            ["price", "--code", "002096", "--date", "2026-11-03"])
+        self.assertEqual(a.code, "002096")
+        self.assertEqual(a.date, "2026-11-03")
+        self.assertEqual(a.extra, [])
+        self.assertTrue(run.build_parser()
+                        .parse_args(["price", "--code", "sz002096"]).code)
 
     def test_calendar_is_not_a_subcommand(self) -> None:
         """日历不再单列：它只是全流程的第 0 步，单列只会让人不知道怎么用。

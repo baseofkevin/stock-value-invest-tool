@@ -104,6 +104,38 @@ def write_day(conn: sqlite3.Connection, day: str, rows: list[dict], *,
     return len(keep)
 
 
+def write_symbol(conn: sqlite3.Connection, day: str, row: dict, *,
+                 with_stat: bool = False) -> int:
+    """只 upsert 一只票，**不删当天其它行**；返回写入行数。
+
+    与 `write_day` 的"整天整份替换"刻意分开：全市场横截面仍然必须整天替换，
+    而单只补数只应该改这一只。否则 `price --code` 会把同一天已经存在的
+    5000 多只全删掉，只留下一只——这是最坏的静默数据损坏。
+
+    `with_stat=True` 时，用**写入后的当天全部行**重算摘要，保证
+    `price_stat` 与 `price` 仍然同事务、同口径。
+    """
+    if not row or str(row.get("date") or "") != day or not row.get("symbol"):
+        return 0
+    stamp = _now()
+    cols = schema.PRICE_COLUMNS
+    sql = (f"INSERT OR REPLACE INTO price({','.join(cols)}) "
+           f"VALUES({','.join('?' * len(cols))})")
+    with _tx(conn):
+        conn.execute(sql, (row["date"], row["symbol"], row.get("name"),
+                           row.get("close"), row.get("pct_chg"),
+                           row.get("pe_ttm"), row.get("pb_mrq"),
+                           row.get("ps_ttm"), row.get("total_mv"),
+                           row.get("circ_mv"), row.get("src"), stamp))
+        if with_stat:
+            rows = [dict(r) for r in conn.execute(
+                "SELECT date,symbol,name,close,pct_chg,pe_ttm,pb_mrq,ps_ttm,"
+                "       total_mv,circ_mv,src FROM price WHERE date=?", (day,))]
+            _upsert_stat(conn, stat.summarize(rows, src=row.get("src"),
+                                               updated_at=stamp))
+    return 1
+
+
 def write_index(conn: sqlite3.Connection, day: str, row: dict) -> int:
     """写 `day` 的指数行（目前只有沪深300），整天替换。**不传 row 就不删旧值。**
 

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -189,7 +190,8 @@ class IncrementalTest(unittest.TestCase):
     """结果库**只增不删**：每跑一次就是一条新的运行记录 + 一套新的结果行。
 
     看板要能回答"上周那批"和"这周那批"，所以旧结果绝不能被覆盖；
-    同一只票跑两次也要留两条痕（个股页的「历次结果」就靠这个）。
+    同一只票跑两次也要留两条痕——个股页虽然只摆最近一份，但 `?run=<id>`
+    要能定向回更早那一次，历史那几份就不能被盖掉。
     """
 
     def setUp(self):
@@ -286,5 +288,23 @@ class TopRowMappingTest(unittest.TestCase):
         self.assertIsNone(got["cycle_state"])
 
 
+def main() -> int:
+    """聚合器（`python3 -m stock_data_fetch.tests`）要的入口，返回 0/1。
+
+    **为什么不能只写 `unittest.main()`**（2026-11-17 修）：本文件是 unittest
+    风格，其余 12 个文件是自定义 `check()` 风格、各自有 `main() -> int`。
+    聚合器按 `hasattr(mod, "main")` 取返回值，没有就静默当通过——这 22 项
+    因此空转了整整两天，"全绿"只是没人碰过 `results.py`。
+    `unittest.main()` 自己会 `sys.exit()`，在聚合器里会把整个进程带走，
+    所以这里用 TestLoader + TextTestRunner 手动跑一遍，把结果折成返回值。
+    """
+    suite = unittest.TestLoader().loadTestsFromModule(sys.modules[__name__])
+    res = unittest.TextTestRunner(verbosity=1).run(suite)
+    bad = len(res.failures) + len(res.errors)
+    # 与其余 12 个文件打同一句话，聚合器的"总项数"才好数（`通过 N 项`）。
+    print(f"  通过 {res.testsRun - bad} 项，失败 {bad} 项")
+    return 0 if res.wasSuccessful() else 1
+
+
 if __name__ == "__main__":
-    unittest.main()
+    raise SystemExit(main())

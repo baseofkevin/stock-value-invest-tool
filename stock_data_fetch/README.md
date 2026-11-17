@@ -1,15 +1,17 @@
 # 共享数据层 · 总设计
 
 > 一个按需取数的本地 SQLite 数据层，给四个选股 / 评分工具共用一份数据。
+> （第五个包 `stock_price_show` 是**旁路**：它自己写 `shared.db.price`，不 import 本层，见 §10.1。）
 > 这份文件把原先六份分散的设计文档（`DESIGN.md`、`建议-共享取数层.md`、`SCHEMA-共享库.md`、
 > `SOURCES-数据源路由.md`、`CONTRACT-stock_data_fetch.md`、`讨论纪要-共享数据层.md`）**融合成一份**，
 > 按"问题 → 架构 → 数据 → 判定 → 节流 → 契约 → 进度"的顺序重排，去掉重复论证，保留全部结论与依据。
 > 那六份已封存进 `../archive/设计文档-20261114.tar.gz`（2026-11-14）。**代码注释里的
 > `CONTRACT §x` / `SCHEMA §x` / `SOURCES §x`（共 78 处）指的就是存档里的原文**，查的时候解包看。
 >
-> - 版本：2026-11-14
+> - 版本：2026-11-17（补 `scan` / `annotation` 两个域；`kline` 主源改 `westock`；保留深度 300 → 400）
 > - 代码：本目录（`stock_data_fetch/`）
-> - 状态：第 1–5 步已完成（**424 项测试全绿**，其中 4 项需手动联网），第 6 步待开始
+> - 状态：schema **v6 / 13 张表**；第 1–7 步全部完成。**909 项测试全绿**，13 个文件全部由
+>   `python3 -m stock_data_fetch.tests` 一次跑完；其中 4 项联网用例要 `STOCKHUB_LIVE=1` 才跑
 
 ---
 
@@ -44,7 +46,8 @@
 
 - ❌ 不做全量 hub（不预热全市场）。`ensure` 的语义就是"用到才取"。
 - ❌ 不做 daemon / 定时任务。数据在工具运行的那一刻按需补齐。
-- ❌ 不做数据库迁移脚本。版本不符直接拒绝启动，提示重建（数据全部可再生）。
+- ❌ 不做通用迁移框架。只登记**可重入**的那几步（纯新增表 / 加列 / 删索引 / 表重建），
+  其余版本不符直接拒绝启动、提示重建（数据全部可再生）。见 §3.5。
 - ❌ 不做并发取数。**单线程串行**（理由见 §5.6）。
 - ❌ 四个工具**一律不写库**（`last_access_at` 也不写，由数据层自己记）。
 
@@ -136,29 +139,85 @@ hub.ensure("kline", "sh600519", need)    ← 唯一会打上游的入口
 
 ### 3.2 表总览
 
-11 张表。R / W / S 三种标记决定了清理策略，必须分开写：
+**13 张表**（schema v6）。R / W / S 三种标记决定了清理策略，必须分开写：
 
 | 表 | 域 | 粒度 | 每只行数 | 可再生 | 清理 |
 |---|---|---|---|---|---|
 | `stock` | profile | 一股一行 | 1 | R | 跟股票走 |
-| `kline` | kline | 一股一日 | 300 | **R** | 滚动 300 根 |
+| `kline` | kline | 一股一日 | 400 | **R** | 滚动 400 根 |
 | `finance` | finance | 一股一期 | 43 | **W** | **不删** |
 | `finance_revision` | finance | 一股一期一字段 | 0～几条 | W | 不删 |
 | `dividend` | dividend | 一股一除权日 | 10–30 | **W** | **不删** |
-| `valuation` | valuation | 一股一周 | 520 | **R** | 修剪 > 10 年 |
+| `valuation` | valuation | 一股一周 | 520 | **R** | **不删**（体积占比 < 5%，见 §3.5） |
 | `quote` | quote | 一股一行 | 1 | **S** | 覆盖 |
-| `snapshot` | mainop/consensus/rating | 一股一域 | 3 | **S** | 覆盖 |
-| `coverage` | — | 一域一股一口径 | ~6 | 派生 | 跟股票走 |
+| `snapshot` | mainop/consensus/rating/gbalance/gcashflow | 一股一域 | 5 | **S** | 覆盖 |
+| `scan` | scan | 一交易日一市场 | —（一日约 5,100 行） | **S** | 滚动 30 天 |
+| `annotation` | annotation | 一股一 kind | 1 | W（人工） | 不删 |
+| `coverage` | — | 一域一股一口径 | ~6（`scan` 例外：一天一条） | 派生 | 跟股票走 |
 | `watermark` | — | 一域一范围 | — | 派生 | — |
 | `meta` | — | 键值 | — | — | — |
 
-**R / W / S**：R = 删了能重取；W = 上游窗口滚动，**删了就永久消失**；S = 上游不留历史，错过就没有。
+**R / W / S**：R = 删了能重取；W = 上游窗口滚动或人工录入，**删了就永久消失**；S = 上游不留历史（快照 / 横截面），错过就没有。
+
+`scan` 的"每只行数"没法按股票算——它一行就是一只股票的一天，一天一份全市场。
+`annotation` 由人写、不是取回来的，所以清理策略是"不删"：一条 2024 年核实的标注
+过了事实有效期也只标 `stale`，不抹掉（§3.3）。
 
 ### 3.3 逐表要点
 
-**`kline`** —— 存 raw（不复权），深度 300 根，滚动删除。
-`volume` 入库即 ×100 换成股：`quote.float_shares` 也是股，换手率一句除法就出来，
-不用在每个消费点记换算。**一处 ×100 好过十处**。
+**`kline`** —— 存 raw（不复权），**保留 400 根**（`KLINE_KEEP_BARS`），滚动删除。
+`volume` 入库即换成股：`quote.float_shares` 也是股，换手率一句除法就出来，
+不用在每个消费点记换算。**一处换算好过十处**。
+
+换算这一步比初稿复杂了：东财 / 腾讯给的是**手**（×100），而 westock 的 `volume`
+**单位按板块不一致**——主板 / 创业板是手，科创板（688/689）本来就是股。
+所以现在按 `amount / (close × volume)` 逐行判：比值 ≈100 就是手（×100），≈1 已是股（原样）。
+这是唯一不依赖"板块 → 单位"硬编码的判据，上游哪天统一单位这里自动跟上；
+拿不到 `amount` 时退回 ×100（历史行为，见 `sources/westock._to_shares`）。
+
+**为什么留 400 而不是 300**：最大消费者 `want.kline(bars=300)`（judge_top 要 250、
+kline_screen 要 71）。留 400 意味着某只票中间停牌 100 天，最近 300 根仍然完整，
+不会出现"要 300 根、库里被裁到 299 根 → 每次去补历史 → 永远补不齐"的抖动。
+每多留 100 根约 +35 MB，所以别把默认值再往上调（理由写在 `config.KLINE_KEEP_BARS`）。
+
+**`scan`** —— 一交易日一份全市场横截面（约 5,100 行）。**它不是"一股一档"**：
+一行就是"某只股票在某一天"，主键 `(date, symbol)`，查询几乎总是"按日期取整片"，
+从不"按股票取历史"。
+
+**列少得反常，是故意的**：只有 `date / symbol / name / close / pct_chg / src`。
+市值、净流入、换手率**都不在表里**——要它们就按候选池走 `quote` 域（40 只一批）。
+理由是 westock `tool_filter` 的超时是"表达式条件数 × 返回行数"的乘积（实测表在
+`config.SCAN_EXPR` 的注释里）：把市值/净流入一起带回来，表达式就从 1 条变 5 条，
+全市场口径直接挂掉。而这三个字段只有 kline-screen 对它选出来的几百只要，
+拿"全市场少一次请求"换"能不能拿全"，这个交易不划算。
+
+三条设计点：
+
+| 事 | 做法 | 不这么做会怎样 |
+|---|---|---|
+| 只留 30 天 | `SCAN_RETENTION_DAYS=30`，`hub.prune_scan()` | 5026 行/天 × 250 天 ≈ 1.2 GB/年，是本层唯一会失控的表 |
+| `fp` 带日期 | `date=2026-11-13` | 共用一条 fp → 取完周五再要周四，`hit()` 判"已覆盖"然后查出 0 行 |
+| 一次一条表达式 | `SCAN_EXPR = intersect([ClosePrice > 0])` | westock `tool_filter` 有约 2 秒服务端硬超时，超时概率是"条件数 × 返回行数"的乘积——想一次拿全市场，表达式就只能有一条（实测表在 `config.SCAN_EXPR` 的注释里） |
+
+**`annotation`** —— 人工标注（目前只有「垄断性」一种 `kind`）。**入库而不是 YAML 文件**：
+原来放在 `stock_quality_screen/annotations/moat_annotations.yaml`，跟着代码目录走
+（换机器就丢）、改一条要动文本、且四个工具里只有 quality 读得到。
+
+`moat_type` 是**枚举**（8 个值），不是自由文本——它要参与判定（`moat_type != "无标注"`
+就是"有垄断性"）。写成自由文本的话「独家资源」「独家 资源」会是两个不同的东西，
+而代码只认得其中一个，另一个静默变成「无标注」。枚举里有两项不是结论：
+
+| 取值 | 含义 |
+|---|---|
+| 6 类垄断（独家资源 / 配额牌照 / 特许经营 / 独家品种 / 技术壁垒 / 网络） | `annotated=True`，参与判定 |
+| **`无标注`** | **结论**：查过，没发现垄断性 |
+| **`待核实`**（`MOAT_UNVERIFIED`） | **待办**：记录已建、还没读过公告。不加分，报告也不渲染垄断块 |
+
+后者是 2026-11-16 加的：全市场 5000 多只要先各有一条记录，但绝大多数没读过公告，
+直接写「无标注」等于谎称"查过了、确实没有"。**覆盖和判定是两件事**，这一列把它们分开。
+
+核实日超过 `ANNOTATION_STALE_DAYS=365` 天只标 `stale` 并显示「待复核」，**不删**：
+一条 2024 年核实的「独家品种」2026 年可能已经不独家了，但当年确实独家——抹掉就丢了判断依据。
 
 **`finance`** —— **本 schema 最关键的取舍：一期一行，三表字段并排。**
 
@@ -206,36 +265,62 @@ coverage 不承诺"旧值永久有效"。
 | `kline` | `fq=raw` |
 | `finance` | `type=all;fields=all` |
 | `valuation` | `freq=week` |
-| `snapshot` | `sub=mainop` / `sub=consensus` / `sub=rating` |
-| `dividend` / `quote` / `profile` | 空串 |
+| `snapshot` | `sub=mainop` / `sub=consensus` / `sub=rating` / `sub=gbalance;p=20` / `sub=gcashflow;p=20` |
+| `scan` | `date=2026-11-13`（**带日期**） |
+| `dividend` / `quote` / `profile` / `annotation` | 空串 |
 
-**`snapshot` 的 fp 必须带子域。** 覆盖表主键是 `(domain, symbol, fp)`，三个子域共用
-`domain="snapshot"`；fp 再不分，写完 `consensus` 之后要 `mainop` 时 `hit()` 会直接返回
-True，而按 `domain=mainop` 查出来是 0 行——调用方拿到一份空数据，一句告警都没有。
-这是第 5 步测试跑出来的真 bug（第 5 步之前 `snapshot` 还没接，所以一直没暴露）。
+两处 fp 必须带参数，方向相反、理由是同一个：**覆盖记录的主键是 `(domain, symbol, fp)`，
+fp 一旦表达不出"这是哪一份"，`hit()` 就会拿 A 的覆盖去放行 B。**
+
+- `snapshot` 的五个子域共用一个 `domain`，fp 再不分 → 写完 `consensus` 之后再要 `mainop`，
+  `hit()` 返回 True 而按 `domain=mainop` 查出来是 0 行。这是第 5 步测试跑出来的真 bug。
+- `scan` 是"一天一份"，fp 不带日期 → 取完周五再要周四，`cov.end=2026-11-13 >= 2026-11-12`
+  直接放行，查询查出 0 行、一句告警都没有。**同一类 bug 栽了两次**。
 
 **`fp` 只管"口径变了就作废"，不管"换源了"**。换源要不要作废是另一件事，见 §5.5。
 
 ### 3.5 GC、建库、迁移、备份
 
-| 表 | 策略 | 时机 |
+| 表 | 策略 | 谁触发 |
 |---|---|---|
-| `kline` | 每股保留最近 300 根 | 每次写入后 |
-| `valuation` | 每股保留 10 年（520 周） | 每次写入后 |
-| `finance` / `dividend` | **不删** | — |
+| `kline` | 每股保留最近 **400** 根（`KLINE_KEEP_BARS`） | `hub.prune_kline()` / `maintain --apply` |
+| `scan` | 保留最近 **30** 天（`SCAN_RETENTION_DAYS`，可用 `meta['scan_retention_days']` 覆盖） | `hub.prune_scan()` / `maintain --apply` |
+| `finance` / `dividend` / `valuation` / `annotation` | **不删** | — |
 | `quote` / `snapshot` / `stock` | 覆盖，不增长 | — |
-| 股票级 | `last_access_at` 早于 90 天 → 删该股 `kline`/`valuation`，**保留** `finance`/`dividend` | 库体积 > 800MB |
+
+**`valuation` 那一格写"不删"是有意的**：它每股约 520 行、全市场也就几十万行，
+体积占比不到 5%；而"10 年"是 `need` 的**取数范围**，不是一条会执行的删除规则。
+`maintain` 的注释说得更直接：不删 `finance`/`valuation`/`snapshot`/`quote`——
+那些是另外三个工具的燃料。真要为它设裁剪，得先想清"删了以后分位还准不准"。
+
+**GC 不是数据层自动做的，是工具跑完时显式调一次**（当前挂在 `stock_kline_screen/pipeline.py`
+收尾，两句 `hub.prune_scan()` / `hub.prune_kline()`，失败不抛；也可以直接跑
+`python3 -m stock_data_fetch.maintain --apply`）。写成"每次写入后"会让人以为
+`ensure` 会顺手裁——它不会：写入路径上一次多删几百行，等于把一次取数的成果扔掉。
 
 清理粒度是**股票**，不是表：删半只股票的数据会造出 coverage 与实际不一致的状态，
 要修就得重取——等于白删。删完 `PRAGMA incremental_vacuum`（建库时已设 `auto_vacuum=INCREMENTAL`）。
+`annotation` 加进"保留"那一列不是随手写的：它是**人工投入**，删了就没人愿意再填一遍。
 
 **建库**：`preflight()` 自动完成，工具第一次跑就会建好。DDL 在包内 `schema.sql`。
 
-**迁移**：`user_version != 1` → **拒绝启动**，提示备份后 `rm` 重建。
-数据全部可再生，写迁移脚本的成本远高于重建，而迁移脚本本身是 bug 来源。
+**迁移**：`user_version != 6` 时先看这一跳在不在白名单里：
 
-**备份**：每日一次 `VACUUM INTO 'backup/shared-YYYYMMDD.db'`，保留 2 份。
-`VACUUM INTO` 是原子快照，比 `cp` 安全（`cp` 可能拷到正在写的页）。
+| 情况 | 动作 |
+|---|---|
+| 库不存在 | 按 `schema.sql` 建（`user_version = 6`） |
+| 版本可逐跳升（`db.AUTO_UPGRADE`，当前 v1→v6 全覆盖） | **自动迁移**，整个升级包在一个事务里，失败就停在旧版本、重跑一次即可 |
+| 白名单里没有的一跳 | **拒绝启动**（`SchemaMismatch`），提示备份后 `rm` 重建 |
+
+自动迁移只对"纯新增表 / 加列 / 删索引 / 可重入的表重建"开放，每一条都要先回答
+"重复执行两次会不会出错"。改列类型、拆表那种变更在 SQLite 里做不到幂等，仍然只能重建——
+所以第 1 步那条"一律不写迁移脚本"的结论，落地时收窄成了"只写可重入的那几步"。
+
+**备份**：`./run.py backup` 对 `shared.db` / `results.db` 各做一次 `VACUUM INTO`，
+校验完整性后按份数清理旧档（默认留 **7** 份，`--keep` 可改）。
+`VACUUM INTO` 是原子快照，比 `cp` 安全（`cp` 可能拷到正在写的页），顺带整理碎片——
+实测同样内容体积小很多。**它不自动跑**（没有 daemon），要放在你的跑批习惯里，
+比如每周五收盘后。`results.db` 也在备份范围内，否则"结果一起被复制、越滚越大"就是它自己。
 
 ### 3.6 交易日历：文件，不进库，而且要是"长"的
 
@@ -247,18 +332,29 @@ True，而按 `domain=mainop` 查出来是 0 行——调用方拿到一份空�
 （`2022-11-14 起，970 天`），对 300 根 K 线够用，对估值不够——而它不会报错，
 只会让 `need.start` 被静默夹到 4 年前，再以"点数不足"的名义失败。
 
-所以现在有两份，按顺序取：
+所以现在**只有一份，项目内自己生成**：
 
-| 优先级 | 路径 | 跨度 | 谁生成 |
-|---|---|---|---|
-| 1 | `state/trading_calendar.json` | **12 年**（已生成：2014-11-07..2026-11-13，**2921 个交易日**） | `python -m stock_data_fetch.build_calendar` |
-| 2 | `stock-kline-screen-tool/database/trading_calendar.json` | 4 年（2022-11-14 起 970 天） | kline-screen 自带，兜底 |
+| 路径 | 跨度（2026-11-17 当前值） | 谁生成 |
+|---|---|---|
+| `state/trading_calendar.json` | **12 年：2014-11-07 .. 2026-11-17，2923 个交易日** | `python -m stock_data_fetch.build_calendar` |
 
-生成后与旧日历对过账：**旧有新无 = 0**（完全包含），新有旧无 = 1951（历史部分）。
+**2026-11-17 取消了"兜底那份 4 年日历"**。原来 `DEFAULT_CALENDAR` 指向
+`~/MyData/stock-kline-screen-tool/database/trading_calendar.json`——那个仓库 11-15
+改名成 `stock-value-invest-tool` 之后目录就不存在了。日常运行看不出问题
+（`Config.from_env()` 走 `resolve_calendar()`，本来就优先用项目内这份），但任何
+**直接构造 `Config()`** 的路径——首当其冲是六个测试文件——都会在 `TradingCalendar.load()`
+抛 `HubNotReady`，于是 `python3 -m stock_data_fetch.tests` 整体报错。
+
+现在 `DEFAULT_CALENDAR = state/trading_calendar.json`，跟着 `HUB_ROOT` 从包的物理位置推导，
+不依赖别的仓库是否还在。文件不存在时给的是明确的一句"交易日历不存在… 先跑 build_calendar"，
+**不是悄悄退回 4 年深度**——4 年会让估值必然 `InsufficientDepth`，而错误信息看起来像数据缺失
+（§6.6 那个坑就是这么来的）。
+
+生成后与旧日历对过账：**旧有新无 = 0**（4 年那份完全被包含），新有旧无 = 1951（历史部分）。
 `--no-merge` 会跳过并集、直接用新抓的覆盖——除非你确认要变短，否则别用。
 
 选择发生在 `Config.from_env()`（不是 `preflight()`）：`Config()` 必须保持确定性，
-否则测试结果取决于机器上有没有生成过文件。`STOCKHUB_CALENDAR` 显式指定时优先于两者。
+否则测试结果取决于机器上有没有生成过文件。`STOCKHUB_CALENDAR` 显式指定时优先于它。
 
 **生成**（需联网，收盘后跑）：
 
@@ -270,15 +366,20 @@ python -m stock_data_fetch.build_calendar --source westock  # 12 次请求，够
 python -m stock_data_fetch.build_calendar --source eastmoney # 1 次请求，但经常被掐
 ```
 
-两条腿的差别是实打实的：
+三条腿的差别是实打实的，按"语义 → 代价"排：
 
-| 源 | 一次能给多少 | 备注 |
-|---|---|---|
-| 东财 `push2his`（`sh000001`） | **12 年 2900 行** | 主力。但突发配额用完会**整段拒连**（见 §5.7） |
-| westock `data_kline` | **1212 行 ≈ 5 年** | `limit=5000` 也一样，够不着 10 年，只能救急 |
+| 源 | 一次能给多少 | 语义 | 备注 |
+|---|---|---|---|
+| westock `data_trade_calendar` | 按年分页，**12 次请求给 12 年** | **日历本身**：直接答"哪天开市"（`isTrading`） | 默认主源 |
+| 深交所月度日历 | 一月一问，**144 次** | **权威**：`jybz` 0/1 由制定者给 | 与 westock 那份逐日对账过，见 §5.4 |
+| 东财 `push2his`（`sh000001`） | **1 次给 12 年 2900 行** | **间接证据**：指数那天有 bar 就推"开市了" | 突发配额用完会整段拒连（§5.7） |
 
-所以 `build()` 默认与已有日历**取并集**：一次"东财被封时的备用运行"不该把 12 年
-截成 5 年。跨度不足 10 年会打印告警（不阻拦写盘）——写一份 5 年的日历也比没有强，
+顺序不是"哪个稳用哪个"而是**语义优先**：拿"指数有没有成交"去推"市场开没开市"绕了一层，
+所以它排在最后——只在另两条都不可用时才用。2026-11-14 生成时就撞上东财封禁期（连拒 30 分钟），
+换成 westock 的日历接口之后反而更对。
+
+所以 `build()` 默认与已有日历**取并集**：一次"备用腿的运行"不该把 12 年截短。
+跨度不足 10 年会打印告警（不阻拦写盘）——写一份 5 年的日历也比没有强，
 只是估值会以 `InsufficientDepth` 收场。
 
 **写盘前必过校验**（`check()`）：整年交易日数落在 `[230, 260]`、单日断档 ≤ 12 天、
@@ -421,9 +522,23 @@ take(src, rows):
 
 | 参数 | 值 | 说明 |
 |---|---|---|
-| `RATE_ROWS_PER_MIN` | westock / eastmoney 15000；tdx / baostock 0 | 0 = 不走令牌桶，只用最小间隔 |
+| `RATE_ROWS_PER_MIN` | westock **200000**；eastmoney / tencent 15000；tdx / baostock 0 | 0 = 不走令牌桶，只用最小间隔 |
+| `MIN_INTERVAL_MS` | westock **1000**；eastmoney 400；tencent 200；tdx 300 | 见下面"两个闸管的是两件事" |
 | `BURST_ROWS` | 12000 | 桶容量。一批 60 只 × 200 根 = 12000，得让一批一次拿满 |
 | `THROTTLE_BUDGET` | 300s | 单次 `take()` 累计等待上限，超了抛 `ThrottleTimeout` |
+
+**westock 的速率从 15000 提到 200000（2026-11-15），同时把最小间隔从 0 提到 1000ms。**
+两个改动听着矛盾，其实是在说两件事：
+
+- 令牌桶按**返回行数**计费。`kline` 走多码批量后单请求 40 只 × 300 根 = 1 万行，
+  按 15000 行/分钟算就是 1.5 请求/分钟——**等于把批量卡死了**，批量省下的时间全还回去。
+- 但 westock 的真实限频不是按行数，是**按每分钟请求数**（实测约 60~70 次/分钟）：
+  `quote` 一只一行、`kline` 增量一只一行，令牌桶永远满的、请求却一秒十几个，
+  服务端直接回"限频"（实测：`quote` 整池 3271 只 = 82 批，前 66 批成功、后 16 批全 None）。
+  1000ms 正好压在 60 次/分钟。
+
+所以**两个闸管的是两件事**：令牌桶管"别在短时间内吃掉太多行"，最小间隔管"别把请求数打爆"。
+只留一个都会出问题——这正是"按实测反馈，不按固定间隔"的具体形状。
 
 > **已知边界 bug 与修法**：单次申请行数 > 桶容量时 `tokens >= rows` 永不成立，
 > 循环到预算耗尽 → 进程挂死（不报错，看起来像卡住）。修法是"超过桶容量就按桶容量计费"，并告警。
@@ -471,10 +586,10 @@ westock 把一次请求**内部按 10 只一组**拆开独立判定，失败组�
 
 | 源 | 上游 | 传输 | 配额 / 节流 | 批量 | 稳定度 |
 |---|---|---|---|---|---|
-| `westock` | 腾讯自选股 | MCP（令牌） | **按返回行数**，实测约 15k 行/分钟 | ≤150 只/次（本层：全量 40、增量 60） | 高 |
-| `eastmoney` | 东方财富 | 直连 HTTP | 按行数；**突发会掐连接** | 单只（一次给全历史）——**这是它不能当 K 线主源的原因** | 中 |
+| `westock` | 腾讯自选股 | MCP（令牌） | 令牌桶按行数 200k/分钟 + 最小间隔 **1000ms**（真实瓶颈是请求数，约 60~70/分） | ≤150 只/次（本层：全量 40、增量 60） | 高 |
+| `eastmoney` | 东方财富 | 直连 HTTP | 按行数 15000/分钟，400ms 间隔；**突发会掐连接** | 单只（一次给全历史） | 中 |
 | `tdx` | 通达信 | MCP（**OAuth 令牌**） | 未知，最小间隔 300ms | 1 只 | 高，但**独立进程 401** |
-| `tencent` | **腾讯行情（web）** | 直连 HTTP，**无鉴权** | 未知，最小间隔 200ms | 1 只（一次 900 根） | 高 |
+| `tencent` | **腾讯行情（web）** | 直连 HTTP，**无鉴权** | 按行数 15000/分钟，200ms 间隔 | 1 只（一次 900 根） | 高 |
 | `baostock` | baostock 自有库 | 开源库 | 未知 | 1 只 | ⚠️ 本机黑名单，不可用 |
 | `akshare` | 东财 / 新浪 / 乐咕 | 开源库 | 无显式 | 视函数 | 低（函数名随版本改） |
 | `efinance` | 东方财富 | 开源库 | 无显式 | 单只 | 中 |
@@ -485,15 +600,21 @@ westock 把一次请求**内部按 10 只一组**拆开独立判定，失败组�
 
 | 域 | westock | eastmoney | tdx | tencent | baostock | akshare | efinance |
 |---|---|---|---|---|---|---|---|
-| `kline` 原材料 | — | **主**（`fqt=0`） | 主→备（要令牌） | **备**（`fq` 留空） | 备 | 备 | 备 |
+| `kline` 原材料 | **主**（多码批量，raw） | 备（`fqt=0`，单只逐条） | 备（要令牌） | 备（`fq` 留空） | 备 | 备 | 备 |
 | 复权因子校验 | — | — | 基准（qfq 价格） | — | **验** | — | — |
 | `finance` 三表 | **主** | 备 | — | — | 验 | 备 | 备 |
 | `dividend` | **主** | 备 | 验（F10） | — | 验 | 备 | — |
 | `valuation` 周频 | — | **主**（`RPT_VALUEANALYSIS_DET`） | — | — | 验 | 备（乐咕） | 备 |
 | `quote` 快照 | **主**（批量） | 备 | 备（单只） | — | — | 备 | 备 |
 | `profile` | **主** | 备 | 备（F10 `gsgk`） | — | 备 | 备 | 备 |
-| 交易日历 | **主** | 备 | — | — | **验** | 备 | — |
-| 交易日历（权威腿） | — | — | — | — | — | — |
+| `scan` 横截面 | **主**（`tool_filter`，一次全市场） | — | — | — | — | — | — |
+| `snapshot.mainop` | — | **主**（`RPT_F10_FN_MAINOP`） | — | — | — | — | — |
+| `snapshot.consensus` / `rating` | **主** | — | — | — | — | — | — |
+| `snapshot.gbalance` / `gcashflow` | — | **主**（F10 三表补丁） | — | — | — | — | — |
+| 交易日历 | **主**（按年，12 次请求） | 备（`sh000001` 指数日线，1 次） | — | — | 验 | 备 | — |
+
+矩阵里没有 `szse` 列：它只在**交易日历**这一件事上是权威腿（`--source szse`，按月 144 次请求），
+其余域它只能给"当日快照"和公告原文，做不了主源也做不了备份（见下面那张实测表）。
 
 **交易所（深交所 / 上交所）与巨潮资讯能补什么**
 
@@ -523,19 +644,30 @@ westock 把一次请求**内部按 10 只一组**拆开独立判定，失败组�
 `probe` 报分红不一致时，去巨潮按公告标题搜"权益分派实施公告"就能看到原文。
 
 **深交所日历与我们的 12 年日历逐日对过账**（2026-11-14，抽查 11 个月，跨 2016/2020/2024/2025/2026）：
-**10 个月完全一致**，唯一差异是 2026-11——深交所已排到 11-30，我们的日历停在生成日 11-13。
+**10 个月完全一致**，唯一差异是当月——深交所已排到月末，我们的日历只到生成日。
 用 `--source szse` 独立生成 12 年（144 次请求）再与 westock 那份取并集，
 **新增 0 天**：两个完全独立的源（交易所 vs 腾讯）逐日一致。
 
-**为什么 `kline` 主源是东财而不是 tdx**（2026-11-14 实测后改的）：
+**为什么 `kline` 主源最后是 westock（2026-11-15 定，中间换过两次）**
 
-- tdx MCP 端点要 OAuth Bearer，令牌握在宿主进程内存里不落盘，独立 CLI 进程直接
-  `401 Missing Bearer authorization`——原方案在架构上**不可执行**；
-- 东财 `push2his` 的 `fqt=0` **无鉴权**，一次请求给全历史（茅台 6042 行、2001-08-27 起）；
-- 两者 raw 值**逐点相同**：格力 2026-08-26 `41.58`；比亚迪 2025-07-28 `337.00`、07-29 `111.42`。
+三个源都比过，结论是"谁都没有一条腿走到黑"：
 
-所以换源**连 `fp` 都没动、一条旧数据都没作废**——依据就是下面这条铁律。
-tdx 没删：`available()` 探测令牌，读到就自动回到可路由列表。
+| 源 | 好 | 差 | 现在的位次 |
+|---|---|---|---|
+| `westock` | **多码批量**（40 只/请求，增量 60），raw 口径，`amount` 有值 | 令牌要自己管（宿主内存里拿不到） | **主** |
+| `eastmoney` | `fqt=0` 无鉴权，一次给全历史（茅台 6042 行、2001-08-27 起） | `batch=1` 逐只 HTTP，4304 只实测 **50–75 分钟**；且突发配额用完整段拒连 | 第一备 |
+| `tdx` | raw 与东财逐点相同 | OAuth Bearer 只在宿主进程内存，独立 CLI 进程直接 `401 Missing Bearer authorization`——**架构上不可执行** | 备（读到令牌才启用） |
+| `tencent` | 无鉴权、一次 900 根、真 raw | 单只；WAF 轮换封禁；`amount` 没有（落 0） | 第二备 |
+
+**换主源那次的实际原因不是"哪家更准"，而是"哪家能批量"。** 两个源的 `priority` 都是 0，
+兜底排序键又带 `name`，字典序 `"eastmoney" < "westock"` —— 于是东财永远排第一、
+westock 一次都没被选中过（实测日志：一次全量 2923 条 eastmoney 请求、**0 条**真正用到 westock）。
+现在由 `sources.PREFERRED["kline"] = ("westock", "eastmoney", "tencent", "tdx")` 显式定序，
+东财退为第一备源。
+
+**换源没有作废任何旧数据，依据是下面 §5.5 那条铁律**：raw 就是交易所成交价，
+三家的差异只在分位四舍五入（格力 2026-08-26 `41.58`；比亚迪 2025-07-28 `337.00`、
+07-29 `111.42`——三家一致），所以 `fp` 一动没动。
 
 ### 5.5 三条铁律
 
@@ -587,7 +719,7 @@ tdx 没删：`available()` 探测令牌，读到就自动回到可路由列表�
 
 | 通道 | 源 | 计量 |
 |---|---|---|
-| A | westock | 返回行数（~15k/分钟） |
+| A | westock | 返回行数（令牌桶 200k/分钟）+ **请求数 ≤ 60/分钟**（1000ms 间隔）；实际瓶颈是后者 |
 | B | eastmoney（直连 + efinance） | 返回行数；实际瓶颈是"连取 20 只后被掐" |
 | C | tdx | 未知；独立进程无令牌 |
 | D | baostock / akshare | 探针用，量极小 |
@@ -605,7 +737,8 @@ tdx 没删：`available()` 探测令牌，读到就自动回到可路由列表�
 ### 5.7 限频实测（这一节比参数更重要）
 
 **westock**：限频表现为 `metadata.errorCount > 0` + `errors[]` 自报，是**组级失败**，不是整批拒绝。
-行数配额约 15k/分钟；跨进程会叠加（单进程刚好，双进程打穿）。
+真实瓶颈是**每分钟请求数**（约 60~70），不是行数——所以它的节流是"令牌桶 + 1000ms 最小间隔"两道闸
+（§5.1），跨进程会叠加（单进程刚好，双进程打穿）。
 
 **东财 `push2his`**：五轮才定性——
 
@@ -630,9 +763,23 @@ tdx 没删：`available()` 探测令牌，读到就自动回到可路由列表�
    罚 30 秒（连掐翻倍到 60/120/240）是 75 倍惩罚，且同批里 8 只连续成功说明它是**偶发**的。
    现在 `Router._call()` 第一次瞬断**立刻重发一次、不冷却**，第二次起才进冷却退避。
 
-**westock `data_kline`**：只回 **1212 根**（约 5 年），`limit` 给 5000 也一样。
-所以它不能当 K 线主源，也不能当长日历的主源——只能救急（§3.6）。另外它返回的是
-**前复权**（"不复权"参数实测无效），所以**连当 raw 备源都不行**。
+**westock `data_kline`（kline 主源，2026-11-15 接入）**：按 `start` / `end` 区间取，
+另带 `limit = points + 20` 给 `min_bars` 门槛留缓冲，所以"要 300 根就给 300 根"没问题。
+口径三件事都实测过（与库内 tencent raw 逐点比对，`sh600519`）：
+
+| 项 | 实测 | 处理 |
+|---|---|---|
+| 价格 | 不传 `fq` 返回的就是 **raw**（1439.1 / 1480 / 1446.44… 与库内同值） | 直接落库，不作废任何旧数据 |
+| `volume` 单位 | **按板块不一致**：主板 / 创业板是手，科创板（688/689）是股 | 按 `amount/(close×volume)` 逐行判，统一成股（§3.3） |
+| `amount` | **有值** | 补上这一列（tencent 通道没有，落库恒 0） |
+
+另两个细节：`last` 是收盘（落库前改名 `close`），返回**倒序**（新→旧），适配器排回升序。
+
+> 早先（2026-11-14）试过一次 `data_kline` 只回 **1212 根（≈5 年）**、`limit=5000` 也一样，
+> 当时的结论是"当不了 K 线主源、甚至当不了 raw 备源（当时以为它只给前复权）"。两个判断
+> 在 11-15 都被推翻：给它 `start/end` 就按区间取，不传 `fq` 给的就是 raw（与库内 tencent
+> raw 逐点同值）。所以正确的说法要分两句——**它不能当"一次给全历史"的源**（日历因此不用它），
+> **但按区间取 300~400 根正合适，而且能多码批量**（K 线因此用它）。
 
 **`tencent`（`web.ifzq.gtimg.cn` 的 `fqkline/get`）**：无鉴权、一次 900 根、
 `fq` 段留空就是**真原材料**。2026-11-14 与东财 `fqt=0` 逐点对过账
@@ -686,19 +833,48 @@ router.order(domain) 的顺序：
 
 ## 6. 取数契约
 
-### 6.1 公开 API（只有 6 个入口）
+### 6.1 公开 API（`Hub` 上 19 个方法，按用途分四组）
 
 ```python
 from stock_data_fetch import preflight, want
 
-hub = preflight()                                  # 六道闸，失败直接抛
-hub.ensure("kline", "sh600519", want.kline(hub.cal, hub.target, bars=300, min_bars=250))
-hub.ensure_many("finance", symbols, want.finance(hub.target, min_points=20))
-hub.read("kline", "sh600519", want.kline(...))      # 只读，不打上游
-hub.factor("sh600519", dates)                       # 因子，纯计算
-hub.adjusted("sh600519")                            # 前复权价，纯计算
-hub.single_quarter("sh600519", "OperatingRevenue")  # 单季兜底（第 5 步）
+hub = preflight()                                   # 六道闸，失败直接抛
 ```
+
+**① 取数（唯一会打上游的入口）**
+
+| 方法 | 语义 |
+|---|---|
+| `ensure(domain, symbol, need)` | 单只。保证"覆盖 + 无阻塞洞 + 够点数"，否则抛 |
+| `ensure_many(domain, symbols, need)` | 批量，逐只独立成败，失败进 `Batch.failed` |
+| `ensure_bulk(domain, symbols, need)` | **批量且按缺段并批**：先算每只缺哪一段，同段合成一次请求（`kline` 主路径） |
+| `scan(day)` / `scan_many(days)` | 全市场横截面（`scan` 表），一天一份 |
+
+**② 只读（不打上游）**
+
+| 方法 | 语义 |
+|---|---|
+| `read(domain, symbol, need)` | 现状照返回，不因为参数写大了就去取 |
+| `scan_cached(day)` | 只查库里的横截面，没有再取 |
+| `finance_full(symbol, need)` | 三表按报告期对齐后的整份 |
+| `gbalance_full` / `gcashflow_full` | 东财补丁表（商誉 / 短期借款 / capex） |
+
+**③ 纯计算（不碰网络）**
+
+| 方法 | 语义 |
+|---|---|
+| `factor(symbol, dates)` | 复权因子 |
+| `adjusted(symbol, anchor=hub.target)` | 前复权价 |
+| `single_quarter(symbol, field)` | 单季兜底（上游 `_Q` 为空时差分） |
+
+**④ 运维与上下文**
+
+| 方法 | 语义 |
+|---|---|
+| `check_online(domain, symbol, need)` | 盘中闸的拦截点：真要联网才抛 `MarketOpenError` |
+| `prune_kline(keep_bars=None)` / `prune_scan(keep_days=None)` | GC，默认值取 `config` |
+| `throttle` / `router` | 节流器与路由器（测试打桩用） |
+| `close()` | 关连接 |
 
 ### 6.2 `ensure` / `ensure_many` / `read`
 
@@ -774,7 +950,7 @@ hub = preflight()
 |---|---|---|---|
 | 1 | **盘中** | 交易日 09:15–15:05 → **标记 `intraday=True`，不拦启动**；联网时才拦（见下） | `MarketOpenError`（只在 `ensure` 内） |
 | 2 | 库可用 | 不存在且允许建 → 按 `schema.sql` 建 | `HubNotReady` |
-| 3 | 版本 | `user_version != 1` | `SchemaMismatch` |
+| 3 | 版本 | `user_version != 6`。在白名单（`db.AUTO_UPGRADE`）里就**自动逐跳迁移**，不在才拒绝 | `SchemaMismatch` |
 | 4 | PRAGMA | 回读 `journal_mode` 必须是 `wal`（网络盘会静默退回 rollback） | `HubNotReady` |
 | 5 | 日历 | 文件在、没断档、没过期（>30 天） | `HubNotReady` |
 | 6 | 空间 | 低于 500MB **只告警不拦**（清理是 GC 的职责） | — |
@@ -810,13 +986,19 @@ hub = preflight()
 
 | 域 | need 形态 | 深度 | 消费者 |
 |---|---|---|---|
-| `kline` | `(end_date, bars=300)` | 300 根 | kline-screen（71）、judge-top（250） |
+| `kline` | `want.kline(cal, end, bars=300, min_bars=250)` | 要 300 根（库保留 400） | kline-screen（71）、judge-top（250） |
 | `finance` | `(periods=43)` | 43 期（上游上限） | cycle（40 TTM）、quality（20）、judge（6） |
 | `dividend` | `(since = kline 起点 − 1 年)` | 覆盖 K 线全程 | judge-top |
 | `valuation` | `(years=10, min_weeks=430)` | **430 周 ≈ 8.3 年**（上游上限 454 周） | quality-screen |
 | `quote` | `(target_date)` | 当期 | kline-screen / quality / judge |
 | `profile` | `(无上界)` | 取过一次就不再问 | quality / cycle |
-| `snapshot` | `(子域, as_of=target)` | 当期 | quality / cycle |
+| `snapshot` | `(子域, as_of=target)` | 当期（`gbalance`/`gcashflow` 是 20 期） | quality / cycle |
+| `scan` | `want.scan(day)` | **一天一份全市场**（约 5,100 行） | kline-screen 粗筛 |
+| `annotation` | 不走 `ensure`（人工写，`annotation` 模块 + CLI） | 一股一条 | quality（垄断性加分） |
+
+`scan` 的 `points=5100` 是**预计返回行数**（估上游配额用，不是"期望几个点"），
+门槛 `min_points=1`：横截面只要有一行就算取到，真正"空"的情况由适配器报 `empty_reason`，
+不该靠点数猜。它的 `fp` 带日期（§3.4），覆盖记录**一天一条**。
 
 **`valuation` 的门槛是 430 而不是 520**（2026-11-14 冒烟改的）。东财
 `RPT_VALUEANALYSIS_DET` 对茅台最早一行是 2018-01-02（2150 个交易日 = 454 周），
@@ -828,9 +1010,17 @@ hub = preflight()
    返回**日历首日**而不是 `None`，于是 `need.start` 被静默改成 4 年前；
 2. 就算日历够长，上游也只有 8.9 年。
 
-现在两条都改掉了：`start` 不再夹日历（估值是"取数范围"不是"交易日集合"），
-门槛按上游上限定 430，日历另配一份 12 年的（见 §3.6）。要更长必须**换源**，
-不是调大这个数。
+**两条都改掉了，而且改法是"分开表达"**：
+
+| 问题 | 修法 | 现在的行为 |
+|---|---|---|
+| 起点被夹到日历首日 | `start` **不再夹日历**：日历覆盖十年才用它对齐到交易日，不够长就直接用自然日 | 日历 12 年（2014-11-07 起）→ 起点 = "10 年整那天之后的第一个交易日" |
+| 门槛不可达 | 按上游上限定 430 | 要更长必须**换源**，不是调大这个数 |
+
+判断"日历够不够长"的那句条件是 `cal.days[0] <= day`（`need.valuation`）。写错它的后果很隐蔽：
+2014-11-07 起的 12 年日历让这个条件恒真，于是"短日历"那条分支只能靠测试自己造一份短日历来覆盖
+（`test_coverage` 里两个分支各有一条断言，`test_westock.test_valuation_depth` 正向钉"起点落在
+10 年窗口边上、不是日历首日"）。
 
 **`profile` 刻意不带 `end`**：元数据一年也变不了一次，按交易日判过期意味着 quality 每次跑
 都要把候选池的行业全重取一遍。`end=None` 在 `hit()` 里等于"不看过期"，取过就够；
@@ -842,20 +1032,27 @@ hub = preflight()
 
 ---
 
-### 6.7 运维三件套：`doctor` / `probe` / `repair`
+### 6.7 运维四件套：`doctor` / `probe` / `repair` / `maintain`
 
-三个工具的定位完全不同，**跑错时机会把维护动作变成日常依赖**：
+四个工具的定位完全不同，**跑错时机会把维护动作变成日常依赖**：
 
-| | `doctor` | `probe` | `repair` |
-|---|---|---|---|
-| 网络 | 一次都不打 | 必须打 | 必须打 |
-| 写库 | 绝不 | 绝不 | **会写**（默认 dry-run） |
-| 回答什么问题 | "库自己有没有坏" | "库和上游/另一家源对不对得上" | "库里的历史行能不能修" |
-| 什么时候跑 | 四个工具启动前随手跑 | 换源、换口径、怀疑数据时手动跑 | `probe` 报 MISMATCH 之后 |
-| 退出码 | 有 `ERROR` → 1 | 有 `MISMATCH` → 1 | 恒 0 |
+| | `doctor` | `probe` | `repair` | `maintain` |
+|---|---|---|---|---|
+| 网络 | 一次都不打 | 必须打 | 必须打 | 一次都不打 |
+| 写库 | 绝不 | 绝不 | **会写**（默认 dry-run） | **会写**（默认只审计，`--apply` 才动） |
+| 回答什么问题 | "库自己有没有坏" | "库和上游/另一家源对不对得上" | "库里的历史行能不能修" | "这些数据该不该留、删了会怎样" |
+| 什么时候跑 | 四个工具启动前随手跑 | 换源、换口径、怀疑数据时手动跑 | `probe` 报 MISMATCH 之后 | 库大了、启动变慢时手动跑 |
+| 退出码 | 有 `ERROR` → 1 | 有 `MISMATCH` → 1 | 恒 0 | 恒 0 |
 
-三个都不进 `preflight()`。启动路径一旦依赖网络，上游抖一下四个工具就都起不来；
-而 `repair` 会改性历史行，更不能自动触发。
+四个都不进 `preflight()`。启动路径一旦依赖网络，上游抖一下四个工具就都起不来；
+而 `repair` / `maintain` 会改数据，更不能自动触发。
+
+**`maintain` 与 `doctor` 的分工**：`doctor` 问"**能不能用**"（不变式、覆盖、闸门），
+`maintain` 问"**该不该留**"（体积、孤儿覆盖、冗余）。`--apply` 会做四件事：
+升 schema（删 `ix_kline_date` 省 33 MB）、收编 `fp=''` 的孤儿覆盖、`scan` 留 30 天、
+`kline` 留 400 根，最后 `VACUUM` 把页还给文件系统。
+它**不删** `finance`/`valuation`/`snapshot`/`quote`，也不删 `finance.raw_json`——
+那 6.6 MB 是"解析器以后改好了能重算"的唯一来源，删了就得重拉全市场财报。
 
 ### `doctor`：只读体检（`mode=ro`，一条写语句都没有）
 
@@ -1000,50 +1197,51 @@ python3 -m stock_data_fetch.repair dividend --symbols sh601318 --apply   # 真�
 
 | 步 | 内容 | 状态 |
 |---|---|---|
-| 1 | `errors` / `config` / `db`（含闸 3/4）/ `calendar` / `hub`（六道闸） | ✅ 51 项 |
-| 2 | `need` / `coverage`（`hit` / `merge` / `holes` / `verdict` / `settle`） | ✅ 115 项 |
-| 3 | `throttle` / `router` / `api.ensure`（kline）/ `sources`（base·mcp·eastmoney·tdx） | ✅ 107 项 |
-| 4 | `factor`（因子 / qfq / 幂等 / 缓存） | ✅ 32 项 |
-| 5 | `sources/westock`（五个域）/ eastmoney 的 valuation·mainop / `quarter` / 七个域的写库 | ✅ 157 项 |
+| 1 | `errors` / `config` / `db`（含闸 3/4、可重入迁移）/ `calendar` / `hub`（六道闸） | ✅ |
+| 2 | `need` / `coverage`（`hit` / `merge` / `holes` / `verdict` / `settle`） | ✅ |
+| 3 | `throttle` / `router` / `api.ensure`（kline）/ `sources`（base·mcp·eastmoney·tdx） | ✅ |
+| 4 | `factor`（因子 / qfq / 幂等 / 缓存） | ✅ |
+| 5 | `sources/westock`（五个域）/ eastmoney 的 valuation·mainop / `quarter` / 七个域的写库 | ✅ |
 | 5b | 真上游冒烟：10 只票 × 6 域，修 3 个只有打真实数据才现形的 bug | ✅ 见 §8.1 |
-| 6 | `doctor`（只读体检）/ `probe`（跨源对账）/ `repair`（分红漏记修复） | ✅ 30 + 59 + 37 项 |
-| 7 | 四个工具接入改造：`kline` → `quality` → `cycle` → `judge` | ⬜ 下一个 |
+| 6 | `doctor`（只读体检）/ `probe`（跨源对账）/ `repair`（分红漏记修复） | ✅ |
+| 7 | 四个工具接入改造：`kline` → `quality` → `cycle` → `judge` | ✅ |
+| 7b | **`scan` 域**（按日全市场横截面，schema v2）+ `ensure_bulk` 按缺段并批 | ✅ |
+| 7c | **`annotation` 域**（人工标注入库，schema v5）+ CLI + yaml 导入 | ✅ |
+| 7d | `snapshot` 两个东财补丁子域（`gbalance` / `gcashflow`，schema v3） | ✅ |
+| 7e | 全市场价格/估值快照**拆出**本层（schema 回到 v6，见 §10.1） | ✅ |
 
-**合计 588 项测试全绿**（584 项离线；4 项联网用例要手动 `STOCKHUB_LIVE=1` 才跑）。
+**合计 909 项测试全绿**（905 项离线；4 项真上游用例要 `STOCKHUB_LIVE=1` 才跑）：
 
 | 文件 | 项数 | 覆盖 |
 |---|---|---|
-| `test_gates` | 51 | 六道闸 / 长日历（含深交所源）/ `Config` 确定性 |
-| `test_coverage` | 115 | `hit` / 洞 / 退避 / `verdict` / 落库 |
-| `test_fetch` | 107 | 节流 / 路由 / `ensure` / 瞬断 |
+| `test_gates` | 65 | 六道闸与边界 / 长日历（含深交所源）/ `Config` 确定性 / 闸 1 新语义 |
+| `test_coverage` | 117 | `need` / `hit` / 洞 / 退避 / `verdict` / `missing_segments` / 落库 |
+| `test_fetch` | 110 | 节流 / 路由 / `ensure` / 瞬断 / 降级 |
 | `test_factor` | 32 | 因子 / qfq / 幂等 / 缓存 |
-| `test_westock` | 157 | 五个域 / 分红聚合 / 估值深度 |
-| `test_doctor` | 30 | 四条不变式 / 深度 / 输出 |
+| `test_westock` | 211 | 七个域的适配器与写库 / 分红聚合 / 估值深度 / 盘中闸 / 组级重试 |
+| `test_doctor` | 32 | 四条不变式 / 深度 / 短日历 WARN / 输出 |
 | `test_probe` | 59 | 五个探针 / 挑票 / 双口径 / 降级 / 退出码 |
 | `test_repair` | 37 | 判据 / 留痕 / dry-run / 幂等 |
+| `test_scan` | 77 | 横截面适配器 / `totalStocks` 截断校验 / 保留 30 天 / `fp` 带日期 |
+| `test_tencent` | 64 | 无鉴权通道 / 元组顺序坑 / `amount` 缺失 / 逐点对账 |
+| `test_annotation` | 53 | 枚举（8 值）/ yaml 往返 / 删除 / v4→v6 迁移 |
+| `test_bulk` | 30 | `ensure_bulk` 的增量 / 整段 / 拆半 / 并批 / 退避语义 |
+| `test_results` | 22 | 结果库：符号归一 / 写失败不影响主流程 / payload 原样（`unittest` 风格，`main()` 已接进聚合） |
 
 ```bash
 cd ~/MyData/stock-value-invest-tool
-python3 -m stock_data_fetch.tests                        # 跑全部八个文件，任一失败返回非 0
+python3 -m stock_data_fetch.tests                 # 一次跑全 13 个文件（909 项），任一失败返回非 0
+python3 -m stock_data_fetch.tests.test_results    # 单跑某一个文件也行
 STOCKHUB_LIVE=1 python3 -m stock_data_fetch.tests.test_westock   # 额外跑 4 项真上游用例
 ```
 
-第 5 步实测记下的两件事：
-
-- **真上游打通了全链路**：茅台 quote `1435.26` / 成交量 `4,178,000` 股 / 总市值 `1.79 万亿`；
-  `finance` 43 期；`dividend` 有记录；`single_quarter('OperatingRevenue')` 取回
-  `2026-09-30 = 40,267,482,684.56`，与上游 `OperatingRevenue_Q` 逐分一致。
-- **两个只有真打一次才会现形的 bug**：`TOKEN_URL` 里 `or` 写进了 `os.environ.get()` 的括号
-  （恒为 `None` → 令牌续期时 `urlopen(None)` 抛 `ValueError`），以及 `snapshot` 三个子域
-  共用一条覆盖记录（写完 `consensus` 之后 `mainop` 永远"命中"却查出 0 行）。
-
-| 文件 | 覆盖 |
-|---|---|
-| `test_gates.py` | 六道闸与边界（用例 8）、闸 1 新语义 |
-| `test_coverage.py` | need / coverage / verdict / 退避（用例 5、补充 h） |
-| `test_fetch.py` | throttle / sources / router / ensure（用例 2/7/k，含联网用例 1） |
-| `test_factor.py` | 因子 / qfq / 幂等 / 缓存（用例 3/4/i） |
-| `test_westock.py` | 七个域的适配器与写库、`quarter`、用例 2/6、盘中闸、四个 bug 的回归 |
+> **加新测试文件时必须提供 `main() -> int`**。聚合器只认返回值，没有 `main()` 按**失败**计。
+> 这条是 2026-11-17 补的：原来的写法是 `mod.main() if hasattr(mod, "main") else (0 if True else 1)`，
+> 那个 `(0 if True else 1)` 恒为 0，等于"没实现也算通过"——`test_results` 的 22 项因此空转了
+> 两天，绿灯只是因为没人改过 `results.py`。
+>
+> `test_results` 是 `unittest` 风格，`main()` 用 `TestLoader` + `TextTestRunner` 手动跑一遍再折成
+> 0/1：**不能直接调 `unittest.main()`**，那个函数自己会 `sys.exit`，在聚合器里会把整个进程带走。
 
 **几条测试里钉住的关键断言**（都是踩过坑才写下的）：
 
@@ -1051,12 +1249,17 @@ STOCKHUB_LIVE=1 python3 -m stock_data_fetch.tests.test_westock   # 额外跑 4 �
   说明"同一根 bar 今天和三个月后的前复权价不一样"，能让所有历史回测结论失效；
 - 人为删掉中间一天 → `InsufficientDepth`，**不返回 299 根**；
 - 两进程同时 `ensure` 同一只 → 上游调用计数 **== 1**；
-- `PRAGMA user_version = 2` 后 `preflight()` → `SchemaMismatch`，且**库内任何表行数不变**；
+- `PRAGMA user_version = SCHEMA_VERSION + 1`（**未来的版本**）→ `SchemaMismatch`，且**库内容零改动**；
+  反过来 `user_version = 1` 的老库（没有 `scan` 表）→ **自动补表升到 v6**，既有 `meta` 键与 `kline` 行一条不动，
+  并在 `meta` 里留 `schema_upgraded_at`；
 - 上游这次没给资产负债表 → 已有的 `TotalFixedAsset` / `CIP` **不被抹成 NULL**；
 - 上游连续 3 次失败后第 4 只**不再白打上游**（`strikes` 必须跨股票累积）；
 - 盘中补历史（`need.end` 早于今天）→ 放行；盘中要当日/未来数据 → `MarketOpenError`，且**一次上游都没打**；`quote` 始终拦；
 - 同一除权日的两条方案 → 派息 `6.957`（不是 `4.779`），且 `plan_text` 两条都在；
-- 估值起点 `2016-11-15` 而日历首日是 `2022-11-14` → **证明起点没被夹**；
+- 估值起点落在"10 年整那天之后的第一个交易日"，**且不早于 10 年整**——日历短于窗口时则原样保留自然日，
+  两条分支各有一条断言（2026-11-17 改：旧断言写"起点早于日历首日"，那是 4 年日历时代的形状）；
+- 只缺最后一天 → 只请求那一天，且起点是**覆盖末端之后的下一个交易日**（`_next_trading` 的主线；
+  日历末端不够时才退回自然日 +1）；
 - 第一次瞬断 → 第 2 次就成功、**冷却一次都没睡**（基准 30s，睡过就不算"立刻"）。
 
 ### 8.1 真上游冒烟（10 只票 × 6 域，2026-11-14）
@@ -1080,12 +1283,18 @@ STOCKHUB_LIVE=1 python3 -m stock_data_fetch.tests.test_westock   # 额外跑 4 �
 | `profile` / `quote` | 108 批 × 0.4s | 各约 1 分钟 |
 | `finance` | 108 批 × 10s | 约 18 分钟 |
 | `dividend` | 4300 × 0.43s | 约 31 分钟 |
-| `kline` | 4300 × (0.4s + 节流 1.2s) | **约 2 小时** |
+| `kline` | 4300 × (0.4s + 节流 1.2s) | **约 2 小时**（← 这一行已作废，见下） |
 | `valuation` | 4300 × (1 页 + 节流 520 行) | 约 1.5 小时 |
 
 **K 线的瓶颈是节流不是延迟**：单只 HTTP 只要 0.4s，但 300 行配额按 15000 行/分钟
 折算等于 1.2s/只。这也是"不预热全市场"的实证依据——首建全市场 6 个域要 5 小时以上，
 而四个工具实际只需要候选池（几百到一千只）的量。
+
+> **`kline` 那一行 11-15 就作废了**：这轮冒烟走的是东财**单只逐条**，所以是"4300 × 单价"。
+> 换成 westock 多码批量后，日增量是 4300 / 60 ≈ **73 批**，按 1000ms 最小间隔算约 **73 秒**
+> （这就是 `config.MIN_INTERVAL_MS` 里那句"每天多等几十秒"的出处）。
+> 其余几行的单价仍然是 westock 批量下测的，继续有效；`finance`/`dividend` 不支持多码的
+> 那部分（分红逐只）也没变。
 
 **这一轮冒烟逼出 3 个只有打真实数据才现形的 bug**（离线测试全绿也没抓到）：
 
@@ -1109,24 +1318,26 @@ STOCKHUB_LIVE=1 python3 -m stock_data_fetch.tests.test_westock   # 额外跑 4 �
 | 4 | 复权怎么做？ | 只存 raw + `dividend` 算因子，消费侧现算 |
 | 5 | `fp` 含 `src` 吗？ | **不含**。换源作废靠 `meta`，只对 `finance`/`valuation` |
 | 6 | 财报能不能删期？ | **不能**，append-only；门槛 `>= 40` 期 |
-| 7 | K 线深度？ | 300 根（`KLINE_LOOKBACK_DAYS=450` 换算，`KLINE_MAX_BARS=300`） |
+| 7 | K 线保留多深？ | **400 根**（`KLINE_KEEP_BARS`）。最大消费者只要 300（judge 250 / kline-screen 71），多留 100 根让停牌股不抖 |
 | 8 | 盘中能跑吗？ | **读库能跑；补历史能联网；取当日不能**：`hit` 命中照常返回，`need.end < 今天` 放行，当日/未来抛 `MarketOpenError`；`quote` 始终拦 |
 | 9 | 建不建 daemon / cron？ | **不建** |
-| 10 | 版本不符怎么办？ | **拒绝启动 + 提示重建**，不写迁移脚本 |
+| 10 | 版本不符怎么办？ | **能自动升就升、不能就拒绝**：白名单（纯新增表 / 加列 / 删索引 / 可重入表重建）逐跳迁移，其余拒绝启动 + 提示重建 |
 | 11 | `kline` 主源？ | **westock**（多码批量，20 只 0.6 秒）；东财退为第一备源（单只、逐只 HTTP，4304 只要 50–75 分钟）。见 `sources.PREFERRED` |
 | 12 | 空表算什么？ | `empty_reason` + `settle()`，**不静默写 0 行** |
 | 13 | 冷却中的源？ | **排到后面，不是摘掉**；全冷却就等 |
 | 14 | 瞬断（掐连接）？ | **第一次立刻重发、不冷却**；第二次起才冷却退避，始终不换源 |
 | 15 | 目录命名？ | 全部下划线：`stock_data_fetch`、`stock_quality_screen`… |
 | 16 | 估值门槛多少周？ | **430 周**（8.3 年）。上游 `RPT_VALUEANALYSIS_DET` 上限 454 周，写 520 不可达 |
-| 17 | 交易日历多长？ | **12 年，自己生成**（`state/trading_calendar.json`），4 年那份只做兜底 |
+| 17 | 交易日历多长？ | **12 年，自己生成**（`state/trading_calendar.json`，`build_calendar.py`）。4 年那份随 kline-screen 仓库一起消失，不再兜底——缺就报错，不悄悄降深度 |
 | 18 | 同日多条分红方案？ | **相加**（年度 + 特殊分红共用除权日），不是二选一 |
-| 19 | 诊断工具进启动路径吗？ | **不进**。`doctor` 只读离线随手跑，`probe` 手动联网跑，`repair` 要显式 `--apply`。启动依赖网络 = 上游抖一下四个工具全起不来 |
+| 19 | 诊断工具进启动路径吗？ | **不进**。`doctor` 只读离线随手跑，`probe` 手动联网跑，`repair` / `maintain` 要显式 `--apply`。启动依赖网络 = 上游抖一下四个工具全起不来 |
 | 20 | `probe` 的 `SKIP` 算失败吗？ | **不算**。上游被封、库里没这只票都是前置条件不满足，退出码只看 `MISMATCH` |
 | 21 | append-only 的存量错误怎么修？ | **窄口径 `repair`**：只在"库里的值恰好等于上游其中一条方案、上游合计更大"时改成合计，留痕到 `meta`。认不出签名不碰 |
 | 22 | 前复权口径？ | **等比**（除权参考价连乘）。两家上游都是等差，差异只在除权日之前，`probe` 用"双口径比对"消化这个差 |
 | 23 | 交易所/巨潮能当主源吗？ | **不能**。行情只有当日快照、财报是 PDF、没有 PE/PB。它们只在**交易日历**上是权威（`--source szse`），其余当人工核对的索引 |
 | 24 | 日历源顺序？ | `westock`（12 次）→ `szse`（144 次，权威）→ `eastmoney`（1 次，常被封）。三源都试过仍失败才报错 |
+| 25 | 横截面（`scan`）留多久？ | **30 天**（`SCAN_RETENTION_DAYS`）。四个工具的粗筛只看最近 K+1 天（K ≤ 5），120 天就是白白多占 57 MB |
+| 26 | 人工标注放 YAML 还是入库？ | **入库**（`annotation` 表）。跟着代码目录走会丢、改一条要动文本、只有一家工具读得到。枚举 8 值，「无标注」是结论、「待核实」是待办 |
 
 ---
 
@@ -1138,9 +1349,10 @@ STOCKHUB_LIVE=1 python3 -m stock_data_fetch.tests.test_westock   # 额外跑 4 �
 | **baostock 不可用** | `bs.login()` 返回 `10001011 黑名单用户`（网络侧被拒）。因子金标准与估值独立校验两条暂时落不了地 | 换网络/换机器再试 |
 | **`factor` 的探针跑不了自动化** | 因子校验基准是 tdx qfq 价格，而 tdx 在 CLI 进程 401。`纪要` 那次是手工调的宿主 MCP | 手工季度跑，或等 baostock |
 | **东财封禁时长未知** | 密集取数后 `push2his` 会整段拒连（0.2s 内关闭），2026-11-14 实测**持续 20 分钟以上未恢复**，而"静默几十秒恢复"是稀疏取数时的表现 | 长跑测出恢复曲线，再决定 `cooldown_*` 要不要按次数而非时间退避 |
-| **K 线只有一条腿** | 东财 `push2his` 被封时无备源：tdx 在 CLI 进程 401、westock `data_kline` 只回 1212 根（5 年） | 若要备源，得让 westock 支持分段翻页（`startxh` 式）或解决 tdx 令牌 |
+| **`amount = 0` 有两种含义** | `tencent` 通道没有成交额字段，而 `kline.amount` 是 `NOT NULL DEFAULT 0`，只能落 0。于是 0 既可能是"上游明确给了 0"，也可能是"这一行来自腾讯通道"。区分只能看 `kline.src`。而 `judge_top` 的换手折算与 `kline_screen` 的 `turnover20` **现在都读 `amount`** | 换过源的股票在那段拼接期里 `amount` 会从 0 变有值，指标会跳一下。要干净就按 `probe` 对账后整段重取；或让指标显式跳过 `amount = 0` 的行 |
 | **估值只能到 8.9 年** | 东财 `RPT_VALUEANALYSIS_DET` 最早 2018-01-02（454 周），门槛已按此定 430 | 要"十年分位"必须换源（理杏仁/tdx），先验口径再定 |
-| **长日历会滑出窗口** | `state/trading_calendar.json` 是生成物，12 年后（2038）起点会不够用；实际影响是每年该重生成一次 | 写进季度维护清单，或让 `doctor` 检查跨度 |
+| **长日历是生成物，不会自己变长** | `state/trading_calendar.json` 的末日停在生成那一天（当前 2026-11-17），往后不再长。闸 5 会在"末日距今天 > 30 天"时报 `HubNotReady`，`doctor` 另有 `cal.short` 告警 | 写进季度维护清单：`python3 -m stock_data_fetch.build_calendar` 重跑一次（12 次请求，取并集，不会变短） |
+| **股票级 GC 没有实现** | `stock.last_access_at` 一直在写（`touch_access`），但**没有任何代码按它回收数据**——`grep "DELETE FROM stock"` 零命中。原设计里那句"`last_access_at` 早于 90 天 → 删该股 `kline`/`valuation`"只是设想，相关注释已于 2026-11-17 改成"只写不读" | 真要做时注意：删 `kline` 必须同事务重算 coverage，否则 `hit()` 会拿一条指向空表的覆盖去放行 |
 | **东财空表比例** | 20 只样票 3 只空表（15%）。若成立，4300 只里有几百只永远取不到 | 全市场量级再验；`ensure_many` 已能跳过而不是整体失败 |
 | **停牌股段级重试** | `settle()` 会多重试一次（整段 + 缺口段共 3 次调用） | 已接受，写进断言 |
 | **`valuation.circ_mv` 恒为 NULL** | 东财 `RPT_VALUEANALYSIS_DET` **没有流通市值列**（`CIRCULATE_MARKET_CAP` / `CIRC_MARKET_CAP` / `FLOAT_MARKET_CAP` / `FREE_MARKET_CAP` / `NOTLIMITED_MARKET_CAP` 全部返回 `9501 字段不存在`）。`total_mv` 有（`TOTAL_MARKET_CAP`）。**不拿 `total_mv` 顶替**：对不全流通的股票那是个偏大的数，会让换手率偏小 | 真要就用 `quote.circ_mv`（westock 有），或其他报告名，先验再用 |
@@ -1159,7 +1371,7 @@ STOCKHUB_LIVE=1 python3 -m stock_data_fetch.tests.test_westock   # 额外跑 4 �
 | 抓取（东财 `RPT_VALUEANALYSIS_DET` 按日横截面） | `stock_price_show/source.py` |
 | 落库（`shared.db.price` + `results.db.price` / `price_stat`） | `stock_price_show/store.py` |
 | 冷热摘要口径（涨跌停 / 中位数） | `stock_price_show/stat.py` |
-| CLI | `python3 -m stock_price_show`（日常用 `./run.py get-price`） |
+| CLI | `python3 -m stock_price_show`（日常用 `./run.py price`） |
 
 所以本层的 `need` / `router` / `coverage` / `sources` 里**没有** `price` 域，
 `shared.db` 也**不需要**为它升到 v7。两边的唯一约定是文件路径（同一个仓库根、
@@ -1192,7 +1404,7 @@ STOCKHUB_LIVE=1 python3 -m stock_data_fetch.tests.test_westock   # 额外跑 4 �
 
 | 词 | 含义 |
 |---|---|
-| **域（domain）** | 一类数据：`kline` / `finance` / `dividend` / `valuation` / `quote` / `profile` / `snapshot` |
+| **域（domain）** | 一类数据：`kline` / `finance` / `dividend` / `valuation` / `quote` / `profile` / `snapshot` / `scan` / `annotation` |
 | **上游（upstream）** | 数据真正的来源方：tencent / eastmoney / tdx / baostock |
 | **传输（transport）** | 怎么拿到：mcp / http / lib。同一个上游可以有多条传输 |
 | **need** | 一次取数需求（区间 + 点数门槛 + 口径指纹） |
@@ -1206,11 +1418,12 @@ STOCKHUB_LIVE=1 python3 -m stock_data_fetch.tests.test_westock   # 额外跑 4 �
 ### 11.3 常用命令
 
 ```bash
-# 跑全部测试
+# 跑全部测试（13 个文件 / 909 项，一次跑完；任一失败返回非 0）
 cd ~/MyData/stock-value-invest-tool && python3 -m stock_data_fetch.tests
 
 # 只跑某一组
 python3 -m stock_data_fetch.tests.test_factor
+python3 -m stock_data_fetch.tests.test_results
 
 # 建库（一般不用手动，preflight 会建）
 sqlite3 ~/MyData/stock-value-invest-tool/shared.db < stock_data_fetch/schema.sql
@@ -1221,12 +1434,16 @@ python3 -m stock_data_fetch.build_calendar --dry-run        # 只校验不写盘
 python3 -m stock_data_fetch.build_calendar --source westock # 12 次请求，够快
 python3 -m stock_data_fetch.build_calendar --source szse     # 权威腿（深交所，按月 144 次）
 
-# 备份（原子快照）
-sqlite3 ~/MyData/stock-value-invest-tool/shared.db "VACUUM INTO 'backup/shared-$(date +%Y%m%d).db'"
+# 备份（原子快照，保留 7 份；两个库都备）
+./run.py backup
 
 # 体检：只读、不联网、不建库；有 ERROR 退出码 1
 python3 -m stock_data_fetch.doctor
 python3 -m stock_data_fetch.doctor --json --quiet
+
+# 库体积审计与清理：默认只审计，--apply 才删（scan 30 天 / kline 400 根 / VACUUM）
+python3 -m stock_data_fetch.maintain
+python3 -m stock_data_fetch.maintain --apply
 
 # 对账：会联网、只读；有 MISMATCH 退出码 1（SKIP 不算失败）
 python3 -m stock_data_fetch.probe                      # 五个探针全跑
@@ -1237,6 +1454,12 @@ python3 -m stock_data_fetch.probe --db .testtmp/smoke/shared.db
 # 修分红漏记：默认 dry-run，--apply 才写库
 python3 -m stock_data_fetch.repair dividend
 python3 -m stock_data_fetch.repair dividend --symbols sh601318 --apply
+
+# 人工标注（垄断性）：show / list / set / delete / import / export
+python3 -m stock_data_fetch.annotation list --only-annotated
+python3 -m stock_data_fetch.annotation show sh600519
+python3 -m stock_data_fetch.annotation set sh600519 --moat-type 独家资源 \
+        --evidence "赤水河核心产区 + 5 年基酒周期不可压缩" --verified 2026-11-16
 
 # 看一眼库里有什么
 sqlite3 ~/MyData/stock-value-invest-tool/shared.db \

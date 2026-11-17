@@ -171,6 +171,42 @@ def test_source() -> None:
           source._symbol_of("ABCDEF") is None and source._symbol_of("600519.HK") is None)
     check("北交所要保留", source._symbol_of("920992.BJ") == "bj920992")
 
+    # 单只：代码归一化 + SECUCODE 过滤 + 只返回目标那只
+    check("代码归一化：纯数字/带市场/带后缀",
+          source.normalize_symbol("002096") == "sz002096"
+          and source.normalize_symbol("sz002096") == "sz002096"
+          and source.normalize_symbol("002096.SZ") == "sz002096"
+          and source.normalize_symbol("600519.SH") == "sh600519"
+          and source.normalize_symbol("920992.BJ") == "bj920992")
+    check("代码归一化：认不出返回空",
+          source.normalize_symbol("ABCDEF") == ""
+          and source.normalize_symbol("12345") == "")
+    single_calls: list[str] = []
+
+    def single_reader(url: str, *, referer: str = "") -> str:
+        single_calls.append(url)
+        return fake_payload([raw_row("002096.SZ", "某只票", 12.34, 1.23,
+                                     15.0, 1.8, 2.0, 1e10, 8e9)])
+
+    one = source.fetch_symbol(D1, "002096", get=single_reader)
+    check("单只：返回目标股票", one is not None and one["symbol"] == "sz002096"
+          and one["close"] == 12.34, str(one))
+    check("单只：URL 带 SECUCODE 过滤",
+          "SECUCODE" in single_calls[0]
+          and "002096.SZ" in single_calls[0].replace("%27", "'"),
+          single_calls[0][:200])
+    check("单只：只请求一页", len(single_calls) == 1, str(len(single_calls)))
+    check("单只：上游空 → None",
+          source.fetch_symbol(D1, "002096",
+                              get=lambda url, referer="": json.dumps(
+                                  {"success": False, "code": "9201",
+                                   "message": "返回数据为空"})) is None)
+    try:
+        source.fetch_symbol(D1, "ABCDEF")
+        check("单只：代码认不出 → SourceError", False, "没抛")
+    except source.SourceError:
+        check("单只：代码认不出 → SourceError", True)
+
     # 沪深300：单独接口、单独解析
     kline = json.dumps({"rc": 0, "data": {
         "name": "沪深300",
@@ -433,6 +469,51 @@ def test_cli(root: Path) -> None:
         # --restat
         rc = cli.main(base + ["--restat"])
         check("--restat 退出码 0", rc == 0, f"rc={rc}")
+
+        # --code：只 upsert 这一只，不整天替换
+        import io
+        from contextlib import redirect_stdout
+        real_symbol = source.fetch_symbol
+        source.fetch_symbol = lambda day, code, **kw: {  # type: ignore[assignment]
+            "date": D1, "symbol": "sz002096", "name": "某只票",
+            "close": 12.34, "pct_chg": 1.23, "pe_ttm": 15.0, "pb_mrq": 1.8,
+            "ps_ttm": 2.0, "total_mv": 1e10, "circ_mv": 8e9,
+            "src": "test"}
+        try:
+            sh = sqlite3.connect(shared_p)
+            rs = sqlite3.connect(results_p)
+            before_rows = (sh.execute("SELECT COUNT(*) FROM price").fetchone()[0],
+                           rs.execute("SELECT COUNT(*) FROM price").fetchone()[0])
+            sh.close()
+            rs.close()
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = cli.main(base + ["--code", "002096", "--date", D1])
+            out = buf.getvalue()
+            check("--code 退出码 0", rc == 0, f"rc={rc}")
+            check("--code 打印名称/收盘/写入说明",
+                  "某只票" in out and "12.34" in out and "price 1 行" in out, out[:240])
+            sh = sqlite3.connect(shared_p)
+            rs = sqlite3.connect(results_p)
+            after_rows = (sh.execute("SELECT COUNT(*) FROM price").fetchone()[0],
+                          rs.execute("SELECT COUNT(*) FROM price").fetchone()[0])
+            stat_n = rs.execute("SELECT n FROM price_stat WHERE date=?",
+                                (D1,)).fetchone()[0]
+            sh.close()
+            rs.close()
+            check("--code 只多写一只（不清掉当天其它行）",
+                  after_rows == (before_rows[0] + 1, before_rows[1] + 1),
+                  f"{before_rows} → {after_rows}")
+            check("--code 重算当天摘要（3 只 + 新增 1 只）", stat_n == 4,
+                  f"n={stat_n}")
+        finally:
+            source.fetch_symbol = real_symbol          # type: ignore[assignment]
+        with redirect_stdout(io.StringIO()):
+            rc = cli.main(base + ["--code", "ABCDEF", "--date", D1])
+        check("--code 非法代码 → 退出码 2", rc == 2, f"rc={rc}")
+        with redirect_stdout(io.StringIO()):
+            rc = cli.main(base + ["--code", "002096", "--date", D1, "--force"])
+        check("--code + --force → 退出码 2", rc == 2, f"rc={rc}")
     finally:
         source.fetch_day = real_fetch                  # type: ignore[assignment]
         source.fetch_index = real_index                # type: ignore[assignment]

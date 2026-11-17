@@ -12,7 +12,8 @@
     python3 run.py quality --stock 600519   # 质量初筛单只
     python3 run.py top sh600519    # 顶部判断（stock_judge_top，单只，随时可跑）
     python3 run.py top --from-select            # 顶部判断批量：读结果库的名单
-    python3 run.py get-price --date 2026-11-17  # 全市场快照（价 + PE + PB + PS + 沪深300）
+    python3 run.py price --date 2026-11-17  # 全市场快照（价 + PE + PB + PS + 沪深300）
+    python3 run.py price --code 002096 --date 2026-11-03  # 单只补数（只改这一只）
     python3 run.py web                          # 打开看板（Flask + Chart.js）
 
 ## 为什么要有这个脚本
@@ -41,7 +42,7 @@
 `python3 -m stock_data_fetch.build_calendar`——这条命令四个工具和 README 里都写着，
 比在入口再挂一个 `calendar` 子命令少一处迷惑。
 
-退出码：0 成功 / 1 某步失败 / 2 用法错误 / 130 用户中断。
+退出码：0 成功 / 1 某步失败 / 2 用法错误 / 3 选股 0 只 / 4 日期定不下来 / 130 用户中断。
 """
 
 from __future__ import annotations
@@ -69,6 +70,20 @@ DB_PATH = ROOT / "results.db"
 CLOSE_GRACE = (15, 5)
 """收盘宽限。与 `stock_data_fetch.config.CLOSE_GRACE` 保持一致：15:05 之前
 上游给的是盘中价，用它算「收盘站上 MA20」这类判定本身就是错的。"""
+
+EXIT_BAD_DATE = 4
+"""目标交易日定不下来：`--date` 不在日历 / 没有日历 / 日历早于今天。
+
+原来这类错走 `raise SystemExit("错误：…")`，而带字符串的 `SystemExit`
+解释器只退 **1**——和"某步有票失败"撞在同一个码上。于是 `&&` 链、CI、
+`./run.py all || retry` 都没法区分"日期敲错了，改参数重跑"和"上游缺数据，
+过一会儿再跑也许就好"。（2026-11-17 拆出来：1 只表示数据层面有票失败。）"""
+
+
+class BadDate(Exception):
+    """目标交易日定不下来。**别用 `SystemExit(字符串)`**：那个只能退 1。"""
+
+    code = EXIT_BAD_DATE
 
 MODULES = {
     "select": ("选股", "stock_kline_screen"),
@@ -115,18 +130,21 @@ def pick_date(explicit: str | None, days: list[str]) -> str:
     （与 `calendar.target_date` 同一套规则，避免入口和库内算法各说各话）。
     显式给的日期**必须是日历里的交易日**，否则直接报错——猜一个"最近的交易日"
     正是上一周那份静默报告的来源。
+
+    定不下来时抛 `BadDate`（不是 `SystemExit`）：调用方据此退 4，
+    与"某步有票失败"（退 1）区分开。
     """
     if explicit and explicit not in ("today", "latest"):
         day = explicit
         if days and day not in set(days):
-            raise SystemExit(
+            raise BadDate(
                 f"错误：{day} 不在交易日历里（日历 {days[0]} .. {days[-1]}）。\n"
                 f"      周五 15:10 之后先跑：python3 -m stock_data_fetch.build_calendar")
         return day
 
     if not days:
-        raise SystemExit("错误：没有交易日历（state/trading_calendar.json）。\n"
-                         "      先跑：python3 -m stock_data_fetch.build_calendar")
+        raise BadDate("错误：没有交易日历（state/trading_calendar.json）。\n"
+                      "      先跑：python3 -m stock_data_fetch.build_calendar")
 
     now = dt.datetime.now()
     today = now.date().isoformat()
@@ -138,7 +156,7 @@ def pick_date(explicit: str | None, days: list[str]) -> str:
     # 而「收盘站上 MA20」这类判定在盘中根本不成立。
     prev = [d for d in days if (d < today if is_trading_today else d <= today)]
     if not prev:
-        raise SystemExit(f"错误：交易日历早于 {today}，无法确定目标交易日。")
+        raise BadDate(f"错误：交易日历早于 {today}，无法确定目标交易日。")
 
     chosen = prev[-1]
     if is_trading_today:
@@ -647,7 +665,8 @@ def step_top(tee: Tee, day: str, codes: list[str], extra: list[str],
     return 0
 
 
-def step_get_price(tee: Tee, day: str | None, extra: list[str]) -> int:
+def step_price(tee: Tee, day: str | None, extra: list[str],
+               stock_code: str | None = None) -> int:
     """全市场价格/估值快照：`price` + `price_stat` + `index_price`，一天一份。
 
     跑的是 `stock_price_show` 子进程——它是独立工具，自己抓东财、自己写两个库，
@@ -656,22 +675,26 @@ def step_get_price(tee: Tee, day: str | None, extra: list[str]) -> int:
     `day=None` 只出现在 `--restat` / `--sync`（纯本地动作，按库里已有的数据算或复制）：
     那时不该塞 `--date`，也不该去数"这天入库了几只"。
 
+    `stock_code` 非空时是单只补数：子进程只 upsert 这一只、不整天替换；
+    这步也不该报"这天入库了几只"。
+
     **不套 `tool=`/`day=`**：那两个参数是给四个工具数"成功几只"用的，本步的产出
     不在 `*_result` 表里。子进程自己也打了 `✅ 5579 只…`，但屏幕上除 `[n/m]`
     之外的行都会被 Tee 收进日志，所以入库只数在这里补一行（`_price_count`）。
     """
     argv = py_module("stock_price_show") + (
-        ["--date", day] if day else []) + extra
-    label = day or "按已有数据"
-    code, _ = run_step(tee, f"全市场价格 get-price（{label}）", argv, ROOT,
-                       short=f"全市场价格（{label}）")
-    if code == 0 and day:
+        ["--date", day] if day else []) + (
+        ["--code", stock_code] if stock_code else []) + extra
+    label = f"{day} · {stock_code}" if stock_code else (day or "按已有数据")
+    rc, _ = run_step(tee, f"全市场价格 price（{label}）", argv, ROOT,
+                     short=f"全市场价格（{label}）", echo=bool(stock_code))
+    if rc == 0 and day and not stock_code:
         n = _price_count(day)
         if n > 0:
             # 子进程那行 "✅ 5579 只…" 只进了日志（屏幕上 `[n/m]` 之外的行都被收掉）。
             # 这一步的结果恰恰就是"入了多少只"，所以在这里补一行上屏幕。
             say(f"  {day} · {n} 只已入库（价 / PE / PB / PS + 沪深300，results.db）")
-    return code
+    return rc
 
 
 def _price_count(day: str) -> int:
@@ -724,9 +747,10 @@ def ensure_calendar(tee: Tee, day_wanted: str | None, auto: bool) -> tuple[str, 
 
     try:
         return pick_date(day_wanted, days), 0
-    except SystemExit as exc:
+    except BadDate as exc:
+        # 退 4 而不是 1：日期错"改参数就能解决"，与"某步有票失败"不是一回事。
         tee.line(str(exc))
-        return "", 1
+        return "", EXIT_BAD_DATE
 
 
 def summary(tee: Tee, day: str, steps: list[tuple[str, int, float]]) -> None:
@@ -820,12 +844,15 @@ def cmd_all(args, tee: Tee) -> int:
 
 def cmd_single(action: str):
     def run(args, tee: Tee) -> int:
-        if action == "get-price" and (getattr(args, "restat", False)
-                                      or getattr(args, "sync", False)):
+        if action == "price" and (getattr(args, "restat", False)
+                                  or getattr(args, "sync", False)):
             # 纯本地动作（重算摘要 / 原始库补到结果库）：不联网、不需要日历，
             # 所以不跑 ensure_calendar（那一步在日历过期时会去打上游）。
+            if getattr(args, "code", None):
+                tee.alert("❌ --code 只能单独查询，不能和 --restat / --sync 一起用。")
+                return 2
             extra = ["--sync"] if getattr(args, "sync", False) else ["--restat"]
-            return step_get_price(tee, args.date, extra)
+            return step_price(tee, args.date, extra)
         day, rc = ensure_calendar(tee, args.date, auto=not args.no_calendar)
         if not day:
             return rc or 1
@@ -834,14 +861,22 @@ def cmd_single(action: str):
                 "上面的日期只作运行标记，不会改变名单。")
         if action == "select":
             return step_select(tee, day, args.extra)
-        if action == "get-price":
+        if action == "price":
             extra = list(args.extra)
+            stock_code = getattr(args, "code", None)
+            if stock_code and (getattr(args, "restat", False)
+                               or getattr(args, "sync", False)
+                               or getattr(args, "force", False)
+                               or int(getattr(args, "prune_keep", 0) or 0) > 0):
+                tee.alert("❌ --code 只改这一只；不能和 --force / --prune-keep / "
+                          "--restat / --sync 一起用。")
+                return 2
             if getattr(args, "force", False):
                 extra.append("--force")
             keep = int(getattr(args, "prune_keep", 0) or 0)
             if keep > 0:
                 extra += ["--prune-keep", str(keep)]
-            return step_get_price(tee, day, extra)
+            return step_price(tee, day, extra, stock_code=stock_code)
         if action in ("cycle", "quality"):
             stock = getattr(args, "stock", None)
             csv_path = None
@@ -1074,7 +1109,7 @@ MENU = """
   3) 周期弹性            stock_cycle_elastic     （回车=批量，或填单只代码）
   4) 质量初筛            stock_quality_screen    （回车=批量，或填单只代码）
   5) 顶部判断            stock_judge_top         （单只/多只；回车=当天选股批量）
-  6) 全市场价格/估值     get-price               （全市场 价/PE/PB/PS + 沪深300，收盘后跑）
+  6) 全市场价格/估值     price               （全市场 价/PE/PB/PS + 沪深300，收盘后跑）
   0) 退出
 """
 
@@ -1123,8 +1158,9 @@ def interactive() -> int:
                 rc = cmd_single("cycle" if choice == "3" else "quality")(args, tee)
             elif choice == "6":
                 args = argparse.Namespace(date=day_hint, no_calendar=False,
-                                          force=False, prune_keep=0, extra=[])
-                rc = cmd_single("get-price")(args, tee)
+                                          code=None, force=False, prune_keep=0,
+                                          extra=[])
+                rc = cmd_single("price")(args, tee)
             else:
                 raw = input("股票代码（可多个，空格分隔；回车=用当天选股结果批量跑）: ").split()
                 args = argparse.Namespace(date=day_hint, no_calendar=False,
@@ -1163,7 +1199,8 @@ def build_parser() -> argparse.ArgumentParser:
   ./run.py cycle   --stock 600519         # 周期弹性，单只
   ./run.py quality --stock 600519         # 质量初筛，单只
   ./run.py top     600519                 # 顶部判断
-  ./run.py get-price --date 2026-11-17    # 全市场价格/估值快照（价 + PE + PB + PS）
+  ./run.py price --date 2026-11-17    # 全市场价格/估值快照（价 + PE + PB + PS）
+  ./run.py price --code 002096 --date 2026-11-03  # 只补这一只
   ./run.py web                            # 只打开看板（读 results.db，只读）
   ./run.py backup                         # 备份数据库（VACUUM INTO + 保留 7 份）
   ./run.py all --no-web                   # 跑完不起看板（放进定时任务时用）
@@ -1283,16 +1320,17 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
                     help="忽略缓存重新取数，并把库里已有结果也重算")
     sp.add_argument("extra", nargs="*", default=[], help="透传给 stock_judge_top 的参数")
 
-    sp = sub.add_parser("get-price",
+    sp = sub.add_parser("price",
                         help="全市场价格/估值快照：价 + PE + PB + PS（写 shared.db + results.db）",
                         formatter_class=argparse.RawDescriptionHelpFormatter,
                         epilog="""示例：
-  ./run.py get-price                      # 今天（过了 15:05）或上一交易日
-  ./run.py get-price --date 2026-11-17    # 指定交易日
-  ./run.py get-price --date 2026-11-17 --force       # 忽略库里已有，重取整天
-  ./run.py get-price --prune-keep 30      # 顺手删掉 30 天之前的 price 行
-  ./run.py get-price --restat             # 只按结果库已有 price 重算每日摘要，不联网
-  ./run.py get-price --sync               # 原始库 → 结果库，不联网
+  ./run.py price                      # 今天（过了 15:05）或上一交易日
+  ./run.py price --date 2026-11-17    # 指定交易日
+  ./run.py price --date 2026-11-17 --force       # 忽略库里已有，重取整天
+  ./run.py price --prune-keep 30      # 顺手删掉 30 天之前的 price 行
+  ./run.py price --restat             # 只按结果库已有 price 重算每日摘要，不联网
+  ./run.py price --sync               # 原始库 → 结果库，不联网
+  ./run.py price --code 002096 --date 2026-11-03  # 只补这一只（保留当天其它行）
 
 一天一份、一股一行，全市场约 5500 只（含北交所），约 6 个上游请求。
 字段：收盘价 / 涨跌幅 / PE(TTM) / PB(MRQ) / PS(TTM) / 总市值 / 流通市值。
@@ -1303,6 +1341,9 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
 ⚠️ 这是**收盘快照**：上游当天收盘后才发布，盘中跑「今天」会报
 「上游没有这一天的数据」。要么收盘后再跑，要么显式给上一个交易日。""")
     add_date(sp)
+    sp.add_argument("--code", default=None,
+                    help="只抓一只股票（002096 / sz002096 / 002096.SZ），"
+                         "upsert 到 price 并重算 price_stat；不删当天其它行")
     sp.add_argument("-v", "--verbose", action="store_true",
                     help="把子进程的原始输出全部打到屏幕上（默认只有进度条，明细在日志里）")
     sp.add_argument("--force", action="store_true",
