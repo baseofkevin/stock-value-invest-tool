@@ -125,11 +125,11 @@ class SelectCountTest(unittest.TestCase):
 
 
 class AllFlowTest(unittest.TestCase):
-    """`cmd_all` 的接线：六步都跑到、顺序对、最后一步是看板。
+    """`cmd_all` 的接线：五步都跑到、顺序对、默认不起看板。
 
-    真跑一遍要三十多分钟还会打上游，所以这里把六个 step 换成假的，
+    真跑一遍要三十多分钟还会打上游，所以这里把各个 step 换成假的，
     只验"谁被调用、以什么参数、先后顺序"——这几种错（漏一步、顺序乱、
-    把 --no-web 忘了传）恰恰是改代码时最容易犯又最难在真跑前发现的。
+    看板被当成默认最后一步）恰恰是改代码时最容易犯又最难在真跑前发现的。
     """
 
     def setUp(self):
@@ -168,7 +168,7 @@ class AllFlowTest(unittest.TestCase):
             date="2026-11-13", no_calendar=True, select_args=[], cycle_args=[],
             quality_args=[], top_args=[], top_workers=2, skip_cycle=False,
             skip_quality=False, skip_top=False, keep_going=False, strict=False,
-            no_web=False, host="127.0.0.1", port=5000)
+            web=False, host="127.0.0.1", port=5000)
         namespace.update(over)
         args = type("A", (), namespace)()
         with tempfile.TemporaryDirectory() as tmp:
@@ -185,11 +185,12 @@ class AllFlowTest(unittest.TestCase):
                 tee.close()
         return rc, [c[0] for c in calls], calls
 
-    def test_six_steps_in_order(self):
+    def test_five_steps_in_order(self):
         rc, names, _ = self._run()
         self.assertEqual(rc, 0)
         self.assertEqual(names, ["step_select", "step_cycle", "step_quality",
-                                 "step_top", "step_web"])
+                                 "step_top"])
+        self.assertNotIn("step_web", names, "all 默认不再起看板")
 
     def test_top_is_batch_mode(self):
         """全流程里的顶部判断走批量（读库里的名单），不是单只。"""
@@ -197,13 +198,18 @@ class AllFlowTest(unittest.TestCase):
         top = dict((c[0], c) for c in calls)["step_top"]
         self.assertEqual(top[2].get("csv_path"), "results")
 
-    def test_no_web_skips_server(self):
-        rc, names, _ = self._run(no_web=True)
+    def test_web_skips_server_by_default(self):
+        rc, names, _ = self._run()
         self.assertEqual(rc, 0)
         self.assertNotIn("step_web", names)
 
+    def test_web_flag_starts_server(self):
+        rc, names, _ = self._run(web=True)
+        self.assertEqual(rc, 0)
+        self.assertIn("step_web", names)
+
     def test_web_gets_host_and_port(self):
-        _rc, _names, calls = self._run(port=8081)
+        _rc, _names, calls = self._run(web=True, port=8081)
         web = dict((c[0], c) for c in calls)["step_web"]
         self.assertEqual(web[1][0].port, 8081)
 
@@ -216,7 +222,7 @@ class AllFlowTest(unittest.TestCase):
         self._fake_run(kind="batch", n_ok=35, n_fail=3)
         rc, names, _ = self._run(cycle_rc=1)
         self.assertEqual(rc, 0)
-        self.assertIn("step_web", names, "该继续走到看板")
+        self.assertIn("step_top", names, "该继续走到顶部判断")
 
     def test_zero_output_stops(self):
         """一只都没成功（名单对不上/库被锁）必须停，别产出缺腿的结果。"""
@@ -393,26 +399,29 @@ class ParserTest(unittest.TestCase):
         self.assertFalse(p.parse_args(["web", "--no-debug"]).debug)
 
     def test_all_is_full_pipeline(self) -> None:
-        """全流程 = 日历 → 选股 → 周期 → 质量 → 顶部 → 看板，一步不缺。"""
+        """全流程 = 日历 → 选股 → 周期 → 质量 → 顶部，默认不含看板。"""
         a = run.build_parser().parse_args(["all"])
         self.assertEqual(a.cycle_args, "--workers 2")
         self.assertEqual(a.quality_args, "--workers 2")
         self.assertEqual(a.top_workers, 4)
-        self.assertFalse(a.no_web, "默认要起看板")
+        self.assertFalse(a.web, "默认不起看板")
         self.assertFalse(a.skip_top)
         self.assertEqual(a.port, 5000)
 
-    def test_all_no_web_is_opt_out(self) -> None:
-        """无头环境要能只跑流程不起服务。"""
-        self.assertTrue(run.build_parser().parse_args(["all", "--no-web"]).no_web)
+    def test_all_web_is_opt_in(self) -> None:
+        """想看结果时用 --web 显式起看板；旧 --no-web 仍可解析（兼容脚本）。"""
+        p = run.build_parser()
+        self.assertTrue(p.parse_args(["all", "--web"]).web)
+        self.assertTrue(p.parse_args(["all", "--no-web"]).no_web)
 
     def test_all_flow_steps_in_order(self) -> None:
         """照着源码里的调用顺序核对，别让某一步被后来的人悄悄删掉。"""
         import inspect
         src = inspect.getsource(run.cmd_all)
-        order = ["step_select", "step_cycle", "step_quality", "step_top", "step_web"]
+        order = ["step_select", "step_cycle", "step_quality", "step_top"]
         positions = [src.index(name) for name in order]
         self.assertEqual(positions, sorted(positions), "步骤顺序变了：应从小到大")
+        self.assertIn('getattr(args, "web"', src, "看板必须是可选步骤")
 
     def test_weekly_still_works_as_alias(self) -> None:
         """旧写法 ./run.py weekly 不能失效（README/脚本里可能还有）。"""

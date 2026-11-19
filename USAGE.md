@@ -94,11 +94,13 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ./run.py all
 ```
 
-做六步，最后**直接把看板起起来**（Ctrl-C 结束）：
+做五步，**跑完就结束、默认不起看板**：
 
 ```
-⓪ 日历 → ① 选股 → ② 周期弹性 → ③ 质量初筛 → ④ 顶部判断 → ⑤ 看板
+⓪ 日历 → ① 选股 → ② 周期弹性 → ③ 质量初筛 → ④ 顶部判断
 ```
+
+看结果时单独跑 `./run.py web`（读 `results.db`，只读）。
 
 - **必须在 15:05 之后**。之前跑会退到上一个交易日，并打一行黄字提醒。
 - 工作日发现日历过期会**自动**跑一次 `build_calendar`（周末不自动，省一次无用请求）。
@@ -107,8 +109,8 @@ cd /home/kevin/MyData/stock-value-invest-tool
 常用变体：
 
 ```bash
-./run.py all --no-web                # 不起看板（定时任务 / 无头机器）
-./run.py all --port 8080             # 看板换端口
+./run.py all --web                   # 跑完顺便起看板（默认不起）
+./run.py all --web --port 8080       # 看板换端口
 ./run.py all --skip-top              # 今天不想跑顶部
 ./run.py all --strict                # 任何一只失败就停（默认是有产出就继续）
 ./run.py all -v                      # 不画条，子进程输出全打到屏幕（排查用）
@@ -121,7 +123,7 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ```
 
 ```
-  1) 全流程：日历 → 选股 → 周期弹性 → 质量初筛 → 顶部判断 → 看板  ← 每周五盘后
+  1) 全流程：日历 → 选股 → 周期弹性 → 质量初筛 → 顶部判断  ← 每周五盘后
   2) 只跑选股            stock_kline_screen
   3) 周期弹性            stock_cycle_elastic     （回车=批量，或填单只代码）
   4) 质量初筛            stock_quality_screen    （回车=批量，或填单只代码）
@@ -239,7 +241,7 @@ python3 -c "import json;d=json.load(open('state/trading_calendar.json'));print(d
 
 ```bash
 # crontab：周五 15:20
-20 15 * * 5 cd /home/kevin/MyData/stock-value-invest-tool && ./run.py all --no-web >> logs/cron.log 2>&1
+20 15 * * 5 cd /home/kevin/MyData/stock-value-invest-tool && ./run.py all >> logs/cron.log 2>&1
 ```
 
 重定向到文件时**不画进度条**，每步一行结果，日志照样完整。
@@ -286,7 +288,7 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 | `--keep-going` | 某步失败也继续 |
 | `--select-args` `--cycle-args` `--quality-args` `--top-args` | 字符串透传给对应工具 |
 | `--top-workers` | 顶部并发，默认 4 |
-| `--no-web` `--host` `--port` | 看板相关 |
+| `--web` `--host` `--port` | 看板相关（默认不起；`--no-web` 旧参数仍兼容） |
 | `-v` | 全量输出 |
 
 注意：`all` **不接受**未知参数（`parse_known_args` 之后会报错），要透传必须用上面四个 `--xxx-args`。
@@ -399,8 +401,8 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 cd /home/kevin/MyData/stock-value-invest-tool
 
 ./run.py                                   # 帮助（什么都不跑）
-./run.py all                               # 周五盘后全流程（含看板）
-./run.py all --no-web                      # 同上，不起看板
+./run.py all                               # 周五盘后全流程（不含看板）
+./run.py all --web                         # 同上，跑完顺便起看板
 ./run.py menu                              # 菜单
 
 ./run.py select  --date 2026-11-13         # 选股（= 名单的源头）

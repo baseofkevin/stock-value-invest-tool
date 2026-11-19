@@ -32,7 +32,7 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ./run.py menu
 ```
 
-它会依次做完六步，最后**直接把看板起起来**（`./run.py all` 一个命令走到底）：
+它会依次做完五步，**跑完就结束、默认不起看板**：
 
 ```
 ⓪ build_calendar        更新交易日历（日历过期会让下游静默产出上一周的报告）
@@ -40,8 +40,9 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ② stock_cycle_elastic   周期弹性   → results.db / cycle_result
 ③ stock_quality_screen  质量初筛   → results.db / quality_result
 ④ stock_judge_top       顶部判断   → results.db / top_result
-⑤ ./run.py web          看板       → http://127.0.0.1:5000（Ctrl-C 结束）
 ```
+
+看结果时单独跑 `./run.py web`（读 `results.db`，只读，不联网）。
 
 **屏幕上只有一条进度条。** 每步一行，跑完定格成结果：
 
@@ -79,11 +80,12 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ./run.py all --strict
 ```
 
-不想起看板（放进定时任务、或在没有浏览器的机器上跑）：
+全流程默认不起看板，适合放进定时任务或在没有浏览器的机器上跑。
+想让流程跑完顺便把看板起起来（长驻进程，Ctrl-C 结束）：
 
 ```bash
-./run.py all --no-web
-./run.py all --port 8080          # 换端口
+./run.py all --web
+./run.py all --web --port 8080    # 换端口
 ```
 
 **四个工具不再产出 CSV 和 HTML**（2026-11-15 起）。结论只有一处：`results.db`。

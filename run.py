@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """四个功能模块的统一入口。
 
-    python3 run.py all             # 全流程：日历 → 选股 → 周期 → 质量 → 顶部 → 看板
+    python3 run.py all             # 全流程：日历 → 选股 → 周期 → 质量 → 顶部（不起看板）
     python3 run.py menu            # 交互菜单
     python3 run.py -h              # 帮助
     python3 run.py select          # 只跑选股（stock_kline_screen）
@@ -833,11 +833,11 @@ def cmd_all(args, tee: Tee) -> int:
 
     summary(tee, day, steps)
 
-    # 最后一步是"看结果"：起看板。它是长驻进程，所以放在最后、也是唯一
-    # 需要人按 Ctrl-C 才结束的一步。自动化里用 --no-web 跳过。
-    if args.no_web:
+    # 看板是长驻进程，不再是 all 的最后一步：流程跑完就结束，想看结果
+    # 单独跑 ./run.py web。只有显式加 --web 才在流程结束后把看板起起来。
+    if not getattr(args, "web", False):
         tee.line("")
-        tee.line("（按 --no-web 不起看板；随时用 ./run.py web 打开）")
+        tee.line("（全流程不含看板；看结果用 ./run.py web）")
         return 0
     return step_web(args, tee)
 
@@ -1073,10 +1073,10 @@ def cmd_backup(args, tee: Tee) -> int:
 
 
 def step_web(args, tee: Tee) -> int:
-    """全流程的最后一步：把看板起起来（阻塞，Ctrl-C 退出）。
+    """全流程（`all --web`）的最后一步：把看板起起来（阻塞，Ctrl-C 退出）。
 
-    为什么要放在流程里：跑完六步之后人想看的正是"这一批结果"，而看板的
-    默认页就是最新批次。省掉"再敲一条命令、再记一次端口"。
+    默认不跑这一步——看板是长驻进程，放进全流程会挂住自动化。想跑完直接
+    看结果时加 `--web`；平时看结果用单独的 `./run.py web`。
     """
     host = getattr(args, "host", "127.0.0.1")
     port = getattr(args, "port", 5000)
@@ -1104,7 +1104,7 @@ def db_hint() -> str:
 # ---------------------------------------------------------------------------
 
 MENU = """
-  1) 全流程：日历 → 选股 → 周期弹性 → 质量初筛 → 顶部判断 → 看板  ← 每周五盘后
+  1) 全流程：日历 → 选股 → 周期弹性 → 质量初筛 → 顶部判断  ← 每周五盘后
   2) 只跑选股            stock_kline_screen
   3) 周期弹性            stock_cycle_elastic     （回车=批量，或填单只代码）
   4) 质量初筛            stock_quality_screen    （回车=批量，或填单只代码）
@@ -1144,7 +1144,7 @@ def interactive() -> int:
                     quality_args=["--workers", "2"], top_args=[],
                     top_workers=4, skip_cycle=False, skip_quality=False,
                     skip_top=False, keep_going=False, strict=False,
-                    no_web=False, host="127.0.0.1", port=5000, verbose=False)
+                    web=False, host="127.0.0.1", port=5000, verbose=False)
                 rc = cmd_all(args, tee)
             elif choice == "2":
                 args = argparse.Namespace(date=day_hint, no_calendar=False, extra=[])
@@ -1193,7 +1193,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="四个功能模块的统一入口。不带参数只打印帮助；"
                     "跑全流程用 all，想选着跑用 menu。",
         epilog="""示例：
-  ./run.py all                            # 周五盘后全流程（日历→选股→周期→质量→顶部→看板）
+  ./run.py all                            # 周五盘后全流程（日历→选股→周期→质量→顶部）
   ./run.py menu                           # 交互菜单
   ./run.py select --date 2026-11-20       # 只跑选股，指定基准日
   ./run.py cycle   --stock 600519         # 周期弹性，单只
@@ -1203,7 +1203,7 @@ def build_parser() -> argparse.ArgumentParser:
   ./run.py price --code 002096 --date 2026-11-03  # 只补这一只
   ./run.py web                            # 只打开看板（读 results.db，只读）
   ./run.py backup                         # 备份数据库（VACUUM INTO + 保留 7 份）
-  ./run.py all --no-web                   # 跑完不起看板（放进定时任务时用）
+  ./run.py all --web                      # 全流程跑完顺便起看板（默认不起）
 
   # 自己给名单：--csv 直接读 CSV 的代码列，不依赖 results.db 里的选股记录
   ./run.py cycle   --csv ~/MyData/选股_2026-11-06.csv
@@ -1234,7 +1234,7 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
                         help="即使日历过期也不要自动更新")
 
     sp = sub.add_parser("all", aliases=["weekly"],
-                        help="全流程：日历 → 选股 → 周期 → 质量 → 顶部 → 看板")
+                        help="全流程：日历 → 选股 → 周期 → 质量 → 顶部（不起看板）")
     add_date(sp)
     add_verbose(sp)
     sp.add_argument("--skip-cycle", action="store_true", help="跳过周期弹性")
@@ -1249,8 +1249,10 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
     sp.add_argument("--quality-args", default="--workers 2", help="透传给 stock_report.py")
     sp.add_argument("--top-args", default="", help="透传给 stock_judge_top 的参数")
     sp.add_argument("--top-workers", type=int, default=4, help="顶部判断并发数，默认 4")
-    sp.add_argument("--no-web", action="store_true",
-                    help="跑完不起看板（无头/自动化环境用）")
+    sp.add_argument("--web", action="store_true",
+                    help="流程跑完后起看板（默认不起，跑完用 ./run.py web 看结果）")
+    # 旧参数，保留只为不让已有脚本报错；现在默认就是不起看板。
+    sp.add_argument("--no-web", action="store_true", help=argparse.SUPPRESS)
     sp.add_argument("--host", default="127.0.0.1", help="看板监听地址，默认只本机")
     sp.add_argument("--port", type=int, default=5000, help="看板端口，默认 5000")
 
