@@ -25,7 +25,7 @@ PERF_TIMEOUT = 90
 RETRY = 2
 
 #: 上游都认 UA。默认的 `Python-urllib/3.13` 在乐咕上直接 403。
-UA = "Mozilla/5.0 (compatible; market_regime; +local)"
+UA = "Mozilla/5.0 (compatible; stock_market_regime; +local)"
 
 #: 10Y 国债只取近十年——ERP 分位窗口就是 10 年，更早的用不上。
 BOND_START = "2015-01-01"

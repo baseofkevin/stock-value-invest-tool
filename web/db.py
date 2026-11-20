@@ -537,7 +537,7 @@ def batch_date(conn, skip: int = 0) -> str | None:
 def regime(conn, limit: int = 8) -> dict:
     """A股大势的最近几周（最新在前）。
 
-    **不在这里算任何东西**：分位、趋势、状态全是 `market_regime` 跑完就定格的，
+    **不在这里算任何东西**：分位、趋势、状态全是 `stock_market_regime` 跑完就定格的，
     看板只负责摆出来。也不去 `shared.db` 取原件——页面只读这一个库。
 
     三种"没有"都返回空壳，由页面说人话：

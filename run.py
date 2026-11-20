@@ -718,7 +718,7 @@ def _price_count(day: str) -> int:
 def step_regime(tee: Tee, day: str, extra: list[str]) -> int:
     """A股大势：三路信号写 `results.db.market_regime`，一周一行。
 
-    跑的是 `market_regime` 子进程——它自己抓东财/中证/乐咕的四个接口、
+    跑的是 `stock_market_regime` 子进程——它自己抓东财/中证/乐咕的四个接口、
     把原件写进 `shared.db`、把结论写进 `results.db`；入口这边只定日期、收日志。
 
     **失败不拦主流程**：它是背景板，四个工具的结果才是这一批的主体。
@@ -728,8 +728,8 @@ def step_regime(tee: Tee, day: str, extra: list[str]) -> int:
     也**不套 `tool=`/`day=`**：那两个参数是给四个工具数"成功几只"用的，
     本步的产出不在 `*_result` 表里。
     """
-    argv = py_module("market_regime") + ["--date", day] + extra
-    rc, _ = run_step(tee, f"大势 market_regime（{day}）", argv, ROOT, short="大势")
+    argv = py_module("stock_market_regime") + ["--date", day] + extra
+    rc, _ = run_step(tee, f"大势 stock_market_regime（{day}）", argv, ROOT, short="大势")
     return rc
 
 
@@ -1281,7 +1281,7 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
     sp.add_argument("--skip-regime", action="store_true",
                     help="跳过大势（趋势/赔率/情绪，它的结论不参与四步判断）")
     sp.add_argument("--regime-args", default="",
-                    help="透传给 market_regime 的参数（如 --recompute 用原件重算）")
+                    help="透传给 stock_market_regime 的参数（如 --recompute 用原件重算）")
     sp.add_argument("--web", action="store_true",
                     help="流程跑完后起看板（默认不起，跑完用 ./run.py web 看结果）")
     # 旧参数，保留只为不让已有脚本报错；现在默认就是不起看板。

@@ -332,7 +332,7 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 | `--date X` | 真基准日（单只、批量都生效） |
 | `--workers N` `--refresh` | 并发 / 重取并重算 |
 
-### `regime`（A股大势，独立包 `market_regime`）
+### `regime`（A股大势，独立包 `stock_market_regime`）
 
 ```bash
 ./run.py regime                       # 按最近交易日算
@@ -342,7 +342,7 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 
 三路信号**各算各的、不合成总分**：
 
-| 信号 | 看什么 | 阈值（写死在 `market_regime/rules.py`） |
+| 信号 | 看什么 | 阈值（写死在 `stock_market_regime/rules.py`） |
 |---|---|---|
 | 趋势 | 沪深300 周线 MA20 / MA60 | 连续 2 周收盘 < MA20；MA20<MA60 且 MA60 低于 4 周前 |
 | 赔率 | ERP = 100/PE(TTM) − 10年国债 | 近 10 年分位 ≥80 便宜、≥95 极值 |
@@ -352,8 +352,11 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 `market_macro`），结论进 `results.db.market_regime`（一周一行，重跑覆盖）。
 看板 `/batches` 只读结果层，**请求期间不联网**。
 
+> 包名叫 `stock_market_regime`，库里的表仍叫 `market_regime`——表名没跟着改，
+> 是为了不给已经跑出来的周记做一次没必要的迁移；两者是同一个东西。
+
 升级/排错：先 `--recompute` 排除网络问题；四路数据源见
-`market_regime/source.py` 顶部的注释（中证那一路是官方估值，滞后 1–2 个交易日）。
+`stock_market_regime/source.py` 顶部的注释（中证那一路是官方估值，滞后 1–2 个交易日）。
 
 ### `price`（全市场价格 / 估值快照，独立工具 `stock_price_show`）
 

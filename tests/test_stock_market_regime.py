@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""`market_regime.rules` 的边界，不联网、不碰库。
+"""`stock_market_regime.rules` 的边界，不联网、不碰库。
 
 只钉三件事：
 
@@ -12,7 +12,7 @@ from __future__ import annotations
 import datetime as dt
 import unittest
 
-from market_regime import rules
+from stock_market_regime import rules
 
 
 def _weeks(n: int, closes: list[float]) -> list[dict]:

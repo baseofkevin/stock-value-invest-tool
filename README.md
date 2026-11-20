@@ -5,8 +5,9 @@
 
 **四个**功能模块共用一套本地数据层（`stock_data_fetch` + `shared.db`）——库里有的
 数据直接用，没有的才联网，拿到的写回库，下次（乃至其它三个模块）复用。
-第五个包 `stock_price_show` 是**旁路**：它只写 `shared.db.price` 与 `results.db`，
-不 import 数据层（抓一天全市场只要 6 个请求，用不上 hub / 路由 / 覆盖那一整套）。
+另外两个包是**旁路**，都不 import 数据层（抓取请求少，用不上 hub / 路由 / 覆盖那一整套）：
+`stock_price_show` 抓全市场价格快照，`stock_market_regime` 算 A股大势（趋势/赔率/情绪）。
+后者的结论只作背景板，**不参与**四个工具的任何判断。
 
 | 模块 | 干什么 | 入口 |
 |---|---|---|
@@ -15,6 +16,7 @@
 | `stock_quality_screen` | 质量初筛：质量分 Q + 估值分 V + 14 项风险检查 | `run.py quality [--stock 代码]` |
 | `stock_judge_top` | 顶部判断：四因子观察股票是否到顶部 | `run.py top <代码>` / `top --from-select` |
 | `stock_price_show` | 全市场价格/估值快照：一天一份全市场（独立工具，不走共享数据层） | `run.py price` |
+| `stock_market_regime` | A股大势：沪深300 周线趋势 / ERP 赔率 / 破净+量能情绪（背景板，不参与选股结论） | `run.py regime` |
 
 ## 每周五收盘后（15:10 之后）
 
@@ -119,6 +121,7 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ./run.py quality                           # 质量初筛批量（用库里的选股名单）
 ./run.py price --date 2026-11-13       # 全市场价格/估值快照（价 + PE + PB + PS）
 ./run.py price --code 002096 --date 2026-11-03  # 只补一只股票的某一天
+./run.py regime                            # A股大势（趋势/赔率/情绪），写 results.db
 ./run.py web                               # 只打开看板
 ```
 

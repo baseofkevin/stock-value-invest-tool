@@ -1,8 +1,8 @@
 """CLI：抓原件 → 算三路 → 写结果层 → 打一行摘要。
 
-    python -m market_regime --date 2026-11-20
-    python -m market_regime --date 2026-11-20 --recompute    # 不联网，用 shared.db 重算
-    python -m market_regime --json /tmp/regime.json
+    python -m stock_market_regime --date 2026-11-20
+    python -m stock_market_regime --date 2026-11-20 --recompute    # 不联网，用 shared.db 重算
+    python -m stock_market_regime --json /tmp/regime.json
 
 降级规则（这是原件层存在的意义）
 --------------------------------
@@ -51,7 +51,7 @@ def _fetch_or_fallback(*, name: str, index: int, total: int, quiet: bool,
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        prog="python -m market_regime",
+        prog="python -m stock_market_regime",
         description="A股大势粗判：趋势 / 赔率 / 情绪，写 results.db.market_regime")
     ap.add_argument("--date", help="基准日 YYYY-MM-DD（默认今天；run.py 会传周五）。"
                                    "**只是标签**：三路始终用截至最新的数据算，"
