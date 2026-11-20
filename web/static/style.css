@@ -71,6 +71,28 @@ a:hover{text-decoration:underline}
   border:1px solid rgba(255,255,255,.18);padding:2px 9px;border-radius:999px;
   margin-left:10px;vertical-align:middle;
 }
+/* 首页右上角那个入口：这张图不进导航（它不是一页数据，是「这堆数字怎么来的」），
+   但也不该藏在角落，所以做成亮色药丸压在 hero 的深底上，一眼就能看见 */
+.hero-flow{
+  position:absolute;right:26px;top:22px;z-index:2;
+  display:inline-flex;align-items:center;gap:8px;
+  padding:10px 18px;border-radius:999px;border:1px solid rgba(142,231,220,.55);
+  background:linear-gradient(135deg,#8ee7dc 0%,#5bd3c4 100%);
+  color:#04231f;font-size:14px;font-weight:800;letter-spacing:.01em;
+  box-shadow:0 10px 24px rgba(45,212,191,.28),inset 0 1px 0 rgba(255,255,255,.5);
+  transition:transform .18s ease,box-shadow .18s ease,background .18s ease;
+}
+.hero-flow:hover{
+  text-decoration:none;transform:translateY(-1px);
+  background:linear-gradient(135deg,#a5f0e6 0%,#6fe0d1 100%);
+  box-shadow:0 14px 30px rgba(45,212,191,.38),inset 0 1px 0 rgba(255,255,255,.6);
+}
+.hero-flow:focus-visible{outline:2px solid #8ee7dc;outline-offset:3px}
+.hero-flow .arrow{font-size:13px;opacity:.75;transition:transform .18s ease}
+.hero-flow:hover .arrow{transform:translateX(2px);opacity:1}
+@media (max-width:720px){
+  .hero-flow{position:static;margin-top:14px;width:100%;justify-content:center}
+}
 
 /* ---------------------------------------------------------------- 卡片 */
 .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px}

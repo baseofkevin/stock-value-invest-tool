@@ -876,7 +876,7 @@ class TestReviewPage(WebCase):
 
 
 class TestNavAndLinks(WebCase):
-    """导航只有 7 项，且都指向真页面；名称的链接行为按页区分（2026-11-15 反馈）。"""
+    """导航按取用顺序排列，且都指向真页面；名称的链接行为按页区分（2026-11-15 反馈）。"""
 
     def nav_labels(self, html):
         import re
@@ -887,8 +887,40 @@ class TestNavAndLinks(WebCase):
         html = self.client().get("/review").get_data(as_text=True)
         self.assertEqual(self.nav_labels(html),
                          ["首页", "选股", "周期", "质量", "顶部", "综合评估",
-                          "冷热极点", "A股大势"])
+                          "冷热极点", "A股大势", "原书学习"])
         self.assertNotIn("运行记录", html)
+
+    def test_book_page_is_served_whole_with_back_home(self):
+        """原书学习：整本书原样吐出（自包含 HTML，不裁不改），只在收尾补返回浮标。"""
+        resp = self.client().get("/book")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("text/html", resp.headers.get("Content-Type", ""))
+        html = resp.get_data(as_text=True)
+        self.assertIn("成功投资的五条法则", html)
+        self.assertIn('<a class="back-home" href="/batches"', html)
+        self.assertTrue(html.rstrip().endswith("</html>"))
+
+    def test_home_hero_has_dataflow_entry(self):
+        """首页 hero 右上角那个「本项目代码执行流程」入口（2026-11-20 加）。"""
+        html = self.client().get("/batches").get_data(as_text=True)
+        self.assertIn('<a class="hero-flow" href="/dataflow"', html)
+        self.assertIn("本项目代码执行流程", html)
+        # 单独成入口，不混进导航（导航仍是 9 项，见上一个用例）
+        self.assertNotIn("本项目代码执行流程", html.split("</nav>", 1)[0])
+
+    def test_dataflow_page_is_served_with_back_home(self):
+        """代码执行流程：dataflow.html 原样端出，只在收尾补返回浮标。"""
+        resp = self.client().get("/dataflow")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("text/html", resp.headers.get("Content-Type", ""))
+        html = resp.get_data(as_text=True)
+        self.assertIn("数据流转与筛选条件", html)
+        self.assertIn('<a class="flow-back" href="/batches"', html)
+        self.assertTrue(html.rstrip().endswith("</html>"))
+        # 图里那条「打开纯 SVG」是相对链接，得有个路由接得住，不能 404
+        svg = self.client().get("/dataflow.svg")
+        self.assertEqual(svg.status_code, 200)
+        self.assertIn("svg", svg.headers.get("Content-Type", ""))
 
     def test_select_names_are_not_links(self):
         """选股页的名称不点：那一页看的是"名单和排序依据"，不需要跳走。"""

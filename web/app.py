@@ -16,6 +16,11 @@
     /top         顶部：距 250 日高点的横条（谁在高位）+ 四因子状态矩阵
     /review      综合评估：硬门槛（只做标识）+ 赔率分（排序），标出「可以开始研究」的票
     /extreme       冷热极点：**results.db** 的全市场价格/估值（按日横截面 + 每日摘要）
+    /book        原书学习：《成功投资的五条法则》全书页（static 下的自包含 HTML，
+                 只在末尾补一个「返回看板」浮标，正文一个字不动）
+    /dataflow    本项目代码执行流程：仓库根目录的 dataflow.html（数据流转与筛选条件
+                 全景图，内嵌 SVG）原样吐出，同样只补一个返回浮标；
+    /dataflow.svg 它的纯 SVG 版（图上那条「打开纯 SVG」的链接要用，不能落空）
     /stock/<code> 个股：四边结论并排 + 旁证/周期（**只摆最近一份**，取 `run.id` 最大的那条）
                  `?focus=cycle|quality|top` 决定哪一块排最上面（从哪个工具页点进来的）
 
@@ -287,6 +292,68 @@ def _iso_or_none(value):
         return None
 
 
+#: 《成功投资的五条法则》原书学习页：整本书是一个 5.5MB 的自包含 HTML
+#: （样式、图、脚本全内联，没有外部依赖），放在 `static/` 下随看板一起发布。
+#: 它不走静态路由直接访问，只因为要在页面里补一个「返回看板」的浮标——
+#: 书页是独立排版、没有看板顶栏，读完除了浏览器后退没有别的出口。
+BOOK_FILE = Path("static") / "five-rules-book-full-learning.html"
+
+#: 塞在书页 `</body>` 前的浮标。刻意用书页自己的 CSS 变量上色，换主题
+#: （海盐云纱 / 黑白水墨 / 竹月清）它会跟着变；位置选左下角，因为右下角
+#: 被「术语提问」的悬浮球占了、右上角是书页自己的工具条。
+BACK_HOME = """
+<style>
+.back-home { position: fixed; left: 20px; bottom: 20px; z-index: 121;
+  display: inline-flex; align-items: center; gap: 6px; padding: 9px 15px;
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface-strong); color: var(--ink);
+  font: 600 13px/1 var(--font-display); text-decoration: none;
+  box-shadow: 0 6px 18px rgba(40, 52, 76, .16); opacity: .92;
+  transition: opacity .18s ease, transform .18s ease, border-color .18s ease; }
+.back-home:hover { opacity: 1; transform: translateY(-1px);
+  color: var(--ink); border-color: var(--gold); }
+.back-home:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+@media print { .back-home { display: none; } }
+</style>
+<a class="back-home" href="/batches" title="返回《股市真规则》的实践运用看板">&larr; 返回看板</a>
+"""
+
+
+def _with_back_home(html: str, snippet: str = BACK_HOME) -> str:
+    """在整页 HTML 收尾前插一段浮标；找不到 `</body>` 就原样返回（宁可不加，也不弄坏页面）。"""
+    at = html.rfind("</body>")
+    if at < 0:
+        return html
+    return html[:at] + snippet + html[at:]
+
+
+#: 代码执行流程（dataflow.html）在仓库根目录，不在 web/ 下——它是给人看的一页图，
+#: 由生成脚本直接写到根目录，看板只负责原样端出去。这里读根目录那一份，
+#: 不再往 static/ 复制副本：图是会重画的，副本最容易忘记更新。
+FLOW_HTML = "dataflow.html"
+FLOW_SVG = "dataflow.svg"
+
+#: 流程图那一页没有看板顶栏（自己的吸顶条 + 一整张 SVG），所以同样补一个浮标。
+#: 它不像书页那样有一套 CSS 变量可借（dataflow.html 全是硬编码色值），
+#: 所以这里把颜色写死：墨绿 #2f6152 是那张图自己的强调色，底白、浅绿描边。
+FLOW_BACK = """
+<style>
+.flow-back { position: fixed; left: 20px; bottom: 20px; z-index: 99;
+  display: inline-flex; align-items: center; gap: 6px; padding: 9px 15px;
+  border: 1px solid #b7cfc5; border-radius: 999px;
+  background: #ffffff; color: #24503f;
+  font: 700 13px/1 "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  text-decoration: none; box-shadow: 0 6px 18px rgba(31, 35, 40, .18);
+  transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease; }
+.flow-back:hover { transform: translateY(-1px); border-color: #2f6152;
+  box-shadow: 0 9px 22px rgba(31, 35, 40, .22); }
+.flow-back:focus-visible { outline: 2px solid #2f6152; outline-offset: 3px; }
+@media print { .flow-back { display: none; } }
+</style>
+<a class="flow-back" href="/batches" title="返回《股市真规则》的实践运用看板">&larr; 返回看板</a>
+"""
+
+
 def create_app(db_path: str | Path | None = None) -> Flask:
     here = Path(__file__).resolve().parent
     app = Flask(__name__, template_folder=str(here / "templates"),
@@ -325,7 +392,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             ("/batches", "首页"), ("/select", "选股"),
             ("/cycle", "周期"), ("/quality", "质量"), ("/top", "顶部"),
             ("/review", "综合评估"), ("/extreme", "冷热极点"),
-            ("/trend", "A股大势"),
+            ("/trend", "A股大势"), ("/book", "原书学习"),
         ]}
 
     def _pick(conn):
@@ -449,6 +516,54 @@ def create_app(db_path: str | Path | None = None) -> Flask:
                                                 start=start, end=end),
                 start=start or "", end=end or "",
                 cur_date=db.batch_date(c), batches=db.batches(c), meta=None)
+
+    @app.route("/book")
+    def book_page():
+        """原书学习：《成功投资的五条法则》全书页。
+
+        书页是独立生成的单文件 HTML，这里只做两件事——读出来、补一个返回浮标。
+        结果按文件 mtime 缓存：5.5MB 的正文没必要每个请求重读一遍、重拼一遍；
+        重新生成书页后 mtime 一变，缓存自然失效。
+        """
+        path = here / BOOK_FILE
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            abort(404, description="原书学习页还没生成（缺 static/ 下的书页 HTML）")
+        cache = app.config.get("BOOK_CACHE")
+        if not cache or cache[0] != mtime:
+            cache = (mtime, _with_back_home(path.read_text(encoding="utf-8")))
+            app.config["BOOK_CACHE"] = cache
+        return Response(cache[1], mimetype="text/html")
+
+    @app.route("/dataflow")
+    def dataflow_page():
+        """本项目代码执行流程：仓库根目录的 dataflow.html。
+
+        和 /book 一个套路——整页原样端出，只在末尾补一个返回浮标（这页也没有顶栏）。
+        按 mtime 缓存：图重画一次就失效，不用手工清缓存。
+        """
+        path = here.parent / FLOW_HTML
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            abort(404, description="代码执行流程图还没生成（缺仓库根目录的 dataflow.html）")
+        cache = app.config.get("FLOW_CACHE")
+        if not cache or cache[0] != mtime:
+            cache = (mtime, _with_back_home(path.read_text(encoding="utf-8"), FLOW_BACK))
+            app.config["FLOW_CACHE"] = cache
+        return Response(cache[1], mimetype="text/html")
+
+    @app.route("/dataflow.svg")
+    def dataflow_svg():
+        """流程图那一页吸顶条上的「打开纯 SVG」：图里是相对链接 dataflow.svg，
+        页面挂在 /dataflow 上就会解析成 /dataflow.svg，得有个路由接住。"""
+        path = here.parent / FLOW_SVG
+        if not path.is_file():
+            abort(404, description="没有 dataflow.svg")
+        resp = Response(path.read_bytes(), mimetype="image/svg+xml")
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
 
     @app.route("/select")
     def select():
