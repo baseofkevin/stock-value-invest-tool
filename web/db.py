@@ -534,6 +534,40 @@ def batch_date(conn, skip: int = 0) -> str | None:
     return rows[-1][0] if len(rows) > skip else None
 
 
+def regime(conn, limit: int = 8) -> dict:
+    """A股大势的最近几周（最新在前）。
+
+    **不在这里算任何东西**：分位、趋势、状态全是 `market_regime` 跑完就定格的，
+    看板只负责摆出来。也不去 `shared.db` 取原件——页面只读这一个库。
+
+    三种"没有"都返回空壳，由页面说人话：
+    * 表不存在（从没跑过这个功能）→ `row=None`
+    * 表在但没有行（跑过、但三路都没算出来）→ `row=None`
+    * 某几列是 NULL（那一路当天没数据）→ 字段为 None，页面显示 `—`
+    """
+    empty = {"row": None, "weeks": []}
+    if conn is None or not _has(conn, "market_regime"):
+        return empty
+
+    cols = ("date, computed_at, data_asof, stale, trend_state, trend_score, "
+            "trend_close, ma20, ma60, ma60_slope, weeks_below_ma20, erp, "
+            "pe_ttm, bond10y, erp_pct, below_na, below_na_pct, turnover, "
+            "turnover_q10, volume_dry")
+    rows = conn.execute(
+        f"SELECT {cols} FROM market_regime ORDER BY date DESC").fetchall()
+    if not rows:
+        return empty
+
+    def _row(r) -> dict:
+        d = dict(r)
+        d["stale"] = bool(d.get("stale"))
+        d["volume_dry"] = None if d.get("volume_dry") is None else bool(d["volume_dry"])
+        return d
+
+    weeks = [_row(r) for r in rows[:limit]]
+    return {"row": weeks[0], "weeks": weeks}
+
+
 def batches(conn, limit: int = 52) -> list[dict]:
     """批次列表（每个基准日一条），新的在前。
 

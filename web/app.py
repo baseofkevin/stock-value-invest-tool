@@ -9,7 +9,7 @@
 页面分工
 --------
     /            跳转到 /review（原来的「概览」页已删，合并表就是综合评估的全表）
-    /batches     批次：每周五盘后那一批票，四步齐不齐一目了然
+    /batches     批次：每周五盘后那一批票，四步齐不齐一目了然；顶部是 A股大势横幅
     /select      选股：池内换手分位（排序依据）+ 行业分布（名称不可点）
     /cycle       周期：三个判断的分布 + 毛利率波动 × 弹性散点
     /quality     质量：Q × V 散点（结论用颜色区分）+ 结论分布
@@ -354,6 +354,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         with conn() as c:
             return render_template("batches.html", batches=db.batches(c),
                                    cur_date=db.batch_date(c), meta=None,
+                                   regime=db.regime(c),
                                    summary=db.summary(c), counts=db.counts(c))
 
     @app.route("/select")

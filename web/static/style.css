@@ -419,4 +419,35 @@ table.grid td .quote-link{white-space:nowrap;font-size:12px}
   .table-scroll table.grid{min-width:680px}
   .stock-scroll{max-height:55vh}
   .stock-jump select{flex:1 1 100%;max-width:none}
+  .regime-cards{grid-template-columns:1fr}
 }
+
+/* ---------------------------------------------------------------- 大势横幅 */
+/* /batches 顶部那块：三张卡并排，每张底下一条分位条。
+   刻意不做成图表——它只是"今天大概在什么位置"的背景板，看数就够了；
+   要连成线看变化，展开下面那张近 8 周的小表。 */
+.regime{margin-bottom:22px}
+.regime-head{display:flex;justify-content:space-between;align-items:flex-start;
+  gap:16px;flex-wrap:wrap;margin-bottom:2px}
+.regime-head .sub{margin-bottom:0}
+.regime-when{font-size:12px;color:var(--muted);text-align:right;line-height:1.9;white-space:nowrap}
+.regime-when b{color:var(--ink);font-variant-numeric:tabular-nums}
+.regime-calc{display:block;font-size:11.5px;color:#94a3b8}
+.regime-cards{grid-template-columns:repeat(3,1fr);margin:16px 0 4px}
+.regime-cards .card .v{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.regime-cards .card .v .chip{font-size:14px;padding:2px 10px}
+.regime-cards .card .s{line-height:1.75}
+/* 分位条：宽度就是分位本身，颜色跟着结论走（不用来比大小）。 */
+.regime .bar{height:6px;border-radius:3px;background:#eef2f7;margin-top:10px;overflow:hidden}
+.regime .bar i{display:block;height:100%;border-radius:3px;background:var(--info-line);
+  transition:width .3s}
+.regime .bar i.warn{background:var(--warn-line)}
+.regime .bar i.good{background:var(--good-line)}
+.regime .bar i.info{background:var(--info-line)}
+.regime-hist{margin-top:14px;border-top:1px dashed var(--line);padding-top:10px}
+.regime-hist summary{cursor:pointer;font-size:12.5px;color:var(--muted);
+  font-weight:600;padding:4px 0;list-style:none}
+.regime-hist summary::-webkit-details-marker{display:none}
+.regime-hist summary:before{content:"▸ ";color:#94a3b8}
+.regime-hist[open] summary:before{content:"▾ "}
+.regime-hist table.grid{margin-top:8px;min-width:560px}

@@ -11,6 +11,102 @@
   </p>
 </section>
 
+{% set r = regime.row %}
+<section class="panel regime">
+  <div class="regime-head">
+    <div>
+      <h2>大势 · A股整体</h2>
+      <p class="sub">
+        三路分开看，<b>不合成总分</b>：趋势定"跌没跌"，估值定"贵不贵"，情绪定"慌没慌"。
+        三者可以长期互相打架——那正是它只作背景板的原因。
+      </p>
+    </div>
+    {% if r %}
+    <div class="regime-when">
+      数据截至 <b>{{ r.data_asof or '—' }}</b>
+      {% if r.stale %}<span class="chip warn">部分沿用上次</span>{% endif %}
+      {% if cur_date and r.date < cur_date %}<span class="chip muted">本批未算</span>{% endif %}
+      <span class="regime-calc">计算于 {{ r.computed_at|clock }}</span>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if r %}
+  {% set tstate = r.trend_state or '—' %}
+  {% set vstate = '—' if r.erp_pct is none else ('极值' if r.erp_pct >= 95 else ('便宜' if r.erp_pct >= 80 else ('偏贵' if r.erp_pct <= 20 else '中性'))) %}
+  {% set sstate = '—' if r.below_na_pct is none else ('恐慌' if r.below_na_pct >= 90 else ('偏冷' if r.below_na_pct >= 70 else '正常')) %}
+  <div class="cards regime-cards">
+
+    <div class="card">
+      <div class="k">趋势 · 沪深300 周线</div>
+      <div class="v">
+        <span class="chip {{ 'warn' if tstate in ('空头确认', '偏弱') else ('good' if tstate == '偏强' else 'muted') }}">{{ tstate }}</span>
+      </div>
+      <div class="s">收盘 {{ r.trend_close or '—' }} · MA20 {{ r.ma20 or '—' }} / MA60 {{ r.ma60 or '—' }}</div>
+      <div class="s">
+        已 {{ r.weeks_below_ma20 if r.weeks_below_ma20 is not none else '—' }} 周收在 MA20 下方
+        {%- if r.ma60_slope is not none %} · MA60 四周 {{ '%+.2f'|format(r.ma60_slope) }}%{% endif %}
+      </div>
+      <div class="bar"><i class="warn" style="width:{{ (r.trend_score or 0) / 2 * 100 }}%"></i></div>
+    </div>
+
+    <div class="card">
+      <div class="k">赔率 · ERP 近10年分位</div>
+      <div class="v">
+        {{ r.erp ~ '%' if r.erp is not none else '—' }}
+        <span class="chip {{ 'good' if vstate in ('便宜', '极值') else ('muted' if vstate == '偏贵' else 'info') }}">{{ vstate }}</span>
+      </div>
+      <div class="s">ERP = 盈利收益率 − 10年国债 · PE(TTM) {{ r.pe_ttm or '—' }} / 国债 {{ r.bond10y or '—' }}%</div>
+      <div class="s">近10年 {{ r.erp_pct if r.erp_pct is not none else '—' }}% 分位（≥80 便宜，≥95 极值）</div>
+      <div class="bar"><i class="good" style="width:{{ r.erp_pct or 0 }}%"></i></div>
+    </div>
+
+    <div class="card">
+      <div class="k">情绪 · 破净率 / 量能</div>
+      <div class="v">
+        {{ r.below_na ~ '%' if r.below_na is not none else '—' }}
+        <span class="chip {{ 'warn' if sstate == '恐慌' else ('info' if sstate == '偏冷' else 'muted') }}">{{ sstate }}</span>
+      </div>
+      <div class="s">全A破净率 · 近10年 {{ r.below_na_pct if r.below_na_pct is not none else '—' }}% 分位</div>
+      <div class="s">
+        {% if r.volume_dry is none %}量能 — 
+        {%- else %}{{ '地量' if r.volume_dry else '未地量' }}
+        （周换手 {{ r.turnover or '—' }}% vs 近3年10%分位 {{ r.turnover_q10 or '—' }}%）{% endif %}
+      </div>
+      <div class="bar"><i class="info" style="width:{{ r.below_na_pct or 0 }}%"></i></div>
+    </div>
+
+  </div>
+
+  <details class="regime-hist">
+    <summary>近 {{ regime.weeks|length }} 周怎么变的</summary>
+    <div class="scroll">
+      <table class="grid">
+        <thead>
+          <tr><th>基准日</th><th>趋势</th><th class="n">ERP 分位</th><th class="n">破净分位</th><th>量能</th></tr>
+        </thead>
+        <tbody>
+          {% for w in regime.weeks %}
+          <tr>
+            <td class="name">{{ w.date }}<small style="color:#94a3b8;margin-left:4px">{{ w.date|weekday }}</small></td>
+            <td><span class="chip {{ 'warn' if w.trend_state in ('空头确认', '偏弱') else ('good' if w.trend_state == '偏强' else 'muted') }}">{{ w.trend_state or '—' }}</span></td>
+            <td class="n">{{ w.erp_pct if w.erp_pct is not none else '—' }}{% if w.erp_pct is not none %}%{% endif %}</td>
+            <td class="n">{{ w.below_na_pct if w.below_na_pct is not none else '—' }}{% if w.below_na_pct is not none %}%{% endif %}</td>
+            <td>{% if w.volume_dry is none %}—{% else %}{{ '地量' if w.volume_dry else '未地量' }}{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {% else %}
+  <div class="empty">
+    还没有大势记录：跑 <code>./run.py all</code> 会在最后一步顺带算一次，
+    也可以单独跑 <code>./run.py regime</code>。
+  </div>
+  {% endif %}
+</section>
+
 <section class="panel">
   <h2>最近 {{ batches|length }} 个批次</h2>
   <p class="sub">

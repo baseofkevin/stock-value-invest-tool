@@ -715,6 +715,24 @@ def _price_count(day: str) -> int:
         return 0
 
 
+def step_regime(tee: Tee, day: str, extra: list[str]) -> int:
+    """A股大势：三路信号写 `results.db.market_regime`，一周一行。
+
+    跑的是 `market_regime` 子进程——它自己抓东财/中证/乐咕的四个接口、
+    把原件写进 `shared.db`、把结论写进 `results.db`；入口这边只定日期、收日志。
+
+    **失败不拦主流程**：它是背景板，四个工具的结果才是这一批的主体。
+    估值或破净接口挂了，看板继续显示上一周的周记（并标"沿用上次"），
+    比让整条流程停在最后一步强。
+
+    也**不套 `tool=`/`day=`**：那两个参数是给四个工具数"成功几只"用的，
+    本步的产出不在 `*_result` 表里。
+    """
+    argv = py_module("market_regime") + ["--date", day] + extra
+    rc, _ = run_step(tee, f"大势 market_regime（{day}）", argv, ROOT, short="大势")
+    return rc
+
+
 def step_calendar(tee: Tee) -> int:
     code, _ = run_step(tee, "⓪ 更新交易日历 build_calendar",
                        py_module("stock_data_fetch.build_calendar"), ROOT,
@@ -831,6 +849,15 @@ def cmd_all(args, tee: Tee) -> int:
             summary(tee, day, steps)
             return rc
 
+    if getattr(args, "skip_regime", False):
+        tee.line("（按 --skip-regime 跳过大势）")
+    else:
+        rc = step_regime(tee, day, getattr(args, "regime_args", []) or [])
+        steps.append(("⑤ 大势", rc, LAST_SPENT["s"]))
+        if rc != 0:
+            # 不 return、不进 judge_step：大势算不成不影响这一批票的任何结论
+            tee.line("  ⚠️ 大势没算成；看板继续显示上一周的判断")
+
     summary(tee, day, steps)
 
     # 看板是长驻进程，不再是 all 的最后一步：流程跑完就结束，想看结果
@@ -861,6 +888,8 @@ def cmd_single(action: str):
                 "上面的日期只作运行标记，不会改变名单。")
         if action == "select":
             return step_select(tee, day, args.extra)
+        if action == "regime":
+            return step_regime(tee, day, args.extra)
         if action == "price":
             extra = list(args.extra)
             stock_code = getattr(args, "code", None)
@@ -1249,6 +1278,10 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
     sp.add_argument("--quality-args", default="--workers 2", help="透传给 stock_report.py")
     sp.add_argument("--top-args", default="", help="透传给 stock_judge_top 的参数")
     sp.add_argument("--top-workers", type=int, default=4, help="顶部判断并发数，默认 4")
+    sp.add_argument("--skip-regime", action="store_true",
+                    help="跳过大势（趋势/赔率/情绪，它的结论不参与四步判断）")
+    sp.add_argument("--regime-args", default="",
+                    help="透传给 market_regime 的参数（如 --recompute 用原件重算）")
     sp.add_argument("--web", action="store_true",
                     help="流程跑完后起看板（默认不起，跑完用 ./run.py web 看结果）")
     # 旧参数，保留只为不让已有脚本报错；现在默认就是不起看板。
@@ -1260,6 +1293,24 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
     add_date(sp)
     add_verbose(sp)
     sp.add_argument("extra", nargs="*", default=[], help="透传给 stock_kline_screen 的参数")
+
+    sp = sub.add_parser("regime",
+                        help="A股大势粗判：趋势 / 赔率 / 情绪（写 results.db）",
+                        description="""沪深300 周线趋势 + ERP 赔率 + 破净/量能情绪。
+
+三路各算各的，不合成总分。原件落 shared.db，结论落 results.db，
+看板 /batches 顶部那块横幅读的就是它。`all` 的最后一步会顺带跑一次。
+
+示例：
+  ./run.py regime                     按今天（或最近交易日）算
+  ./run.py regime --date 2026-11-20   给指定基准日算
+  ./run.py regime --recompute         不联网，用 shared.db 的原件重算
+""")
+    add_date(sp)
+    add_verbose(sp)
+    # 刻意**不**声明 `extra` 位置参数：`nargs="*"` 会把 `--json x.json` 的
+    # 值当成位置参数吞掉，和 `parse_known_args` 收上来的开关拼错顺序。
+    # 本包所有开关都走 `unknown`（main() 里按原顺序接上 `args.extra`）。
 
     for name, helptext, flag in (
             ("cycle", "只跑周期弹性 stock_cycle_elastic", "--stock"),
@@ -1426,6 +1477,7 @@ def main(argv: list[str] | None = None) -> int:
             args.cycle_args = split_passthrough(getattr(args, "cycle_args", ""))
             args.quality_args = split_passthrough(getattr(args, "quality_args", ""))
             args.top_args = split_passthrough(getattr(args, "top_args", ""))
+            args.regime_args = split_passthrough(getattr(args, "regime_args", ""))
             return cmd_all(args, tee)
         if args.cmd == "web":
             tee.close()

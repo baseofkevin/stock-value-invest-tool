@@ -209,8 +209,8 @@ python3 -m stock_data_fetch.build_calendar
 
 | 文件 | 装什么 | 丢掉了会怎样 |
 |---|---|---|
-| `shared.db` | **上游数据**：K 线、财务、估值、覆盖表（`coverage`）、全市场价格原件（`price`）、指数原件（`index_price`） | 只能重新联网抓，几十分钟 |
-| `results.db` | **派生结论**：四个工具每次跑出来的名单与档位，以及看板要的全市场价格副本（`price` + `price_stat`）和沪深300（`index_price`） | 重跑一遍就有（几分钟） |
+| `shared.db` | **上游数据**：K 线、财务、估值、覆盖表（`coverage`）、全市场价格原件（`price`）、指数原件（`index_price`）、大势的三个原件（`market_index_week` / `market_index_perf` / `market_macro`） | 只能重新联网抓，几十分钟 |
+| `results.db` | **派生结论**：四个工具每次跑出来的名单与档位、A股大势的周记（`market_regime`），以及看板要的全市场价格副本（`price` + `price_stat`）和沪深300（`index_price`） | 重跑一遍就有（几分钟） |
 
 分开的理由：`shared.db` 有严格的不变量（只追加 raw、覆盖与数据同事务），
 `maintain.py --apply` 会 VACUUM 并清 coverage。结论如果也躺在里面，

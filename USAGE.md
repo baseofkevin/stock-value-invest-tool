@@ -94,11 +94,14 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ./run.py all
 ```
 
-做五步，**跑完就结束、默认不起看板**：
+做六步，**跑完就结束、默认不起看板**：
 
 ```
-⓪ 日历 → ① 选股 → ② 周期弹性 → ③ 质量初筛 → ④ 顶部判断
+⓪ 日历 → ① 选股 → ② 周期弹性 → ③ 质量初筛 → ④ 顶部判断 → ⑤ 大势
 ```
+
+⑤ 大势是背景板（趋势 / 赔率 / 情绪），算不成也不拦前面四步——它是加在
+`/batches` 顶部那块横幅上的，跟这一批票的结论没有关系。
 
 看结果时单独跑 `./run.py web`（读 `results.db`，只读）。
 
@@ -112,6 +115,7 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ./run.py all --web                   # 跑完顺便起看板（默认不起）
 ./run.py all --web --port 8080       # 看板换端口
 ./run.py all --skip-top              # 今天不想跑顶部
+./run.py all --skip-regime           # 今天不算大势（横幅停在上一周）
 ./run.py all --strict                # 任何一只失败就停（默认是有产出就继续）
 ./run.py all -v                      # 不画条，子进程输出全打到屏幕（排查用）
 ```
@@ -327,6 +331,29 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 | `--csv 文件` | 批量：名单来自 CSV |
 | `--date X` | 真基准日（单只、批量都生效） |
 | `--workers N` `--refresh` | 并发 / 重取并重算 |
+
+### `regime`（A股大势，独立包 `market_regime`）
+
+```bash
+./run.py regime                       # 按最近交易日算
+./run.py regime --date 2026-11-20     # 给指定基准日算
+./run.py regime --recompute           # 不联网，用 shared.db 的原件重算
+```
+
+三路信号**各算各的、不合成总分**：
+
+| 信号 | 看什么 | 阈值（写死在 `market_regime/rules.py`） |
+|---|---|---|
+| 趋势 | 沪深300 周线 MA20 / MA60 | 连续 2 周收盘 < MA20；MA20<MA60 且 MA60 低于 4 周前 |
+| 赔率 | ERP = 100/PE(TTM) − 10年国债 | 近 10 年分位 ≥80 便宜、≥95 极值 |
+| 情绪 | 全A破净率 + 沪深300 周换手 | 破净近 10 年分位 ≥90；换手 ≤ 近 3 年 10% 分位 |
+
+落库分两层：原件进 `shared.db`（`market_index_week` / `market_index_perf` /
+`market_macro`），结论进 `results.db.market_regime`（一周一行，重跑覆盖）。
+看板 `/batches` 只读结果层，**请求期间不联网**。
+
+升级/排错：先 `--recompute` 排除网络问题；四路数据源见
+`market_regime/source.py` 顶部的注释（中证那一路是官方估值，滞后 1–2 个交易日）。
 
 ### `price`（全市场价格 / 估值快照，独立工具 `stock_price_show`）
 
