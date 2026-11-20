@@ -1371,7 +1371,7 @@ STOCKHUB_LIVE=1 python3 -m stock_data_fetch.tests.test_westock   # 额外跑 4 �
 | 抓取（东财 `RPT_VALUEANALYSIS_DET` 按日横截面） | `stock_extreme_point/source.py` |
 | 落库（`shared.db.price` + `results.db.price` / `price_stat`） | `stock_extreme_point/store.py` |
 | 冷热摘要口径（涨跌停 / 中位数） | `stock_extreme_point/stat.py` |
-| CLI | `python3 -m stock_extreme_point`（日常用 `./run.py price`） |
+| CLI | `python3 -m stock_extreme_point`（日常用 `./run.py extreme`） |
 
 所以本层的 `need` / `router` / `coverage` / `sources` 里**没有** `price` 域，
 `shared.db` 也**不需要**为它升到 v7。两边的唯一约定是文件路径（同一个仓库根、

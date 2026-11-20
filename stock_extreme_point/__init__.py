@@ -4,8 +4,8 @@
 落到两个库里，再算出那一天的冷热摘要。四个工具、共享数据层、看板都不在这里。
 
     python3 -m stock_extreme_point --date 2026-11-16     # 取一天
-    ./run.py price --date 2026-11-16              # 日常入口（带进度条与日志）
-    ./run.py price --code 002096 --date 2026-11-03 # 单只补数（只改这一只）
+    ./run.py extreme --date 2026-11-16              # 日常入口（带进度条与日志）
+    ./run.py extreme --code 002096 --date 2026-11-03 # 单只补数（只改这一只）
 
 数据流向（2026-11-17 定，见 README）：
 

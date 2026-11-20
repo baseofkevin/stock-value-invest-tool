@@ -160,20 +160,20 @@ class AllFlowTest(unittest.TestCase):
                 run.LAST_SPENT["s"] = 0.1
                 if name == "step_cycle":
                     return cycle_rc
-                if name == "step_regime":
-                    return over.get("regime_rc", 0)
+                if name == "step_trend":
+                    return over.get("trend_rc", 0)
                 return 0
             return step
 
         patch = {name: fake(name) for name in
                  ("step_select", "step_cycle", "step_quality", "step_top",
-                  "step_regime", "step_web")}
+                  "step_trend", "step_web")}
         originals = {k: getattr(run, k) for k in patch}
         namespace = dict(
             date="2026-11-13", no_calendar=True, select_args=[], cycle_args=[],
             quality_args=[], top_args=[], top_workers=2, skip_cycle=False,
-            skip_quality=False, skip_top=False, skip_regime=False,
-            regime_args=[], keep_going=False, strict=False,
+            skip_quality=False, skip_top=False, skip_trend=False,
+            trend_args=[], keep_going=False, strict=False,
             web=False, host="127.0.0.1", port=5000)
         namespace.update(over)
         args = type("A", (), namespace)()
@@ -195,7 +195,7 @@ class AllFlowTest(unittest.TestCase):
         rc, names, _ = self._run()
         self.assertEqual(rc, 0)
         self.assertEqual(names, ["step_select", "step_cycle", "step_quality",
-                                 "step_top", "step_regime"])
+                                 "step_top", "step_trend"])
         self.assertNotIn("step_web", names, "all 默认不再起看板")
 
     def test_top_is_batch_mode(self):
@@ -204,15 +204,15 @@ class AllFlowTest(unittest.TestCase):
         top = dict((c[0], c) for c in calls)["step_top"]
         self.assertEqual(top[2].get("csv_path"), "results")
 
-    def test_regime_failure_is_not_fatal(self):
+    def test_trend_failure_is_not_fatal(self):
         """大势算不成（上游挂/三条都空）只影响横幅，不改整条流程的退出码。"""
-        rc, names, _ = self._run(regime_rc=2)
+        rc, names, _ = self._run(trend_rc=2)
         self.assertEqual(rc, 0)
-        self.assertIn("step_regime", names)
+        self.assertIn("step_trend", names)
 
-    def test_skip_regime(self):
-        _rc, names, _ = self._run(skip_regime=True)
-        self.assertNotIn("step_regime", names)
+    def test_skip_trend(self):
+        _rc, names, _ = self._run(skip_trend=True)
+        self.assertNotIn("step_trend", names)
 
     def test_web_skips_server_by_default(self):
         rc, names, _ = self._run()
@@ -425,25 +425,25 @@ class ParserTest(unittest.TestCase):
     def test_subcommands_exist(self) -> None:
         p = run.build_parser()
         for name in ("all", "weekly", "select", "cycle", "quality", "top",
-                     "price", "regime", "backup", "web", "menu"):
+                     "extreme", "trend", "backup", "web", "menu"):
             self.assertIn(name, p._subparsers._group_actions[0].choices)
 
-    def test_regime_passthrough_keeps_order(self) -> None:
-        """`regime --json x.json` 的开关和值不能被拆散——拆散了 argparse 会报
+    def test_trend_passthrough_keeps_order(self) -> None:
+        """`trend --json x.json` 的开关和值不能被拆散——拆散了 argparse 会报
         "expected one argument"，整步退出码 2。"""
         _a, unknown = run.build_parser().parse_known_args(
-            ["regime", "--json", "/tmp/x.json", "--recompute"])
+            ["trend", "--json", "/tmp/x.json", "--recompute"])
         self.assertEqual(unknown, ["--json", "/tmp/x.json", "--recompute"])
 
-    def test_price_accepts_single_code(self) -> None:
-        """`price --code` 要由 argparse 吃下，不能漏进 extra 变成子进程参数错。"""
+    def test_extreme_accepts_single_code(self) -> None:
+        """`extreme --code` 要由 argparse 吃下，不能漏进 extra 变成子进程参数错。"""
         a = run.build_parser().parse_args(
-            ["price", "--code", "002096", "--date", "2026-11-03"])
+            ["extreme", "--code", "002096", "--date", "2026-11-03"])
         self.assertEqual(a.code, "002096")
         self.assertEqual(a.date, "2026-11-03")
         self.assertEqual(a.extra, [])
         self.assertTrue(run.build_parser()
-                        .parse_args(["price", "--code", "sz002096"]).code)
+                        .parse_args(["extreme", "--code", "sz002096"]).code)
 
     def test_calendar_is_not_a_subcommand(self) -> None:
         """日历不再单列：它只是全流程的第 0 步，单列只会让人不知道怎么用。
@@ -482,7 +482,7 @@ class ParserTest(unittest.TestCase):
         import inspect
         src = inspect.getsource(run.cmd_all)
         order = ["step_select", "step_cycle", "step_quality", "step_top",
-                 "step_regime"]
+                 "step_trend"]
         positions = [src.index(name) for name in order]
         self.assertEqual(positions, sorted(positions), "步骤顺序变了：应从小到大")
         self.assertIn('getattr(args, "web"', src, "看板必须是可选步骤")
@@ -506,8 +506,8 @@ class ParserTest(unittest.TestCase):
         self.assertIn("./run.py menu", text)
         self.assertNotIn("① 选股", text)
 
-    def test_menu_option_7_runs_regime(self) -> None:
-        """菜单 7) 要真的调 `step_regime`——选项加了、分支没接是最容易漏的错。
+    def test_menu_option_7_runs_trend(self) -> None:
+        """菜单 7) 要真的调 `step_trend`——选项加了、分支没接是最容易漏的错。
 
         补这一条是因为 7 是 2026-11-20 新加的：菜单文案、`input()` 的 [0-7]、
         校验集合、分支四处必须同时改，少一处就静默走到「顶部判断」。
@@ -516,7 +516,7 @@ class ParserTest(unittest.TestCase):
 
         calls = []
 
-        def fake_step_regime(tee, day, extra):
+        def fake_step_trend(tee, day, extra):
             calls.append((day, list(extra)))
             return 0
 
@@ -530,7 +530,7 @@ class ParserTest(unittest.TestCase):
         with mock.patch("builtins.input", lambda *a: next(answers)), \
                 mock.patch.object(run, "ensure_calendar",
                                   lambda *a, **k: ("2026-11-20", 0)), \
-                mock.patch.object(run, "step_regime", fake_step_regime), \
+                mock.patch.object(run, "step_trend", fake_step_trend), \
                 mock.patch.object(run, "load_calendar", lambda: []), \
                 mock.patch.object(run, "Tee", lambda *a, **k: _FakeTee()), \
                 mock.patch.object(run, "say", lambda *a, **k: None):

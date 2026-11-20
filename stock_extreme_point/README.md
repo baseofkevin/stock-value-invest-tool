@@ -13,7 +13,7 @@ python3 -m stock_extreme_point --prune-keep 30     # 顺手删 30 天前的
 python3 -m stock_extreme_point --code 002096 --date 2026-11-03  # 只补一只（不删当天其它行）
 ```
 
-日常用 `./run.py price`：多一层进度条、日志和交易日历校验，参数一一对应。
+日常用 `./run.py extreme`：多一层进度条、日志和交易日历校验，参数一一对应。
 
 ## 为什么单独一个包
 

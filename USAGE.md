@@ -23,16 +23,16 @@
 | 拿自己的名单跑顶部 | `./run.py top --csv 名单.csv --date X` | `X` |
 | 忽略库里的结论重算 | 批量加 `--force`（top 用 `--refresh`） | 同上 |
 | 看结果 | `./run.py web` | — |
-| 拿全市场价格 + PE/PB/PS | `./run.py price --date 2026-11-17` | `2026-11-17`（**收盘后**才有） |
-| 单只股票补某天价格 | `./run.py price --code 002096 --date 2026-11-03` | `2026-11-03` |
-| 重算那天的冷热摘要（**不联网**） | `./run.py price --restat`（加 `--date X` 只算一天） | — |
+| 拿全市场价格 + PE/PB/PS | `./run.py extreme --date 2026-11-17` | `2026-11-17`（**收盘后**才有） |
+| 单只股票补某天价格 | `./run.py extreme --code 002096 --date 2026-11-03` | `2026-11-03` |
+| 重算那天的冷热摘要（**不联网**） | `./run.py extreme --restat`（加 `--date X` 只算一天） | — |
 | 看全市场最热 / 最冷的时点 | `./run.py web` → 导航「冷热极点」 | — |
 | 备份库 | `./run.py backup` | — |
 
-`price` 写两个库：`shared.db.price` + `index_price` 是原件，`results.db` 里的同名表
+`extreme` 写两个库：`shared.db.price` + `index_price` 是原件，`results.db` 里的同名表
 是看板读的复制品；`results.db.price_stat`（每日涨跌家数 / 涨跌停 / 估值中位数）与价格
 同事务写入，沪深300 单独存 `index_price`。
-复制不联网，失败后可以 `./run.py price --sync` 补（或直接重跑 `price`，
+复制不联网，失败后可以 `./run.py extreme --sync` 补（或直接重跑 `extreme`，
 库里已有那天时只补复制、不重打上游）。
 
 裸跑 `./run.py` **只打印帮助，什么都不跑**（全流程三十多分钟，防误触）。
@@ -116,7 +116,7 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ./run.py all --web                   # 跑完顺便起看板（默认不起）
 ./run.py all --web --port 8080       # 看板换端口
 ./run.py all --skip-top              # 今天不想跑顶部
-./run.py all --skip-regime           # 今天不算 A股大势（横幅停在上一周）
+./run.py all --skip-trend            # 今天不算 A股大势（横幅停在上一周）
 ./run.py all --strict                # 任何一只失败就停（默认是有产出就继续）
 ./run.py all -v                      # 不画条，子进程输出全打到屏幕（排查用）
 ```
@@ -334,12 +334,12 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 | `--date X` | 真基准日（单只、批量都生效） |
 | `--workers N` `--refresh` | 并发 / 重取并重算 |
 
-### A股大势（命令 `regime`，独立包 `stock_market_trend`）
+### A股大势（命令 `trend`，独立包 `stock_market_trend`）
 
 ```bash
-./run.py regime                       # 按最近交易日算
-./run.py regime --date 2026-11-20     # 给指定基准日算
-./run.py regime --recompute           # 不联网，用 shared.db 的原件重算
+./run.py trend                       # 按最近交易日算
+./run.py trend --date 2026-11-20     # 给指定基准日算
+./run.py trend --recompute           # 不联网，用 shared.db 的原件重算
 ```
 
 三路信号**各算各的、不合成总分**：
@@ -360,7 +360,7 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 升级/排错：先 `--recompute` 排除网络问题；四路数据源见
 `stock_market_trend/source.py` 顶部的注释（中证那一路是官方估值，滞后 1–2 个交易日）。
 
-### 冷热极点（命令 `price`，独立工具 `stock_extreme_point`）
+### 冷热极点（命令 `extreme`，独立工具 `stock_extreme_point`）
 
 | 参数 | 说明 |
 |---|---|
@@ -374,7 +374,7 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 
 一天一份、一股一行（全市场约 5,500 只，含北交所），**约 6 个上游请求**。
 字段：收盘价 / 涨跌幅 / PE(TTM) / PB(MRQ) / PS(TTM) / 总市值 / 流通市值。
-单只补数示例：`./run.py price --code 002096 --date 2026-11-03`；它只改这一只，
+单只补数示例：`./run.py extreme --code 002096 --date 2026-11-03`；它只改这一只，
 `price_stat` 按当天已有全部行重算，**不能**和 `--force` / `--prune-keep` 混用。
 **盘中跑「今天」会失败**——它取的是收盘快照，上游收盘后才发布。
 
@@ -416,8 +416,8 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 | `select --date` 报"不是交易日" | 给了周末/节假日 | 换成最近交易日，或先 `build_calendar` |
 | 产出了上一周的旧报告 | 日历没更新，`hub.target` 回落到上周边 | `python3 -m stock_data_fetch.build_calendar` |
 | 盘中跑，结论不对 | 15:05 前用的是半日数据 | 等收盘后再跑；补历史可用 `--date 上一交易日`，当日数据仍要等收盘 |
-| `price` 盘中报"上游没有这一天的数据" | 它取的是**收盘快照**，上游收盘后才发布 | 收盘后再跑；或显式 `--date 上一个交易日` |
-| `price` 跑完了但看板「冷热极点」没更新 | 只写了原件，复制品没同步 | `./run.py price --sync`（不联网），或 `--restat` 重算摘要 |
+| `extreme` 盘中报"上游没有这一天的数据" | 它取的是**收盘快照**，上游收盘后才发布 | 收盘后再跑；或显式 `--date 上一个交易日` |
+| `extreme` 跑完了但看板「冷热极点」没更新 | 只写了原件，复制品没同步 | `./run.py extreme --sync`（不联网），或 `--restat` 重算摘要 |
 | 下游报"没有 X 的选股名单" | 那天选股没跑，或 --date 与选股日不一致 | `./run.py select --date X` 先跑选股 |
 | 单只带 `--date`，报告却是今天的 | `run.py` 吃掉 `--date`，工具内部自己取最新交易日 | 要历史就走批量（`--csv` / `--from-select`） |
 | `ModuleNotFoundError: config` | 直接 `python -m stock_cycle_elastic.cycle_report` 了 | 永远走 `./run.py`，它切好了 cwd |
@@ -449,8 +449,8 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ./run.py quality --csv 名单.csv --workers 8    # 自备名单
 ./run.py top     --csv 名单.csv --date 2026-11-13
 
-./run.py price                         # 全市场收盘快照（价 / PE / PB / PS），收盘后跑
-./run.py price --restat                # 只重算冷热摘要，不联网
+./run.py extreme                         # 全市场收盘快照（价 / PE / PB / PS），收盘后跑
+./run.py extreme --restat                # 只重算冷热摘要，不联网
 
 ./run.py web                               # 看板 http://127.0.0.1:5000
 ./run.py backup                            # 备份两个库

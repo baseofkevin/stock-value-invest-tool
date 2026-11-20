@@ -16,8 +16,8 @@
 | `stock_quality_screen` | 质量初筛：质量分 Q + 估值分 V + 14 项风险检查 | `run.py quality [--stock 代码]` |
 | `stock_judge_top` | 顶部判断：四因子观察股票是否到顶部 | `run.py top <代码>` / `top --from-select` |
 | `stock_review_assess` | 综合评估：赔率分排序 + 「超级成长股标识」（只做标识，不改档位） | `run.py web` → `/review` |
-| `stock_extreme_point` | 冷热极点：全市场价格/估值快照，一天一份全市场（独立工具，不走共享数据层） | `run.py price` |
-| `stock_market_trend` | A股大势：沪深300 周线趋势 / ERP 赔率 / 破净+量能情绪（背景板，不参与选股结论） | `run.py regime` |
+| `stock_extreme_point` | 冷热极点：全市场价格/估值快照，一天一份全市场（独立工具，不走共享数据层） | `run.py extreme` |
+| `stock_market_trend` | A股大势：沪深300 周线趋势 / ERP 赔率 / 破净+量能情绪（背景板，不参与选股结论） | `run.py trend` |
 
 ## 每周五收盘后（15:10 之后）
 
@@ -122,16 +122,16 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ./run.py select  --date 2026-11-13         # 只选股（只能批量）
 ./run.py cycle                             # 周期弹性批量（用库里的选股名单）
 ./run.py quality                           # 质量初筛批量（用库里的选股名单）
-./run.py price --date 2026-11-13       # 冷热极点快照（价 + PE + PB + PS）
-./run.py price --code 002096 --date 2026-11-03  # 只补一只股票的某一天
-./run.py regime                            # A股大势（趋势/赔率/情绪），写 results.db
+./run.py extreme --date 2026-11-13       # 冷热极点快照（价 + PE + PB + PS）
+./run.py extreme --code 002096 --date 2026-11-03  # 只补一只股票的某一天
+./run.py trend                            # A股大势（趋势/赔率/情绪），写 results.db
 ./run.py web                               # 只打开看板
 ```
 
 > 示例日期一律用**已经过去的交易日**（`2026-11-13` 是周五）。写未来日期会被直接拒掉：
 > 显式 `--date` 不在交易日历里就报错，不会猜"最近的交易日"。
 
-`price` 与四个工具不属于同一条链：它不依赖选股名单，抓的是"某个交易日的
+冷热极点与四个工具不属于同一条链：它不依赖选股名单，抓的是"某个交易日的
 全市场"（约 5500 只，含北交所，约 6 个上游请求）。字段是收盘价、涨跌幅、
 PE(TTM)、PB(MRQ)、PS(TTM)、总市值、流通市值。**它取的是收盘快照**——上游当天
 收盘后才发布，盘中跑「今天」会直接报「没有这一天的数据」，并告诉你最近一份是哪天；
@@ -140,7 +140,7 @@ PE(TTM)、PB(MRQ)、PS(TTM)、总市值、流通市值。**它取的是收盘快
 单只补数用 `--code`：
 
 ```bash
-./run.py price --code 002096 --date 2026-11-03
+./run.py extreme --code 002096 --date 2026-11-03
 ```
 
 它只 upsert `(2026-11-03, sz002096)` 这一行，**不会删掉当天其它股票**；结果库的
@@ -151,7 +151,7 @@ PE(TTM)、PB(MRQ)、PS(TTM)、总市值、流通市值。**它取的是收盘快
 hub / router / schema 版本闸：
 
 ```bash
-python3 -m stock_extreme_point --date 2026-11-16   # 与 ./run.py price 等价
+python3 -m stock_extreme_point --date 2026-11-16   # 与 ./run.py extreme 等价
 ```
 
 它一次写两个库：`shared.db.price` + `index_price` 是原件，`results.db` 里的同名表是
@@ -161,8 +161,8 @@ python3 -m stock_extreme_point --date 2026-11-16   # 与 ./run.py price 等价
 摘要事后可从库里现成的 `price` 重算，**不联网**：
 
 ```bash
-./run.py price --restat                # 全部时点重算摘要
-./run.py price --date 2026-11-16 --restat   # 只重算那一天
+./run.py extreme --restat                # 全部时点重算摘要
+./run.py extreme --date 2026-11-16 --restat   # 只重算那一天
 ```
 
 日历没有单独的子命令——它只是全流程的第 0 步，`all` 会在过期时自己更新。

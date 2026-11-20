@@ -12,8 +12,8 @@
     python3 run.py quality --stock 600519   # 质量初筛单只
     python3 run.py top sh600519    # 顶部判断（stock_judge_top，单只，随时可跑）
     python3 run.py top --from-select            # 顶部判断批量：读结果库的名单
-    python3 run.py price --date 2026-11-17  # 冷热极点快照（价 + PE + PB + PS + 沪深300）
-    python3 run.py price --code 002096 --date 2026-11-03  # 单只补数（只改这一只）
+    python3 run.py extreme --date 2026-11-17  # 冷热极点快照（价 + PE + PB + PS + 沪深300）
+    python3 run.py extreme --code 002096 --date 2026-11-03  # 单只补数（只改这一只）
     python3 run.py web                          # 打开看板（Flask + Chart.js）
 
 ## 为什么要有这个脚本
@@ -665,7 +665,7 @@ def step_top(tee: Tee, day: str, codes: list[str], extra: list[str],
     return 0
 
 
-def step_price(tee: Tee, day: str | None, extra: list[str],
+def step_extreme(tee: Tee, day: str | None, extra: list[str],
                stock_code: str | None = None) -> int:
     """冷热极点：`price` + `price_stat` + `index_price`，一天一份。
 
@@ -686,7 +686,7 @@ def step_price(tee: Tee, day: str | None, extra: list[str],
         ["--date", day] if day else []) + (
         ["--code", stock_code] if stock_code else []) + extra
     label = f"{day} · {stock_code}" if stock_code else (day or "按已有数据")
-    rc, _ = run_step(tee, f"冷热极点 price（{label}）", argv, ROOT,
+    rc, _ = run_step(tee, f"冷热极点 extreme（{label}）", argv, ROOT,
                      short=f"冷热极点（{label}）", echo=bool(stock_code))
     if rc == 0 and day and not stock_code:
         n = _price_count(day)
@@ -715,7 +715,7 @@ def _price_count(day: str) -> int:
         return 0
 
 
-def step_regime(tee: Tee, day: str, extra: list[str]) -> int:
+def step_trend(tee: Tee, day: str, extra: list[str]) -> int:
     """A股大势：三路信号写 `results.db.market_regime`，一周一行。
 
     跑的是 `stock_market_trend` 子进程——它自己抓东财/中证/乐咕的四个接口、
@@ -863,10 +863,10 @@ def cmd_all(args, tee: Tee) -> int:
             summary(tee, day, steps)
             return rc
 
-    if getattr(args, "skip_regime", False):
-        tee.line("（按 --skip-regime 跳过 A股大势）")
+    if getattr(args, "skip_trend", False):
+        tee.line("（按 --skip-trend 跳过 A股大势）")
     else:
-        rc = step_regime(tee, day, getattr(args, "regime_args", []) or [])
+        rc = step_trend(tee, day, getattr(args, "trend_args", []) or [])
         steps.append(("⑤ A股大势", rc, LAST_SPENT["s"]))
         if rc != 0:
             # 不 return、不进 judge_step：A股大势算不成不影响这一批票的任何结论
@@ -885,7 +885,7 @@ def cmd_all(args, tee: Tee) -> int:
 
 def cmd_single(action: str):
     def run(args, tee: Tee) -> int:
-        if action == "price" and (getattr(args, "restat", False)
+        if action == "extreme" and (getattr(args, "restat", False)
                                   or getattr(args, "sync", False)):
             # 纯本地动作（重算摘要 / 原始库补到结果库）：不联网、不需要日历，
             # 所以不跑 ensure_calendar（那一步在日历过期时会去打上游）。
@@ -893,7 +893,7 @@ def cmd_single(action: str):
                 tee.alert("❌ --code 只能单独查询，不能和 --restat / --sync 一起用。")
                 return 2
             extra = ["--sync"] if getattr(args, "sync", False) else ["--restat"]
-            return step_price(tee, args.date, extra)
+            return step_extreme(tee, args.date, extra)
         day, rc = ensure_calendar(tee, args.date, auto=not args.no_calendar)
         if not day:
             return rc or 1
@@ -902,9 +902,9 @@ def cmd_single(action: str):
                 "上面的日期只作运行标记，不会改变名单。")
         if action == "select":
             return step_select(tee, day, args.extra)
-        if action == "regime":
-            return step_regime(tee, day, args.extra)
-        if action == "price":
+        if action == "trend":
+            return step_trend(tee, day, args.extra)
+        if action == "extreme":
             extra = list(args.extra)
             stock_code = getattr(args, "code", None)
             if stock_code and (getattr(args, "restat", False)
@@ -919,7 +919,7 @@ def cmd_single(action: str):
             keep = int(getattr(args, "prune_keep", 0) or 0)
             if keep > 0:
                 extra += ["--prune-keep", str(keep)]
-            return step_price(tee, day, extra, stock_code=stock_code)
+            return step_extreme(tee, day, extra, stock_code=stock_code)
         if action in ("cycle", "quality"):
             stock = getattr(args, "stock", None)
             csv_path = None
@@ -1204,11 +1204,11 @@ def interactive() -> int:
                 args = argparse.Namespace(date=day_hint, no_calendar=False,
                                           code=None, force=False, prune_keep=0,
                                           extra=[])
-                rc = cmd_single("price")(args, tee)
+                rc = cmd_single("extreme")(args, tee)
             elif choice == "7":
                 args = argparse.Namespace(date=day_hint, no_calendar=False,
                                           extra=[])
-                rc = cmd_single("regime")(args, tee)
+                rc = cmd_single("trend")(args, tee)
             else:
                 raw = input("股票代码（可多个，空格分隔；回车=用当天选股结果批量跑）: ").split()
                 args = argparse.Namespace(date=day_hint, no_calendar=False,
@@ -1249,8 +1249,8 @@ def build_parser() -> argparse.ArgumentParser:
   ./run.py cycle   --stock 600519         # 周期弹性，单只
   ./run.py quality --stock 600519         # 质量初筛，单只
   ./run.py top     600519                 # 顶部判断
-  ./run.py price --date 2026-11-17    # 冷热极点快照（价 + PE + PB + PS）
-  ./run.py price --code 002096 --date 2026-11-03  # 只补这一只
+  ./run.py extreme --date 2026-11-17    # 冷热极点快照（价 + PE + PB + PS）
+  ./run.py extreme --code 002096 --date 2026-11-03  # 只补这一只
   ./run.py web                            # 只打开看板（读 results.db，只读）
   ./run.py backup                         # 备份数据库（VACUUM INTO + 保留 7 份）
   ./run.py all --web                      # 全流程跑完顺便起看板（默认不起）
@@ -1300,9 +1300,9 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
     sp.add_argument("--quality-args", default="--workers 2", help="透传给 stock_report.py")
     sp.add_argument("--top-args", default="", help="透传给 stock_judge_top 的参数")
     sp.add_argument("--top-workers", type=int, default=4, help="顶部判断并发数，默认 4")
-    sp.add_argument("--skip-regime", action="store_true",
+    sp.add_argument("--skip-trend", action="store_true",
                     help="跳过 A股大势（趋势/赔率/情绪，它的结论不参与四步判断）")
-    sp.add_argument("--regime-args", default="",
+    sp.add_argument("--trend-args", default="",
                     help="透传给 stock_market_trend 的参数（如 --recompute 用原件重算）")
     sp.add_argument("--web", action="store_true",
                     help="流程跑完后起看板（默认不起，跑完用 ./run.py web 看结果）")
@@ -1316,7 +1316,7 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
     add_verbose(sp)
     sp.add_argument("extra", nargs="*", default=[], help="透传给 stock_kline_screen 的参数")
 
-    sp = sub.add_parser("regime",
+    sp = sub.add_parser("trend",
                         help="A股大势（stock_market_trend）：趋势 / 赔率 / 情绪（写 results.db）",
                         description="""沪深300 周线趋势 + ERP 赔率 + 破净/量能情绪。
 
@@ -1324,9 +1324,9 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
 看板 /trend 与 /batches 顶部那块横幅读的就是它。`all` 的最后一步会顺带跑一次。
 
 示例：
-  ./run.py regime                     按今天（或最近交易日）算
-  ./run.py regime --date 2026-11-20   给指定基准日算
-  ./run.py regime --recompute         不联网，用 shared.db 的原件重算
+  ./run.py trend                     按今天（或最近交易日）算
+  ./run.py trend --date 2026-11-20   给指定基准日算
+  ./run.py trend --recompute         不联网，用 shared.db 的原件重算
 """)
     add_date(sp)
     add_verbose(sp)
@@ -1395,18 +1395,18 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
                     help="忽略缓存重新取数，并把库里已有结果也重算")
     sp.add_argument("extra", nargs="*", default=[], help="透传给 stock_judge_top 的参数")
 
-    sp = sub.add_parser("price",
+    sp = sub.add_parser("extreme",
                         help="冷热极点（stock_extreme_point）：全市场价格/估值快照"
                              "（写 shared.db + results.db）",
                         formatter_class=argparse.RawDescriptionHelpFormatter,
                         epilog="""示例：
-  ./run.py price                      # 今天（过了 15:05）或上一交易日
-  ./run.py price --date 2026-11-17    # 指定交易日
-  ./run.py price --date 2026-11-17 --force       # 忽略库里已有，重取整天
-  ./run.py price --prune-keep 30      # 顺手删掉 30 天之前的 price 行
-  ./run.py price --restat             # 只按结果库已有 price 重算每日摘要，不联网
-  ./run.py price --sync               # 原始库 → 结果库，不联网
-  ./run.py price --code 002096 --date 2026-11-03  # 只补这一只（保留当天其它行）
+  ./run.py extreme                      # 今天（过了 15:05）或上一交易日
+  ./run.py extreme --date 2026-11-17    # 指定交易日
+  ./run.py extreme --date 2026-11-17 --force       # 忽略库里已有，重取整天
+  ./run.py extreme --prune-keep 30      # 顺手删掉 30 天之前的 price 行
+  ./run.py extreme --restat             # 只按结果库已有 price 重算每日摘要，不联网
+  ./run.py extreme --sync               # 原始库 → 结果库，不联网
+  ./run.py extreme --code 002096 --date 2026-11-03  # 只补这一只（保留当天其它行）
 
 一天一份、一股一行，全市场约 5500 只（含北交所），约 6 个上游请求。
 字段：收盘价 / 涨跌幅 / PE(TTM) / PB(MRQ) / PS(TTM) / 总市值 / 流通市值。
@@ -1502,7 +1502,7 @@ def main(argv: list[str] | None = None) -> int:
             args.cycle_args = split_passthrough(getattr(args, "cycle_args", ""))
             args.quality_args = split_passthrough(getattr(args, "quality_args", ""))
             args.top_args = split_passthrough(getattr(args, "top_args", ""))
-            args.regime_args = split_passthrough(getattr(args, "regime_args", ""))
+            args.trend_args = split_passthrough(getattr(args, "trend_args", ""))
             return cmd_all(args, tee)
         if args.cmd == "web":
             tee.close()

@@ -8,7 +8,7 @@
     python3 -m stock_extreme_point --prune-keep 30                 # 顺手删 30 天前的
     python3 -m stock_extreme_point --code 002096 --date 2026-11-03 # 只补这一只（不删当天其它行）
 
-日常用 `./run.py price`（带进度条、把输出收进日志），这个模块负责真干活。
+日常用 `./run.py extreme`（带进度条、把输出收进日志），这个模块负责真干活。
 
 ## 一次运行干了什么
 
