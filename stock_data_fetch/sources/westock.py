@@ -615,11 +615,36 @@ def _quote(codes: list[str], need: Need) -> Got:
     return got
 
 
+def _cap_yuan(raw, price, shares) -> float | None:
+    """总市值/流通市值统一成**元**。
+
+    上游 `data_quote` 的单位不是固定的：2026-11-14 实测 `total_market_cap` 是元
+    （茅台 1.79e12），2026-11-17 起同样的字段变成了**亿元**（中信证券 3967，
+    对应 3967 亿）。直接把亿元当元写进库，`market_cap_yi = total_mv / 1e8`
+    会得到 0.00，换手率则因分母小 1e8 倍而放大成几千万。
+
+    用 `price × shares` 反推最可靠（市值定义就是价 × 股本）；拿不到价格/股本时
+    退回量级判断——正常 A 股总市值不可能小于 100 万元，小于 1e6 的只能是亿元。
+    """
+    v = _f(raw)
+    if v is None:
+        return None
+    px, sh = _f(price), _f(shares)
+    if px and sh and px > 0 and sh > 0:
+        expected = px * sh
+        if abs(v - expected) <= expected * 0.5:
+            return v
+        if abs(v * 1e8 - expected) <= expected * 0.5:
+            return v * 1e8
+    return v * 1e8 if abs(v) < 1e6 else v
+
+
 def _quote_row(symbol: str, r: dict, need: Need | None = None) -> dict:
     """实测字段（2026-11-14，茅台）：`time` 是 `"2026-11-13"` 这种纯日期。
 
     `volume` 是**手**（`41780` 手 × 100 = 4,178,000 股，对应 `turnover_rate=0.33%`
-    与 12.5 亿流通股，逐项对得上），所以乘 100 换成股。`amount` 已是元。
+    与 12.5 亿流通股，逐项对得上），所以乘 100 换成股。`amount` 已是元；
+    `total_market_cap` / `circulating_market_cap` 的单位会变，走 `_cap_yuan()`。
     """
     day = _date(r.get("time")) or (_date(r.get("date")))
     if not day and need is not None:
@@ -635,8 +660,10 @@ def _quote_row(symbol: str, r: dict, need: Need | None = None) -> dict:
         "turnover": _f(r.get("turnover_rate")),
         "float_shares": _f(r.get("float_shares")),
         "total_shares": _f(r.get("total_shares")),
-        "total_mv": _f(r.get("total_market_cap")),
-        "circ_mv": _f(r.get("circulating_market_cap")),
+        "total_mv": _cap_yuan(r.get("total_market_cap"), r.get("price"),
+                              r.get("total_shares")),
+        "circ_mv": _cap_yuan(r.get("circulating_market_cap"), r.get("price"),
+                             r.get("float_shares")),
         "pe_ttm": _f(r.get("pe_ratio")),
         "pb": _f(r.get("pb_ratio")),
     }

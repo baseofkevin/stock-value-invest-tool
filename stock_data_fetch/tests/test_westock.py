@@ -390,6 +390,20 @@ def test_adapter() -> None:
         check("行情总市值已是元，不换算", nearly(q["total_mv"], 1794191999999.99, 1e-9))
         check("行情 trade_date 取上游 time", q["trade_date"] == TARGET, q["trade_date"])
 
+    # 2026-11-17 起上游把 total_market_cap 的单位从元改成了亿元：同样一只茅台，
+    # 必须仍按“元”落库，否则 market_cap_yi 会变成 0.00、换手率放大 1e8 倍。
+    yi = quote_payload(SYM, TARGET)
+    yi[SYM]["total_market_cap"] /= 1e8
+    yi[SYM]["circulating_market_cap"] /= 1e8
+    calls = FakeWestock({"data_quote": lambda a: yi})
+    with patch(W, "call", calls):
+        got = W.fetch("quote", [SYM], want.quote(TARGET))
+        q = got.rows[SYM][0]
+        check("上游总市值是亿元时归一到元", nearly(q["total_mv"], 1794191999999.99, 1e-9),
+              str(q["total_mv"]))
+        check("上游流通市值是亿元时归一到元", nearly(q["circ_mv"], 1794191999999.99, 1e-9),
+              str(q["circ_mv"]))
+
     calls = FakeWestock({"data_profile": lambda a: profile_payload(a["code"])})
     with patch(W, "call", calls):
         got = W.fetch("profile", [SYM], want.profile())
