@@ -129,6 +129,63 @@ class WebCase(unittest.TestCase):
         return app.test_client()
 
 
+class TestRegimeBanner(WebCase):
+    """`/batches` 顶部那块大势横幅：有数据摆三张卡，没数据说人话。"""
+
+    RESULT = {
+        "trend": {"state": "空头确认", "score": 2, "date": "2026-11-20",
+                  "close": 3906.1, "ma20": 4402.7, "ma60": 4589.9,
+                  "ma60_slope": -0.73, "weeks_below_ma20": 19,
+                  "weeks_below_ma60": 12},
+        "valuation": {"state": "便宜", "date": "2026-11-19", "pe_ttm": 13.09,
+                      "bond10y": 1.58, "erp": 6.06, "pct": 84, "mean": 5.4,
+                      "n": 2400},
+        "sentiment": {"state": "恐慌", "date": "2026-11-19", "below_na": 10.95,
+                      "below_na_pct": 94, "below_count": 572, "total_count": 5224,
+                      "turnover": 2.33, "turnover_q10": 1.46, "volume_dry": False},
+        "data_asof": "2026-11-19",
+        "summary": "趋势 空头确认 · 估值 便宜 84% · 情绪 恐慌",
+    }
+
+    def _seed(self, day: str = "2026-11-20") -> None:
+        from stock_market_regime import store
+        conn = store.connect(self.db_path)
+        try:
+            store.save(conn, day, self.RESULT)
+        finally:
+            conn.close()
+
+    def test_three_cards(self):
+        self._seed()
+        html = self.client().get("/batches").get_data(as_text=True)
+        for text in ("大势 · A股整体", "空头确认", "6.06%", "10.95%", "未地量"):
+            with self.subTest(text=text):
+                self.assertIn(text, html)
+
+    def test_cells_and_headers_carry_details(self):
+        """历史表的格子挂明细、表头挂阈值——两处都得在，缺一个就白做了。"""
+        self._seed()
+        html = self.client().get("/batches").get_data(as_text=True)
+        self.assertIn("已 19 周收在 MA20 下方", html)      # 格子的明细
+        self.assertIn("≥80 便宜", html)                    # 表头的阈值
+        self.assertIn("≥90 恐慌", html)
+
+    def test_no_table_degrades(self):
+        """从没跑过这个功能：不 500，给一句怎么跑。"""
+        html = self.client().get("/batches").get_data(as_text=True)
+        self.assertIn("还没有大势记录", html)
+
+    def test_rerun_same_day_overwrites(self):
+        self._seed()
+        self._seed()          # 同一周五跑两次
+        conn = __import__("sqlite3").connect(self.db_path)
+        try:
+            n = conn.execute("select count(*) from market_regime").fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(n, 1, "一周一行，重跑覆盖而不是追加")
+
+
 class TestPages(WebCase):
     def test_all_pages_render(self):
         client = self.client()

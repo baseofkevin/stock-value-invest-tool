@@ -79,20 +79,26 @@
   </div>
 
   <details class="regime-hist">
-    <summary>近 {{ regime.weeks|length }} 周怎么变的</summary>
+    <summary>近 {{ regime.weeks|length }} 周怎么变的<span class="regime-hint">悬停每格看明细</span></summary>
     <div class="scroll">
       <table class="grid">
         <thead>
-          <tr><th>基准日</th><th>趋势</th><th class="n">ERP 分位</th><th class="n">破净分位</th><th>量能</th></tr>
+          <tr>
+            <th>基准日</th>
+            <th class="tip" title="{{ regime.head_tips.trend }}">趋势</th>
+            <th class="n tip" title="{{ regime.head_tips.erp }}">ERP 分位</th>
+            <th class="n tip" title="{{ regime.head_tips.below }}">破净分位</th>
+            <th class="tip" title="{{ regime.head_tips.volume }}">量能</th>
+          </tr>
         </thead>
         <tbody>
           {% for w in regime.weeks %}
           <tr>
             <td class="name">{{ w.date }}<small style="color:#94a3b8;margin-left:4px">{{ w.date|weekday }}</small></td>
-            <td><span class="chip {{ 'warn' if w.trend_state in ('空头确认', '偏弱') else ('good' if w.trend_state == '偏强' else 'muted') }}">{{ w.trend_state or '—' }}</span></td>
-            <td class="n">{{ w.erp_pct if w.erp_pct is not none else '—' }}{% if w.erp_pct is not none %}%{% endif %}</td>
-            <td class="n">{{ w.below_na_pct if w.below_na_pct is not none else '—' }}{% if w.below_na_pct is not none %}%{% endif %}</td>
-            <td>{% if w.volume_dry is none %}—{% else %}{{ '地量' if w.volume_dry else '未地量' }}{% endif %}</td>
+            <td class="tip" title="{{ w.tips.trend }}"><span class="chip {{ 'warn' if w.trend_state in ('空头确认', '偏弱') else ('good' if w.trend_state == '偏强' else 'muted') }}">{{ w.trend_state or '—' }}</span></td>
+            <td class="n tip" title="{{ w.tips.erp }}">{{ w.erp_pct if w.erp_pct is not none else '—' }}{% if w.erp_pct is not none %}%{% endif %}</td>
+            <td class="n tip" title="{{ w.tips.below }}">{{ w.below_na_pct if w.below_na_pct is not none else '—' }}{% if w.below_na_pct is not none %}%{% endif %}</td>
+            <td class="tip" title="{{ w.tips.volume }}">{% if w.volume_dry is none %}—{% else %}{{ '地量' if w.volume_dry else '未地量' }}{% endif %}</td>
           </tr>
           {% endfor %}
         </tbody>

@@ -534,6 +534,23 @@ def batch_date(conn, skip: int = 0) -> str | None:
     return rows[-1][0] if len(rows) > skip else None
 
 
+#: 历史表**表头**的阈值说明（悬停看）。写在这里而不是模板里：阈值是这套方法的
+#: 全部可调项，跟 `stock_market_regime/rules.py` 是同一组数字，改的时候只改两处
+#: （那边改判定、这边改说法），别让页面上的"≥80 便宜"跟代码里的 80 对不上。
+REGIME_HEAD_TIPS = {
+    "trend": "沪深300 周线\n"
+             "连续 2 周收盘 < MA20 → 偏弱\n"
+             "MA20 < MA60 且 MA60 低于 4 周前 → 空头条件\n"
+             "两条同时成立 → 空头确认",
+    "erp": "ERP = 100/PE(TTM) − 10 年国债\n"
+           "近 10 年分位：≥80 便宜 · ≥95 极值 · ≤20 偏贵",
+    "below": "全A破净率（股价低于每股净资产的公司占比）\n"
+             "近 10 年分位：≥90 恐慌 · ≥70 偏冷",
+    "volume": "沪深300 周换手率\n"
+              "≤ 近 3 年 10% 分位 → 地量",
+}
+
+
 def regime(conn, limit: int = 8) -> dict:
     """A股大势的最近几周（最新在前）。
 
@@ -545,7 +562,7 @@ def regime(conn, limit: int = 8) -> dict:
     * 表在但没有行（跑过、但三路都没算出来）→ `row=None`
     * 某几列是 NULL（那一路当天没数据）→ 字段为 None，页面显示 `—`
     """
-    empty = {"row": None, "weeks": []}
+    empty = {"row": None, "weeks": [], "head_tips": REGIME_HEAD_TIPS}
     if conn is None or not _has(conn, "market_regime"):
         return empty
 
@@ -562,10 +579,69 @@ def regime(conn, limit: int = 8) -> dict:
         d = dict(r)
         d["stale"] = bool(d.get("stale"))
         d["volume_dry"] = None if d.get("volume_dry") is None else bool(d["volume_dry"])
+        d["tips"] = _regime_tips(d)
         return d
 
     weeks = [_row(r) for r in rows[:limit]]
-    return {"row": weeks[0], "weeks": weeks}
+    return {"row": weeks[0], "weeks": weeks, "head_tips": REGIME_HEAD_TIPS}
+
+
+def _regime_tips(w: dict) -> dict[str, str]:
+    """历史表四列各自的 `title` 文本（鼠标悬停看明细）。
+
+    为什么不写在模板里：四条提示要拼十几个可空字段，Jinja 里会变成一片
+    `{{ x or '—' }}` 的噪音，还不如在这里用普通 Python 写清楚。
+    文本口径与页面上那三张卡片**保持一致**——同一行数据，两处说法不能打架。
+    """
+    def n(v, suffix=""):
+        return "—" if v is None else f"{v}{suffix}"
+
+    trend = [f"趋势：{w.get('trend_state') or '—'}"
+             f"（{w.get('trend_score') if w.get('trend_score') is not None else '—'}/2）",
+             f"收盘 {n(w.get('trend_close'))} · MA20 {n(w.get('ma20'))} / MA60 {n(w.get('ma60'))}",
+             f"已 {n(w.get('weeks_below_ma20'))} 周收在 MA20 下方"]
+    if w.get("ma60_slope") is not None:
+        trend.append(f"MA60 四周 {w['ma60_slope']:+.2f}%")
+
+    erp = [f"赔率：{_regime_state_erp(w.get('erp_pct'))}",
+           f"ERP {n(w.get('erp'), '%')} = 100/PE {n(w.get('pe_ttm'))} − 国债 {n(w.get('bond10y'), '%')}",
+           f"近 10 年 {n(w.get('erp_pct'), '%')} 分位（≥80 便宜，≥95 极值）"]
+
+    below = [f"情绪：{_regime_state_na(w.get('below_na_pct'))}",
+             f"全A破净率 {n(w.get('below_na'), '%')}",
+             f"近 10 年 {n(w.get('below_na_pct'), '%')} 分位（≥90 恐慌）"]
+
+    if w.get("volume_dry") is None:
+        volume = ["量能：—", "缺周换手数据"]
+    else:
+        volume = [f"量能：{'地量' if w['volume_dry'] else '未地量'}",
+                  f"沪深300 周换手 {n(w.get('turnover'), '%')}",
+                  f"近 3 年 10% 分位 {n(w.get('turnover_q10'), '%')}"]
+
+    return {"trend": "\n".join(trend), "erp": "\n".join(erp),
+            "below": "\n".join(below), "volume": "\n".join(volume)}
+
+
+def _regime_state_erp(pct) -> str:
+    if pct is None:
+        return "—"
+    if pct >= 95:
+        return "极值"
+    if pct >= 80:
+        return "便宜"
+    if pct <= 20:
+        return "偏贵"
+    return "中性"
+
+
+def _regime_state_na(pct) -> str:
+    if pct is None:
+        return "—"
+    if pct >= 90:
+        return "恐慌"
+    if pct >= 70:
+        return "偏冷"
+    return "正常"
 
 
 def batches(conn, limit: int = 52) -> list[dict]:

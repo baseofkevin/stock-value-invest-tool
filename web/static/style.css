@@ -451,3 +451,9 @@ table.grid td .quote-link{white-space:nowrap;font-size:12px}
 .regime-hist summary:before{content:"▸ ";color:#94a3b8}
 .regime-hist[open] summary:before{content:"▾ "}
 .regime-hist table.grid{margin-top:8px;min-width:560px}
+/* 悬停看明细：用原生 title（不是自绘 tooltip）——这张表在 .scroll 里，
+   绝对定位的气泡会被 overflow 裁掉；原生提示不受裁剪，也不用写 JS。 */
+.regime-hist td.tip,.regime-hist th.tip{cursor:help}
+.regime-hist th.tip:hover{color:var(--ink)}
+.regime-hist td.tip:hover{background:#f8fafc}
+.regime-hint{margin-left:8px;font-weight:400;color:#b6c0d0;font-size:11.5px}
