@@ -37,17 +37,18 @@ a:hover{text-decoration:underline}
 }
 .nav a:hover{background:#fff;border-color:var(--line);text-decoration:none}
 .nav a.on{background:var(--navy);color:#fff;border-color:var(--navy)}
-/* 大标题下面那排五条规则：编号 + 原文，11px、灰色，像书页边上的批注 */
+/* 大标题下面那排五条规则：编号 + 原文。红色是刻意的强调，
+   像书页边上用红笔划出来的一行，不能压成灰色批注 */
 .creed{
   max-width:1200px;margin:9px auto 0;padding:0;list-style:none;
   display:flex;flex-wrap:wrap;align-items:baseline;gap:3px 20px;
-  font-size:11px;line-height:1.5;color:var(--muted);letter-spacing:.01em;
+  font-size:11px;line-height:1.5;color:#d61f2e;font-weight:600;letter-spacing:.01em;
   counter-reset:creed;
 }
 .creed li{counter-increment:creed;display:flex;gap:7px;min-width:0;max-width:100%}
 .creed li::before{
   content:counter(creed,decimal-leading-zero);
-  color:var(--teal);font-weight:700;font-size:10px;letter-spacing:.08em;
+  color:#b3121f;font-weight:800;font-size:10px;letter-spacing:.08em;
   flex:none;padding-top:1px;
 }
 .creed li span{min-width:0}
@@ -73,7 +74,7 @@ a:hover{text-decoration:underline}
 
 /* ---------------------------------------------------------------- 卡片 */
 .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px}
-/* 冷热时点：四张全市场卡 + 沪深300，宽屏一行摆五张 */
+/* 冷热极点：四张全市场卡 + 沪深300，宽屏一行摆五张 */
 .cards.cards-5{grid-template-columns:repeat(5,1fr)}
 /* 综合评估顶部只有三条门槛卡（第③条 2026-11-20 下线） */
 .cards.cards-3{grid-template-columns:repeat(3,1fr)}
@@ -422,7 +423,7 @@ body.stock-report .foot strong{color:#425466}
   body.stock-report .foot{margin:18px 10px 0}
 }
 
-/* ---------------------------------------------------------------- 冷热时点 */
+/* ---------------------------------------------------------------- 冷热极点 */
 /* 这一页读的是 results.db 的 `price`：一天 5500+ 行，整页吐出去浏览器滚动起来
    会明显发涩。做法是**把表体放进一个固定高度的框里滚**，表头 sticky 在框顶
    （不是吸在窗口上——吸窗口会和 topbar 抢位置）。 */

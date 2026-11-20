@@ -1,8 +1,8 @@
-"""`stock_price_show` 的离线测试：抓取解析 / 口径 / 两个库的落库 / CLI。
+"""`stock_extreme_point` 的离线测试：抓取解析 / 口径 / 两个库的落库 / CLI。
 
     cd /home/kevin/MyData/stock-value-invest-tool && \
     /home/kevin/.workbuddy/binaries/python/versions/3.13.12/bin/python3 \
-        -m stock_price_show.tests.test_price_show
+        -m stock_extreme_point.tests.test_extreme_point
 
 重点测四类"错了也不会报错"的东西：
 
@@ -31,7 +31,7 @@ HERE = Path(__file__).resolve()
 PROJECT = HERE.parent.parent.parent
 sys.path.insert(0, str(PROJECT))
 
-from stock_price_show import calendar as C, cli, schema, source, stat, store  # noqa: E402
+from stock_extreme_point import calendar as C, cli, schema, source, stat, store  # noqa: E402
 
 PASS = 0
 FAIL: list[str] = []
@@ -566,7 +566,7 @@ def test_schema() -> None:
 def main() -> int:
     root = tmp_root()
     print("=" * 60)
-    print("stock_price_show 离线测试")
+    print("stock_extreme_point 离线测试")
     print("=" * 60)
     try:
         test_source()

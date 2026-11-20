@@ -53,7 +53,7 @@ from .gates import summary as _gate_summary
 def _inner(row: dict) -> dict:
     """工具自己那份原始 payload（原来在 `web/db.py`，同名逻辑）。
 
-    搬过来的原因：`stock_review` 要和 `stock_kline_screen` 平级，就不能反向
+    搬过来的原因：`stock_review_assess` 要和 `stock_kline_screen` 平级，就不能反向
     依赖 `web`——`web/__init__.py` 会 import `app`，`app` 又 import 本模块，
     一依赖就成环。逻辑只有五行，复制一份比拉循环导入划算。
     """

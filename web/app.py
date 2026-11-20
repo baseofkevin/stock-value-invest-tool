@@ -15,7 +15,7 @@
     /quality     质量：Q × V 散点（结论用颜色区分）+ 结论分布
     /top         顶部：距 250 日高点的横条（谁在高位）+ 四因子状态矩阵
     /review      综合评估：硬门槛（只做标识）+ 赔率分（排序），标出「可以开始研究」的票
-    /price       冷热时点：**results.db** 的全市场价格/估值（按日横截面 + 每日摘要）
+    /extreme       冷热极点：**results.db** 的全市场价格/估值（按日横截面 + 每日摘要）
     /stock/<code> 个股：四边结论并排 + 旁证/周期（**只摆最近一份**，取 `run.id` 最大的那条）
                  `?focus=cycle|quality|top` 决定哪一块排最上面（从哪个工具页点进来的）
 
@@ -41,7 +41,7 @@ from pathlib import Path
 from flask import Flask, Response, abort, redirect, render_template, request, url_for
 
 from . import db, review
-from stock_review import config as review_config
+from stock_review_assess import config as review_config
 
 #: 状态词 → 色调（与四工具报告的 CSS 变量同一套语言）
 TONE_MAP = (
@@ -324,8 +324,8 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         return {"nav": [
             ("/batches", "首页"), ("/select", "选股"),
             ("/cycle", "周期"), ("/quality", "质量"), ("/top", "顶部"),
-            ("/review", "综合评估"), ("/price", "冷热时点"),
-            ("/regime", "大势"),
+            ("/review", "综合评估"), ("/extreme", "冷热极点"),
+            ("/trend", "A股大势"),
         ]}
 
     def _pick(conn):
@@ -379,17 +379,17 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
     @app.route("/review")
     def review_page():
-        """综合评估：不查库里的新表，全在 `stock_review.build()` 里现算。
+        """综合评估：不查库里的新表，全在 `stock_review_assess.build()` 里现算。
 
         四个工具的结论本来就各存一份（`merged()` 已经把它们并到一只票一行），
-        这一页要的是**规则**，不是新数据——规则在 `stock_review/`（与
+        这一页要的是**规则**，不是新数据——规则在 `stock_review_assess/`（与
         `stock_kline_screen` 平级的顶层包），这里只负责挑批次、把三类外部
         数据读好交过去：
 
             垄断性    `shared.db` 的 `annotation`（`db.moats()`）
             财务      `shared.db` 的 `finance`（`db.financials()`，门槛用）
 
-        `stock_review` 自己不连库：它只吃字典，所以能单测、也能换数据源。
+        `stock_review_assess` 自己不连库：它只吃字典，所以能单测、也能换数据源。
         """
         with conn() as c:
             date, _run_id = _pick(c)
@@ -402,18 +402,18 @@ def create_app(db_path: str | Path | None = None) -> Flask:
                                    summary=db.summary(c, date),
                                    counts=db.counts(c, date))
 
-    @app.route("/price")
-    def price_page():
-        """冷热时点：`results.db` 的 `price`（全市场价格/估值）+ `price_stat`（每日摘要）。
+    @app.route("/extreme")
+    def extreme_page():
+        """冷热极点：`results.db` 的 `price`（全市场价格/估值）+ `price_stat`（每日摘要）。
 
         与四个工具页**不共用** `_bar.html` 那个批次选择器：它的选项是"哪天跑过工具"，
         这里是"哪天有全市场价格"，两者天然不同步——`price` 每个交易日都能有，
         而四个工具一周才跑一批。混用一个下拉会让人误以为"没跑工具的日子没行情"。
 
         `?q=` 搜索把页面切成三种形态（唯一命中看历史 / 多命中给清单 / 没命中），
-        判断全在 `db.price_page()` 里，这里只负责把参数交过去。
+        判断全在 `db.extreme_page()` 里，这里只负责把参数交过去。
         """
-        data = db.price_page(
+        data = db.extreme_page(
             date=(request.args.get("date") or "").strip() or None,
             q=(request.args.get("q") or "").strip(),
             sort=(request.args.get("sort") or "pct").strip(),
@@ -421,7 +421,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             start=(request.args.get("start") or "").strip() or None,
             end=(request.args.get("end") or "").strip() or None,
             db=app.config["DB_PATH"])
-        return render_template("price.html", **data)
+        return render_template("extreme.html", **data)
 
     @app.route("/batches")
     def batches():
@@ -431,8 +431,8 @@ def create_app(db_path: str | Path | None = None) -> Flask:
                                    regime=db.regime(c),
                                    summary=db.summary(c), counts=db.counts(c))
 
-    @app.route("/regime")
-    def regime_page():
+    @app.route("/trend")
+    def trend_page():
         """大势历史：按基准日查全部周记。
 
         首页只摆最近 8 周（`db.regime` 默认 limit），这里不截断；`start` /
@@ -445,7 +445,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             start, end = end, start
         with conn() as c:
             return render_template(
-                "regime.html", regime=db.regime(c, limit=None,
+                "trend.html", regime=db.regime(c, limit=None,
                                                 start=start, end=end),
                 start=start or "", end=end or "",
                 cur_date=db.batch_date(c), batches=db.batches(c), meta=None)

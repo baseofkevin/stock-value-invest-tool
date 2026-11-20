@@ -26,7 +26,7 @@
 | 拿全市场价格 + PE/PB/PS | `./run.py price --date 2026-11-17` | `2026-11-17`（**收盘后**才有） |
 | 单只股票补某天价格 | `./run.py price --code 002096 --date 2026-11-03` | `2026-11-03` |
 | 重算那天的冷热摘要（**不联网**） | `./run.py price --restat`（加 `--date X` 只算一天） | — |
-| 看全市场最热 / 最冷的时点 | `./run.py web` → 导航「冷热时点」 | — |
+| 看全市场最热 / 最冷的时点 | `./run.py web` → 导航「冷热极点」 | — |
 | 备份库 | `./run.py backup` | — |
 
 `price` 写两个库：`shared.db.price` + `index_price` 是原件，`results.db` 里的同名表
@@ -134,7 +134,7 @@ cd /home/kevin/MyData/stock-value-invest-tool
   4) 质量初筛            stock_quality_screen    （回车=批量，或填单只代码）
   5) 顶部判断            stock_judge_top         （单只/多只；回车=当天选股批量）
   6) 全市场价格/估值     price               （全市场 价/PE/PB/PS + 沪深300，收盘后跑）
-  7) A股大势             stock_market_regime （趋势 / 赔率 / 情绪；写 results.db，不参与选股）
+  7) A股大势             stock_market_trend （趋势 / 赔率 / 情绪；写 results.db，不参与选股）
   0) 退出
 ```
 
@@ -334,7 +334,7 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 | `--date X` | 真基准日（单只、批量都生效） |
 | `--workers N` `--refresh` | 并发 / 重取并重算 |
 
-### `regime`（A股大势，独立包 `stock_market_regime`）
+### `regime`（A股大势，独立包 `stock_market_trend`）
 
 ```bash
 ./run.py regime                       # 按最近交易日算
@@ -344,7 +344,7 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 
 三路信号**各算各的、不合成总分**：
 
-| 信号 | 看什么 | 阈值（写死在 `stock_market_regime/rules.py`） |
+| 信号 | 看什么 | 阈值（写死在 `stock_market_trend/rules.py`） |
 |---|---|---|
 | 趋势 | 沪深300 周线 MA20 / MA60 | 连续 2 周收盘 < MA20；MA20<MA60 且 MA60 低于 4 周前 |
 | 赔率 | ERP = 100/PE(TTM) − 10年国债 | 近 10 年分位 ≥80 便宜、≥95 极值 |
@@ -354,13 +354,13 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 `market_macro`），结论进 `results.db.market_regime`（一周一行，重跑覆盖）。
 看板 `/batches` 只读结果层，**请求期间不联网**。
 
-> 包名叫 `stock_market_regime`，库里的表仍叫 `market_regime`——表名没跟着改，
+> 包名叫 `stock_market_trend`，库里的表仍叫 `market_regime`——表名没跟着改，
 > 是为了不给已经跑出来的周记做一次没必要的迁移；两者是同一个东西。
 
 升级/排错：先 `--recompute` 排除网络问题；四路数据源见
-`stock_market_regime/source.py` 顶部的注释（中证那一路是官方估值，滞后 1–2 个交易日）。
+`stock_market_trend/source.py` 顶部的注释（中证那一路是官方估值，滞后 1–2 个交易日）。
 
-### `price`（全市场价格 / 估值快照，独立工具 `stock_price_show`）
+### `price`（全市场价格 / 估值快照，独立工具 `stock_extreme_point`）
 
 | 参数 | 说明 |
 |---|---|
@@ -417,7 +417,7 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 | 产出了上一周的旧报告 | 日历没更新，`hub.target` 回落到上周边 | `python3 -m stock_data_fetch.build_calendar` |
 | 盘中跑，结论不对 | 15:05 前用的是半日数据 | 等收盘后再跑；补历史可用 `--date 上一交易日`，当日数据仍要等收盘 |
 | `price` 盘中报"上游没有这一天的数据" | 它取的是**收盘快照**，上游收盘后才发布 | 收盘后再跑；或显式 `--date 上一个交易日` |
-| `price` 跑完了但看板「冷热时点」没更新 | 只写了原件，复制品没同步 | `./run.py price --sync`（不联网），或 `--restat` 重算摘要 |
+| `price` 跑完了但看板「冷热极点」没更新 | 只写了原件，复制品没同步 | `./run.py price --sync`（不联网），或 `--restat` 重算摘要 |
 | 下游报"没有 X 的选股名单" | 那天选股没跑，或 --date 与选股日不一致 | `./run.py select --date X` 先跑选股 |
 | 单只带 `--date`，报告却是今天的 | `run.py` 吃掉 `--date`，工具内部自己取最新交易日 | 要历史就走批量（`--csv` / `--from-select`） |
 | `ModuleNotFoundError: config` | 直接 `python -m stock_cycle_elastic.cycle_report` 了 | 永远走 `./run.py`，它切好了 cwd |

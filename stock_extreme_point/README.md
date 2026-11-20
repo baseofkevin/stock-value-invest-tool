@@ -1,16 +1,16 @@
-# stock_price_show — 全市场价格 / 估值快照与冷热摘要
+# stock_extreme_point — 全市场价格 / 估值快照与冷热摘要
 
 一个独立的小工具：把**某个交易日的全市场**收盘价 + PE(TTM) + PB(MRQ) + PS(TTM) +
 市值取回来，落进两个库，再算出那一天「涨跌家数 / 涨跌停 / 估值中位数」的摘要。
 
 ```bash
-python3 -m stock_price_show                     # 今天（过了 15:05）或上一交易日
-python3 -m stock_price_show --date 2026-11-16
-python3 -m stock_price_show --date 2026-11-16 --force
-python3 -m stock_price_show --restat            # 只重算摘要，不联网
-python3 -m stock_price_show --sync              # 原始库 → 结果库，不联网
-python3 -m stock_price_show --prune-keep 30     # 顺手删 30 天前的
-python3 -m stock_price_show --code 002096 --date 2026-11-03  # 只补一只（不删当天其它行）
+python3 -m stock_extreme_point                     # 今天（过了 15:05）或上一交易日
+python3 -m stock_extreme_point --date 2026-11-16
+python3 -m stock_extreme_point --date 2026-11-16 --force
+python3 -m stock_extreme_point --restat            # 只重算摘要，不联网
+python3 -m stock_extreme_point --sync              # 原始库 → 结果库，不联网
+python3 -m stock_extreme_point --prune-keep 30     # 顺手删 30 天前的
+python3 -m stock_extreme_point --code 002096 --date 2026-11-03  # 只补一只（不删当天其它行）
 ```
 
 日常用 `./run.py price`：多一层进度条、日志和交易日历校验，参数一一对应。
@@ -142,7 +142,7 @@ python3 -m stock_price_show --code 002096 --date 2026-11-03  # 只补一只（�
 
 ## 看板
 
-`./run.py web` → 导航「冷热时点」（`/price`）读 `results.db` 的
+`./run.py web` → 导航「冷热极点」（`/extreme`）读 `results.db` 的
 `price` + `price_stat` + `index_price`：
 
 - 下拉选时点 → 全市场表（框内滚动、表头固定），按涨跌幅/PE/PB/PS/市值排序；
@@ -158,7 +158,7 @@ PE/PB/PS 排序时负值（亏损）一律排最后，与中位数只取正值�
 
 ```bash
 cd /home/kevin/MyData/stock-value-invest-tool
-python3 -m stock_price_show.tests.test_price_show
+python3 -m stock_extreme_point.tests.test_extreme_point
 ```
 
 离线、不联网：假 reader 注入 `source.fetch_day(get=...)`，覆盖解析 / 分页 /
@@ -168,7 +168,7 @@ B 股剔除 / 混日期拦截 / 摘要口径 / 两库落库 / CLI / 建表脚本
 真上游冒烟（会联网、写临时库）：
 
 ```bash
-python3 -m stock_price_show --date <最近交易日> \
+python3 -m stock_extreme_point --date <最近交易日> \
   --shared-db .testtmp/smoke/shared.db --results-db .testtmp/smoke/results.db
 ```
 

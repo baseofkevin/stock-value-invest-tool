@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""硬门槛（`stock_review.gates`）的规则测试。
+"""硬门槛（`stock_review_assess.gates`）的规则测试。
 
     python3 -m unittest discover -s tests -t .
 
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import unittest
 
-from stock_review import gates
+from stock_review_assess import gates
 
 
 def fin(**kw):
@@ -76,7 +76,7 @@ class TestGrowth(unittest.TestCase):
 
     def test_40_percent_is_not_the_total_line(self):
         """总量线是 25%：33% 能过。想回到 40% 改 `GATE2_REV_YOY_MIN`。"""
-        from stock_review import config
+        from stock_review_assess import config
         self.assertEqual(config.GATE2_REV_YOY_MIN, 25.0)
 
 
@@ -143,7 +143,7 @@ class TestIntegration(unittest.TestCase):
         这条是本模块最容易被"顺手改坏"的地方——把门槛接进分档只要一行，
         而用户要的是"先看标识、自己判断"，不是让工具替他排除。
         """
-        from stock_review import build
+        from stock_review_assess import build
         rows = [self._row(quality={})]
         rep = build(rows, {}, {"sh600000": fin(rev_yoy_q=5.0, cut_yoy_q=3.0)})
         self.assertEqual(rep["rows"][0]["tier"], "nodata")   # 不看门槛，还是缺质量
@@ -151,7 +151,7 @@ class TestIntegration(unittest.TestCase):
 
     def test_gate_fail_keeps_buy_rank(self):
         """一只赔率分够的票，门槛不过也照样留在「优先研究」，名次都不变。"""
-        from stock_review import build
+        from stock_review_assess import build
         ok = self._row()
         rep = build([ok], {"sh600000": "独家品种"},
                     {"sh600000": fin(rev_yoy_q=5.0, cut_yoy_q=3.0)})
@@ -160,7 +160,7 @@ class TestIntegration(unittest.TestCase):
 
     def test_unknown_gate_does_not_block_buy(self):
         """某条算不出来（这里缺季度成本）不影响分档：未核实也不挡买入。"""
-        from stock_review import build
+        from stock_review_assess import build
         rep = build([self._row()], {"sh600000": "独家品种"},
                     {"sh600000": fin(rev_yoy_q=40.0, cut_yoy_q=90.0,
                                      cut_ttm=5e8, cut_cum=5e8,
@@ -173,7 +173,7 @@ class TestIntegration(unittest.TestCase):
 
     def test_no_financials_keeps_old_behaviour(self):
         """不传财务数据 = 老行为：只有质量硬门槛，订单测试据此稳定。"""
-        from stock_review import build
+        from stock_review_assess import build
         rep = build([self._row()], {"sh600000": "独家品种"}, None)
         self.assertEqual(rep["rows"][0]["gates"], [])
         self.assertEqual(rep["rows"][0]["tier"], "buy")

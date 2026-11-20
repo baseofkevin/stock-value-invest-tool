@@ -1,9 +1,9 @@
-"""`stock_price_show` —— 全市场价格/估值快照（`price`）与每日冷热摘要（`price_stat`）。
+"""`stock_extreme_point` —— 全市场价格/估值快照（`price`）与每日冷热摘要（`price_stat`）。
 
 这个包**只管一件事**：把某个交易日的全市场价格 + PE + PB + PS 取回来，
 落到两个库里，再算出那一天的冷热摘要。四个工具、共享数据层、看板都不在这里。
 
-    python3 -m stock_price_show --date 2026-11-16     # 取一天
+    python3 -m stock_extreme_point --date 2026-11-16     # 取一天
     ./run.py price --date 2026-11-16              # 日常入口（带进度条与日志）
     ./run.py price --code 002096 --date 2026-11-03 # 单只补数（只改这一只）
 

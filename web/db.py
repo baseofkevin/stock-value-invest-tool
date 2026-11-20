@@ -132,7 +132,7 @@ def financials(symbols, db: str | Path | None = None,
                periods: int = FIN_PERIODS) -> dict[str, dict]:
     """`{symbol: fin}`——硬门槛要的那几个数，从 `shared.db.finance` 拼出来。
 
-    为什么不在 `stock_review.gates` 里直接查库：那个包要和
+    为什么不在 `stock_review_assess.gates` 里直接查库：那个包要和
     `stock_kline_screen` 一样"只吃字典"，才能单测、才能换数据源。
     这里负责把 `raw_json` 里那几个只在原始字段里有的数（单季营收同比、
     单季扣非同比、累计扣非）挖出来，拼成一个扁平字典。
@@ -240,9 +240,9 @@ def _gm(r) -> float | None:
     return (rev - cost) / rev * 100.0
 
 
-# ---------------------------------------------------------------- 冷热时点（results.db 的 price）
+# ---------------------------------------------------------------- 冷热极点（results.db 的 price）
 #
-# 「冷热时点」页读的是**结果库**：`stock_price_show` 抓完原始层后会把同一天
+# 「冷热极点」页读的是**结果库**：`stock_extreme_point` 抓完原始层后会把同一天
 # `price` 复制过来，并在同一个事务里写 `price_stat`（一天一行，涨跌家数 /
 # 估值中位数）。看板只读 results.db，上游怎么变、抓取怎么失败都不影响看图。
 #
@@ -495,10 +495,10 @@ def _history_range(rows: list[dict], dates: list[dict],
     }
 
 
-def price_page(*, date: str | None = None, q: str = "", sort: str = "pct",
+def extreme_page(*, date: str | None = None, q: str = "", sort: str = "pct",
                order: str = "desc", start: str | None = None,
                end: str | None = None, db: str | Path | None = None) -> dict:
-    """「冷热时点」页要的全部数据。**路由只调这一个函数，不写 SQL。**
+    """「冷热极点」页要的全部数据。**路由只调这一个函数，不写 SQL。**
 
     返回的 `shape` 决定模板摆哪块：
 
@@ -652,7 +652,7 @@ def batch_date(conn, skip: int = 0) -> str | None:
 
 
 #: 历史表**表头**的阈值说明（悬停看）。写在这里而不是模板里：阈值是这套方法的
-#: 全部可调项，跟 `stock_market_regime/rules.py` 是同一组数字，改的时候只改两处
+#: 全部可调项，跟 `stock_market_trend/rules.py` 是同一组数字，改的时候只改两处
 #: （那边改判定、这边改说法），别让页面上的"≥80 便宜"跟代码里的 80 对不上。
 REGIME_HEAD_TIPS = {
     "trend": "沪深300 周线\n"
@@ -675,7 +675,7 @@ def regime(conn, limit: int | None = 8, *, start: str | None = None,
     `limit=None` 表示不截断（历史页用）；`start` / `end` 是闭区间，
     按**基准日**过滤，不是 `data_asof`——两者不是一回事。
 
-    **不在这里算任何东西**：分位、趋势、状态全是 `stock_market_regime` 跑完就定格的，
+    **不在这里算任何东西**：分位、趋势、状态全是 `stock_market_trend` 跑完就定格的，
     看板只负责摆出来。也不去 `shared.db` 取原件——页面只读这一个库。
 
     三种"没有"都返回空壳，由页面说人话：

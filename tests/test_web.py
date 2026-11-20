@@ -148,7 +148,7 @@ class TestRegimeBanner(WebCase):
     }
 
     def _seed(self, day: str = "2026-11-20") -> None:
-        from stock_market_regime import store
+        from stock_market_trend import store
         conn = store.connect(self.db_path)
         try:
             store.save(conn, day, self.RESULT)
@@ -187,10 +187,10 @@ class TestRegimeBanner(WebCase):
 
 
 class TestRegimeHistory(WebCase):
-    """`/regime`：每周的大势要按基准日留下来，并且能按日期查。"""
+    """`/trend`：每周的大势要按基准日留下来，并且能按日期查。"""
 
     def _seed(self, day: str) -> None:
-        from stock_market_regime import store
+        from stock_market_trend import store
         conn = store.connect(self.db_path)
         try:
             store.save(conn, day, TestRegimeBanner.RESULT)
@@ -209,11 +209,11 @@ class TestRegimeHistory(WebCase):
         self.assertEqual(n, 2, "跨周追加，不覆盖上一周")
 
         client = self.client()
-        html = client.get("/regime").get_data(as_text=True)
+        html = client.get("/trend").get_data(as_text=True)
         self.assertIn("2026-11-13", html)
         self.assertIn("2026-11-20", html)
 
-        filtered = client.get("/regime?start=2026-11-20").get_data(as_text=True)
+        filtered = client.get("/trend?start=2026-11-20").get_data(as_text=True)
         self.assertIn("2026-11-20", filtered)
         self.assertNotIn("2026-11-13", filtered, "start 之后的旧周不该出现")
 
@@ -221,14 +221,14 @@ class TestRegimeHistory(WebCase):
         self._seed("2026-11-20")
         html = self.client().get("/batches").get_data(as_text=True)
         self.assertIn("查看全部历史", html)
-        self.assertIn("/regime", html)
+        self.assertIn("/trend", html)
 
 
 class TestPages(WebCase):
     def test_all_pages_render(self):
         client = self.client()
         for url in ("/select", "/cycle", "/quality", "/top", "/review",
-                    "/batches", "/regime", "/stock/sh600019"):
+                    "/batches", "/trend", "/stock/sh600019"):
             with self.subTest(url=url):
                 self.assertEqual(client.get(url).status_code, 200)
 
@@ -274,14 +274,14 @@ class TestPages(WebCase):
         self.assertIn("宝钢股份", html)
 
 
-class TestPricePage(WebCase):
-    """冷热时点页读 `results.db` 的 price + price_stat，不读 shared.db。
+class TestExtremePage(WebCase):
+    """冷热极点页读 `results.db` 的 price + price_stat，不读 shared.db。
 
-    这里造的是 `stock_price_show` 落库后同形状的数据；页面只读，不写任何东西。
+    这里造的是 `stock_extreme_point` 落库后同形状的数据；页面只读，不写任何东西。
     """
 
     def _seed(self, days=("2026-11-13", "2026-11-16"), index=True, closes=None):
-        from stock_price_show import store
+        from stock_extreme_point import store
         conn = store.connect(self.db_path)
         try:
             store.ensure(conn, "results")
@@ -307,7 +307,7 @@ class TestPricePage(WebCase):
 
     def test_empty_price_table_degrades_to_hint(self):
         """没跑过 price：页面 200 + 一句先跑什么，不是 500。"""
-        resp = self.client().get("/price")
+        resp = self.client().get("/extreme")
         self.assertEqual(resp.status_code, 200)
         self.assertIn("还没有全市场行情", resp.get_data(as_text=True))
 
@@ -317,7 +317,7 @@ class TestPricePage(WebCase):
         self._old_shared = os.environ.get("STOCK_SHARED_DB")
         os.environ["STOCK_SHARED_DB"] = os.path.join(self.tmp, "nope-shared.db")
         try:
-            html = self.client(with_data=False).get("/price").get_data(as_text=True)
+            html = self.client(with_data=False).get("/extreme").get_data(as_text=True)
         finally:
             if self._old_shared is None:
                 os.environ.pop("STOCK_SHARED_DB", None)
@@ -330,7 +330,7 @@ class TestPricePage(WebCase):
     def test_index_card_shows_hs300(self):
         """第五张卡：沪深300 收盘 + 当日涨跌幅 + 000300.SH。"""
         self._seed()
-        html = self.client(with_data=False).get("/price").get_data(as_text=True)
+        html = self.client(with_data=False).get("/extreme").get_data(as_text=True)
         self.assertIn("沪深300", html)
         self.assertIn("3,979.80", html)
         self.assertIn("-0.91%", html)
@@ -339,13 +339,13 @@ class TestPricePage(WebCase):
     def test_index_card_missing_degrades(self):
         """老库没有 index_price：页面仍 200，第五张卡写「—」，不 500。"""
         self._seed(index=False)
-        html = self.client(with_data=False).get("/price").get_data(as_text=True)
+        html = self.client(with_data=False).get("/extreme").get_data(as_text=True)
         self.assertIn("沪深300", html)
         self.assertIn("还没有沪深300快照", html)
 
     def test_search_unique_hit_shows_history(self):
         self._seed()
-        html = self.client(with_data=False).get("/price?q=600519").get_data(as_text=True)
+        html = self.client(with_data=False).get("/extreme?q=600519").get_data(as_text=True)
         self.assertIn("贵州茅台", html)
         self.assertIn("共有 2 个时点", html)         # 两个交易日都在 price 里
 
@@ -364,7 +364,7 @@ class TestPricePage(WebCase):
         self._seed(days=("2026-11-13", "2026-11-16", "2026-11-17"),
                    closes={"2026-11-13": 100.0, "2026-11-16": 110.0,
                            "2026-11-17": 121.0})
-        html = self.client(with_data=False).get("/price?q=600519").get_data(as_text=True)
+        html = self.client(with_data=False).get("/extreme?q=600519").get_data(as_text=True)
         self.assertIn('id="price-history-chart"', html)
         self.assertIn("累计涨跌幅", html)
         self.assertIn("+21.00%", html)
@@ -376,7 +376,7 @@ class TestPricePage(WebCase):
         self.assertEqual([p["cum"] for p in pts], [0.0, 10.0, 21.0])
 
         html = self.client(with_data=False).get(
-            "/price?q=600519&start=2026-11-16&end=2026-11-17").get_data(as_text=True)
+            "/extreme?q=600519&start=2026-11-16&end=2026-11-17").get_data(as_text=True)
         self.assertIn("+10.00%", html)
         self.assertIn("当前 2 / 3 个时点", html)
         self.assertEqual([p["date"] for p in self._chart_points(html)],
@@ -388,7 +388,7 @@ class TestPricePage(WebCase):
         self._seed(days=("2026-11-13", "2026-11-16", "2026-11-17"),
                    closes={"2026-11-13": 100.0, "2026-11-16": 110.0,
                            "2026-11-17": 121.0})
-        data = webdb.price_page(q="600519", db=self.db_path)
+        data = webdb.extreme_page(q="600519", db=self.db_path)
         self.assertEqual([r["date"] for r in data["rows"]],
                          ["2026-11-13", "2026-11-16", "2026-11-17"])
         self.assertEqual([r["cum"] for r in data["rows"]],
@@ -399,24 +399,24 @@ class TestPricePage(WebCase):
                    closes={"2026-11-13": 100.0, "2026-11-16": 110.0,
                            "2026-11-17": 121.0})
         html = self.client(with_data=False).get(
-            "/price?q=600519&start=2026-11-17&end=2026-11-13").get_data(as_text=True)
+            "/extreme?q=600519&start=2026-11-17&end=2026-11-13").get_data(as_text=True)
         self.assertIn("起止已对调", html)
         self.assertIn("+21.00%", html)
 
         html = self.client(with_data=False).get(
-            "/price?q=600519&start=2020-01-01&end=2026-11-17").get_data(as_text=True)
+            "/extreme?q=600519&start=2020-01-01&end=2026-11-17").get_data(as_text=True)
         self.assertIn("日期不在该股历史，已显示全部", html)
         self.assertIn("+21.00%", html)
 
     def test_history_single_point_has_no_chart(self):
         self._seed(days=("2026-11-16",), closes={"2026-11-16": 100.0})
-        html = self.client(with_data=False).get("/price?q=600519").get_data(as_text=True)
+        html = self.client(with_data=False).get("/extreme?q=600519").get_data(as_text=True)
         self.assertNotIn('id="price-history-chart"', html)
         self.assertIn("只有 1 个时点", html)
 
     def test_history_gap_is_null_not_zero(self):
         """别的票有 11-14、这只停牌：曲线上是 null，不是 0%。"""
-        from stock_price_show import store
+        from stock_extreme_point import store
         self._seed(days=("2026-11-13", "2026-11-16"),
                    closes={"2026-11-13": 100.0, "2026-11-16": 110.0})
         conn = store.connect(self.db_path)
@@ -429,7 +429,7 @@ class TestPricePage(WebCase):
             }], with_stat=True, src="test")
         finally:
             conn.close()
-        html = self.client(with_data=False).get("/price?q=600519").get_data(as_text=True)
+        html = self.client(with_data=False).get("/extreme?q=600519").get_data(as_text=True)
         pts = self._chart_points(html)
         self.assertEqual(len(pts), 3)
         self.assertEqual(pts[1]["date"], "2026-11-14")
@@ -447,7 +447,7 @@ class TestPricePage(WebCase):
                          "https://quote.eastmoney.com/bj/920992.html#fullScreenChart")
         self.assertEqual(_quote_url("bad"), "")
         self._seed()
-        html = self.client(with_data=False).get("/price").get_data(as_text=True)
+        html = self.client(with_data=False).get("/extreme").get_data(as_text=True)
         self.assertIn('href="https://quote.eastmoney.com/sh600519.html#fullScreenChart"',
                       html)
         self.assertIn('target="_blank"', html)
@@ -483,11 +483,11 @@ class TestPricePage(WebCase):
         """PE 升序时负值（亏损）排最后，不能冒充"最便宜"。"""
         self._seed()
         html = self.client(with_data=False).get(
-            "/price?sort=pe&order=asc").get_data(as_text=True)
+            "/extreme?sort=pe&order=asc").get_data(as_text=True)
         self.assertLess(html.index("贵州茅台"), html.index("亏损银行"))
 
     def test_nav_has_price_entry(self):
-        self.assertIn("冷热时点", self.client().get("/review").get_data(as_text=True))
+        self.assertIn("冷热极点", self.client().get("/review").get_data(as_text=True))
 
 
 class TestBatches(WebCase):
@@ -887,7 +887,7 @@ class TestNavAndLinks(WebCase):
         html = self.client().get("/review").get_data(as_text=True)
         self.assertEqual(self.nav_labels(html),
                          ["首页", "选股", "周期", "质量", "顶部", "综合评估",
-                          "冷热时点", "大势"])
+                          "冷热极点", "A股大势"])
         self.assertNotIn("运行记录", html)
 
     def test_select_names_are_not_links(self):
@@ -1101,7 +1101,7 @@ class TestStockReports(WebCase):
 class TestReadOnly(WebCase):
     def test_queries_do_not_write(self):
         """看板只读：打开几个页面后，库文件的 mtime 与大小都不变。"""
-        from stock_price_show import store
+        from stock_extreme_point import store
         client = self.client()                    # 先落四个工具的演示数据
         conn = store.connect(self.db_path)
         try:
@@ -1114,7 +1114,7 @@ class TestReadOnly(WebCase):
         finally:
             conn.close()
         before = Path(self.db_path).stat()
-        for url in ("/review", "/top", "/price", "/price?q=600519",
+        for url in ("/review", "/top", "/extreme", "/extreme?q=600519",
                     "/stock/sh600019", "/stock/sh600019?focus=cycle"):
             client.get(url)
         after = Path(self.db_path).stat()

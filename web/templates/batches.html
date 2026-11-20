@@ -9,7 +9,7 @@
     每周五收盘后执行 <b style="color:#fff">run.py all</b>：选股工具先筛出入围股票，
     接着自动跑周期、质量、顶部和 A 股大势；四份结论再汇成综合评估的赔率分，
     一起显示在页面上。周期、质量、顶部这三块可以单独使用（单只，或批量 CSV 导入计算）。
-    冷热时点用来留档 A 股全市场最冷最热时点的情况，也能记录个股。
+    冷热极点用来留档 A 股全市场最冷最热时点的情况，也能记录个股。
     首页的 A 股大势同样可以单独使用。
   </p>
 </section>
@@ -82,7 +82,7 @@
   </div>
 
   <details class="regime-hist">
-    <summary>近 {{ regime.weeks|length }} 周怎么变的<span class="regime-hint">悬停每格看明细</span><a class="regime-all" href="{{ url_for('regime_page') }}">查看全部历史 →</a></summary>
+    <summary>近 {{ regime.weeks|length }} 周怎么变的<span class="regime-hint">悬停每格看明细</span><a class="regime-all" href="{{ url_for('trend_page') }}">查看全部历史 →</a></summary>
     <div class="scroll">
       <table class="grid">
         <thead>

@@ -1,6 +1,6 @@
 """路径、超时、UA。**可调数值只在这里**（阈值在 `rules.py`）。
 
-路径约定与 `stock_data_fetch` / `stock_price_show` 共用同一套环境变量名，
+路径约定与 `stock_data_fetch` / `stock_extreme_point` 共用同一套环境变量名，
 是为了"拿一份副本库调试"这一招在本仓库里处处一样。
 """
 
@@ -25,7 +25,7 @@ PERF_TIMEOUT = 90
 RETRY = 2
 
 #: 上游都认 UA。默认的 `Python-urllib/3.13` 在乐咕上直接 403。
-UA = "Mozilla/5.0 (compatible; stock_market_regime; +local)"
+UA = "Mozilla/5.0 (compatible; stock_market_trend; +local)"
 
 #: 10Y 国债只取近十年——ERP 分位窗口就是 10 年，更早的用不上。
 BOND_START = "2015-01-01"

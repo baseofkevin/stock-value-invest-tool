@@ -1,4 +1,4 @@
-# stock_review —— 综合评估
+# stock_review_assess —— 综合评估
 
 一批候选票进来，出两样东西：
 
@@ -19,14 +19,14 @@
 数据由 `web/db.py` 读好，以字典传进来，所以这一层可以单测。
 
 ```
-stock_review/
+stock_review_assess/
     config.py    全部阈值。改一个数刷新页面就生效，没有藏在别处的权重。
     gates.py     硬门槛。纯函数，输入 fin（财务快照），按 GATE_KEYS 出结论。
     review.py    赔率分、分档、build()（原来 web/review.py 的内容搬过来）。
 ```
 
 `web/review.py` 只剩一层兼容 shim（`tests/test_web.py` 里 19 个用例按老名字
-`from web import review` 引）。新代码请直接 `from stock_review import build`。
+`from web import review` 引）。新代码请直接 `from stock_review_assess import build`。
 
 ## 门槛：用户原话 → 实现
 

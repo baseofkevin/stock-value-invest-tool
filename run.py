@@ -669,7 +669,7 @@ def step_price(tee: Tee, day: str | None, extra: list[str],
                stock_code: str | None = None) -> int:
     """全市场价格/估值快照：`price` + `price_stat` + `index_price`，一天一份。
 
-    跑的是 `stock_price_show` 子进程——它是独立工具，自己抓东财、自己写两个库，
+    跑的是 `stock_extreme_point` 子进程——它是独立工具，自己抓东财、自己写两个库，
     入口这边只负责"把日期定下来、把输出收进日志、画进度条"。
 
     `day=None` 只出现在 `--restat` / `--sync`（纯本地动作，按库里已有的数据算或复制）：
@@ -682,7 +682,7 @@ def step_price(tee: Tee, day: str | None, extra: list[str],
     不在 `*_result` 表里。子进程自己也打了 `✅ 5579 只…`，但屏幕上除 `[n/m]`
     之外的行都会被 Tee 收进日志，所以入库只数在这里补一行（`_price_count`）。
     """
-    argv = py_module("stock_price_show") + (
+    argv = py_module("stock_extreme_point") + (
         ["--date", day] if day else []) + (
         ["--code", stock_code] if stock_code else []) + extra
     label = f"{day} · {stock_code}" if stock_code else (day or "按已有数据")
@@ -700,7 +700,7 @@ def step_price(tee: Tee, day: str | None, extra: list[str],
 def _price_count(day: str) -> int:
     """results.db 里 `price` 表这天有多少行；读不到就 0（只是页面提示，不该报错）。
 
-    `STOCK_RESULTS_DB` 优先：与 `stock_price_show` / `stock_data_fetch.results`
+    `STOCK_RESULTS_DB` 优先：与 `stock_extreme_point` / `stock_data_fetch.results`
     读同一个环境变量，拿副本调试时这行提示不会指向另一个库。
     """
     try:
@@ -718,7 +718,7 @@ def _price_count(day: str) -> int:
 def step_regime(tee: Tee, day: str, extra: list[str]) -> int:
     """A股大势：三路信号写 `results.db.market_regime`，一周一行。
 
-    跑的是 `stock_market_regime` 子进程——它自己抓东财/中证/乐咕的四个接口、
+    跑的是 `stock_market_trend` 子进程——它自己抓东财/中证/乐咕的四个接口、
     把原件写进 `shared.db`、把结论写进 `results.db`；入口这边只定日期、收日志。
 
     **失败不拦主流程**：它是背景板，四个工具的结果才是这一批的主体。
@@ -728,8 +728,8 @@ def step_regime(tee: Tee, day: str, extra: list[str]) -> int:
     也**不套 `tool=`/`day=`**：那两个参数是给四个工具数"成功几只"用的，
     本步的产出不在 `*_result` 表里。
     """
-    argv = py_module("stock_market_regime") + ["--date", day] + extra
-    rc, _ = run_step(tee, f"大势 stock_market_regime（{day}）", argv, ROOT, short="大势")
+    argv = py_module("stock_market_trend") + ["--date", day] + extra
+    rc, _ = run_step(tee, f"大势 stock_market_trend（{day}）", argv, ROOT, short="大势")
     return rc
 
 
@@ -1152,7 +1152,7 @@ MENU = """
   4) 质量初筛            stock_quality_screen    （回车=批量，或填单只代码）
   5) 顶部判断            stock_judge_top         （单只/多只；回车=当天选股批量）
   6) 全市场价格/估值     price               （全市场 价/PE/PB/PS + 沪深300，收盘后跑）
-  7) A股大势             stock_market_regime （趋势 / 赔率 / 情绪；写 results.db，不参与选股）
+  7) A股大势             stock_market_trend （趋势 / 赔率 / 情绪；写 results.db，不参与选股）
   0) 退出
 """
 
@@ -1302,7 +1302,7 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
     sp.add_argument("--skip-regime", action="store_true",
                     help="跳过大势（趋势/赔率/情绪，它的结论不参与四步判断）")
     sp.add_argument("--regime-args", default="",
-                    help="透传给 stock_market_regime 的参数（如 --recompute 用原件重算）")
+                    help="透传给 stock_market_trend 的参数（如 --recompute 用原件重算）")
     sp.add_argument("--web", action="store_true",
                     help="流程跑完后起看板（默认不起，跑完用 ./run.py web 看结果）")
     # 旧参数，保留只为不让已有脚本报错；现在默认就是不起看板。
@@ -1410,7 +1410,7 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
 字段：收盘价 / 涨跌幅 / PE(TTM) / PB(MRQ) / PS(TTM) / 总市值 / 流通市值。
 落两个库：shared.db 的 price 是原件；results.db 的 price 是看板读的复制品，
 同一天还会写 price_stat（涨跌家数 / 涨跌停 / 估值中位数 / 总市值合计），
-与 price 同事务写入。抓取与落库都在独立工具 `stock_price_show` 里。
+与 price 同事务写入。抓取与落库都在独立工具 `stock_extreme_point` 里。
 
 ⚠️ 这是**收盘快照**：上游当天收盘后才发布，盘中跑「今天」会报
 「上游没有这一天的数据」。要么收盘后再跑，要么显式给上一个交易日。""")
@@ -1428,7 +1428,7 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
                     help="只按结果库已有 price 数据重算每日摘要（price_stat），不联网")
     sp.add_argument("--sync", action="store_true",
                     help="把 shared.db 已有的 price 复制/覆盖到 results.db（不联网）")
-    sp.add_argument("extra", nargs="*", default=[], help="透传给 stock_price_show 的参数")
+    sp.add_argument("extra", nargs="*", default=[], help="透传给 stock_extreme_point 的参数")
 
     sp = sub.add_parser("backup", help="备份 shared.db / results.db 到 backup/（VACUUM INTO）")
     sp.add_argument("--dir", default=None,

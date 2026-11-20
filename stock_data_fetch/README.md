@@ -1,7 +1,7 @@
 # 共享数据层 · 总设计
 
 > 一个按需取数的本地 SQLite 数据层，给四个选股 / 评分工具共用一份数据。
-> （第五个包 `stock_price_show` 是**旁路**：它自己写 `shared.db.price`，不 import 本层，见 §10.1。）
+> （第五个包 `stock_extreme_point` 是**旁路**：它自己写 `shared.db.price`，不 import 本层，见 §10.1。）
 > 这份文件把原先六份分散的设计文档（`DESIGN.md`、`建议-共享取数层.md`、`SCHEMA-共享库.md`、
 > `SOURCES-数据源路由.md`、`CONTRACT-stock_data_fetch.md`、`讨论纪要-共享数据层.md`）**融合成一份**，
 > 按"问题 → 架构 → 数据 → 判定 → 节流 → 契约 → 进度"的顺序重排，去掉重复论证，保留全部结论与依据。
@@ -1364,19 +1364,19 @@ STOCKHUB_LIVE=1 python3 -m stock_data_fetch.tests.test_westock   # 额外跑 4 �
 曾经在 `stock_data_fetch` 里加过第 8 个域 `price`（schema v7），当天就拆走了：
 抓全市场一天只有 6 个上游请求、不需要 hub / router / coverage / throttle 那一整套，
 更不该让"取一天价格"被这里的 schema 版本闸卡住。现在它在独立的
-**`stock_price_show`** 包里，本层回到 `SCHEMA_VERSION = 6`。
+**`stock_extreme_point`** 包里，本层回到 `SCHEMA_VERSION = 6`。
 
 | 项 | 现在在哪 |
 |---|---|
-| 抓取（东财 `RPT_VALUEANALYSIS_DET` 按日横截面） | `stock_price_show/source.py` |
-| 落库（`shared.db.price` + `results.db.price` / `price_stat`） | `stock_price_show/store.py` |
-| 冷热摘要口径（涨跌停 / 中位数） | `stock_price_show/stat.py` |
-| CLI | `python3 -m stock_price_show`（日常用 `./run.py price`） |
+| 抓取（东财 `RPT_VALUEANALYSIS_DET` 按日横截面） | `stock_extreme_point/source.py` |
+| 落库（`shared.db.price` + `results.db.price` / `price_stat`） | `stock_extreme_point/store.py` |
+| 冷热摘要口径（涨跌停 / 中位数） | `stock_extreme_point/stat.py` |
+| CLI | `python3 -m stock_extreme_point`（日常用 `./run.py price`） |
 
 所以本层的 `need` / `router` / `coverage` / `sources` 里**没有** `price` 域，
 `shared.db` 也**不需要**为它升到 v7。两边的唯一约定是文件路径（同一个仓库根、
 同样的 `STOCK_SHARED_DB` / `STOCK_RESULTS_DB` / `STOCKHUB_CALENDAR` 环境变量名），
-刻意不互相 import。详见 `stock_price_show/README.md`。
+刻意不互相 import。详见 `stock_extreme_point/README.md`。
 
 ---
 

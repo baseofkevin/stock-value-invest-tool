@@ -23,7 +23,7 @@ from pathlib import Path
 from . import config
 
 BUSY_TIMEOUT_MS = 5000
-"""和 `stock_price_show` 同值：`shared.db` 可能同时有别的工具在写。"""
+"""和 `stock_extreme_point` 同值：`shared.db` 可能同时有别的工具在写。"""
 
 DOMAIN = "market"
 

@@ -36,7 +36,7 @@ from . import config
 
 DATA_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 DATA_REFERER = "https://data.eastmoney.com/"
-UA = "Mozilla/5.0 (stock_price_show)"
+UA = "Mozilla/5.0 (stock_extreme_point)"
 
 #: 沪深300。`1.` 是东财的沪市前缀（`0.` 是深市）。
 INDEX_SECID = "1.000300"

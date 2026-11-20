@@ -1,12 +1,12 @@
 """命令行：抓一天的全市场价格/估值，落两个库，算每日摘要。
 
-    python3 -m stock_price_show                     # 今天（过了 15:05）或上一交易日
-    python3 -m stock_price_show --date 2026-11-16
-    python3 -m stock_price_show --date 2026-11-16 --force       # 忽略库里已有，重取
-    python3 -m stock_price_show --restat                        # 只重算摘要（不联网）
-    python3 -m stock_price_show --sync                          # 原始库 → 结果库（不联网）
-    python3 -m stock_price_show --prune-keep 30                 # 顺手删 30 天前的
-    python3 -m stock_price_show --code 002096 --date 2026-11-03 # 只补这一只（不删当天其它行）
+    python3 -m stock_extreme_point                     # 今天（过了 15:05）或上一交易日
+    python3 -m stock_extreme_point --date 2026-11-16
+    python3 -m stock_extreme_point --date 2026-11-16 --force       # 忽略库里已有，重取
+    python3 -m stock_extreme_point --restat                        # 只重算摘要（不联网）
+    python3 -m stock_extreme_point --sync                          # 原始库 → 结果库（不联网）
+    python3 -m stock_extreme_point --prune-keep 30                 # 顺手删 30 天前的
+    python3 -m stock_extreme_point --code 002096 --date 2026-11-03 # 只补这一只（不删当天其它行）
 
 日常用 `./run.py price`（带进度条、把输出收进日志），这个模块负责真干活。
 
@@ -341,7 +341,7 @@ def _prune(args, shared, results) -> None:
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="python3 -m stock_price_show",
+        prog="python3 -m stock_extreme_point",
         description="全市场价格/估值快照：写 shared.db.price + index_price，"
                     "复制到 results.db（price + price_stat + index_price）。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -351,13 +351,13 @@ def _parser() -> argparse.ArgumentParser:
                                               结果层（看板只读这里）
 
 示例：
-  python3 -m stock_price_show                        # 今天（过了 15:05）或上一交易日
-  python3 -m stock_price_show --date 2026-11-16
-  python3 -m stock_price_show --date 2026-11-16 --force
-  python3 -m stock_price_show --code 002096 --date 2026-11-03   # 只补这一只
-  python3 -m stock_price_show --restat               # 只按结果库的 price 重算摘要
-  python3 -m stock_price_show --sync                 # 原始库 → 结果库，不联网
-  python3 -m stock_price_show --prune-keep 30
+  python3 -m stock_extreme_point                        # 今天（过了 15:05）或上一交易日
+  python3 -m stock_extreme_point --date 2026-11-16
+  python3 -m stock_extreme_point --date 2026-11-16 --force
+  python3 -m stock_extreme_point --code 002096 --date 2026-11-03   # 只补这一只
+  python3 -m stock_extreme_point --restat               # 只按结果库的 price 重算摘要
+  python3 -m stock_extreme_point --sync                 # 原始库 → 结果库，不联网
+  python3 -m stock_extreme_point --prune-keep 30
 
 ⚠️ 这是**收盘快照**：上游当天收盘后才发布，盘中跑「今天」会报「没有这一天的数据」。""")
     p.add_argument("--date", default=None,

@@ -6,7 +6,7 @@
 **四个**功能模块共用一套本地数据层（`stock_data_fetch` + `shared.db`）——库里有的
 数据直接用，没有的才联网，拿到的写回库，下次（乃至其它三个模块）复用。
 另外两个包是**旁路**，都不 import 数据层（抓取请求少，用不上 hub / 路由 / 覆盖那一整套）：
-`stock_price_show` 抓全市场价格快照，`stock_market_regime` 算 A股大势（趋势/赔率/情绪）。
+`stock_extreme_point` 抓全市场价格快照，`stock_market_trend` 算 A股大势（趋势/赔率/情绪）。
 后者的结论只作背景板，**不参与**四个工具的任何判断。
 
 | 模块 | 干什么 | 入口 |
@@ -15,9 +15,9 @@
 | `stock_cycle_elastic` | 周期弹性：是不是周期股 / 弹性强弱 / 周期位置 | `run.py cycle [--stock 代码]` |
 | `stock_quality_screen` | 质量初筛：质量分 Q + 估值分 V + 14 项风险检查 | `run.py quality [--stock 代码]` |
 | `stock_judge_top` | 顶部判断：四因子观察股票是否到顶部 | `run.py top <代码>` / `top --from-select` |
-| `stock_review` | 综合评估：赔率分排序 + 「超级成长股标识」（只做标识，不改档位） | `run.py web` → `/review` |
-| `stock_price_show` | 全市场价格/估值快照：一天一份全市场（独立工具，不走共享数据层） | `run.py price` |
-| `stock_market_regime` | A股大势：沪深300 周线趋势 / ERP 赔率 / 破净+量能情绪（背景板，不参与选股结论） | `run.py regime` |
+| `stock_review_assess` | 综合评估：赔率分排序 + 「超级成长股标识」（只做标识，不改档位） | `run.py web` → `/review` |
+| `stock_extreme_point` | 全市场价格/估值快照：一天一份全市场（独立工具，不走共享数据层） | `run.py price` |
+| `stock_market_trend` | A股大势：沪深300 周线趋势 / ERP 赔率 / 破净+量能情绪（背景板，不参与选股结论） | `run.py regime` |
 
 ## 每周五收盘后（15:10 之后）
 
@@ -43,7 +43,7 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ② stock_cycle_elastic   周期弹性   → results.db / cycle_result
 ③ stock_quality_screen  质量初筛   → results.db / quality_result
 ④ stock_judge_top       顶部判断   → results.db / top_result
-⑤ stock_market_regime   大势       → results.db / market_regime（背景板，失败不拦）
+⑤ stock_market_trend   大势       → results.db / market_regime（背景板，失败不拦）
 ```
 
 看结果时单独跑 `./run.py web`（读 `results.db`，只读，不联网）。
@@ -147,17 +147,17 @@ PE(TTM)、PB(MRQ)、PS(TTM)、总市值、流通市值。**它取的是收盘快
 `price_stat` 会按当天已有的全部行重算。若这天原本没有全市场数据，摘要就会只有这一只，
 要补全市场仍用 `--date` 整天跑。
 
-抓取与落库在独立工具 `stock_price_show` 里，**不经过** `stock_data_fetch` 的
+抓取与落库在独立工具 `stock_extreme_point` 里，**不经过** `stock_data_fetch` 的
 hub / router / schema 版本闸：
 
 ```bash
-python3 -m stock_price_show --date 2026-11-16   # 与 ./run.py price 等价
+python3 -m stock_extreme_point --date 2026-11-16   # 与 ./run.py price 等价
 ```
 
 它一次写两个库：`shared.db.price` + `index_price` 是原件，`results.db` 里的同名表是
 看板读的复制品。写价格的同时往 `results.db.price_stat` 写**同一天一行的摘要**
 （涨跌家数、涨跌停家数、PE/PB/PS 中位数、总市值合计），同一个事务；沪深300 单独存
-`index_price`，看板「冷热时点」页顶部的第五张卡读它。
+`index_price`，看板「冷热极点」页顶部的第五张卡读它。
 摘要事后可从库里现成的 `price` 重算，**不联网**：
 
 ```bash
@@ -230,7 +230,7 @@ python3 -m stock_data_fetch.build_calendar
 
 `results.db` 每工具一张表（`select_result` / `cycle_result` / `quality_result` /
 `top_result`）+ 一张 `run` 台账，再加全市场价格的副本 `price` 与每日摘要
-`price_stat`（由 `stock_price_show` 写，见上）；每条结果都带 `payload`（完整 JSON）。
+`price_stat`（由 `stock_extreme_point` 写，见上）；每条结果都带 `payload`（完整 JSON）。
 四个工具**自动写**，写失败只 warn 一行、绝不影响出报告。看板只读它，
 所以"页面上的"和"库里的"永远是同一份东西，不存在导出对不上的问题。
 
@@ -269,12 +269,12 @@ Flask + Chart.js，单进程、只读、无登录。默认只监听 `127.0.0.1:5
 | `/quality` 质量 | Q × V 散点，结论分布 |
 | `/top` 顶部 | 距 250 日高点（最接近的 20 只）、动量状态、四因子矩阵 |
 | `/review` 综合评估 | **四个工具并起来算赔率分**：只有 Q<45 / 致命风险 两条否决，其余按小市值、估值低位、周期底、弹性、垄断性加减分排序——给出「先研究哪几只」 |
-| `/regime` 大势历史 | 每周五的大势判断按**基准日**存一行：同一周重跑覆盖当周，跨周追加。可按起止基准日查询；表里同时给数据截至、趋势、ERP 分位、PE、10Y 国债、破净分位、量能。首页的大势卡片只摆最近 8 周，完整历史进这一页 |
-| `/price` 冷热时点 | **定位是"留档"——记录 A 股全市场最热和最冷时的股票情况，便于日后回溯**；内容上是一份**结果库的全市场横截面**：下拉选交易日 → 全市场 5500+ 只的价格/PE/PB/PS（框内滚动，表头固定）；四张全市场卡是那天的涨跌家数、涨跌停、估值中位数，第五张是沪深300 当日收盘/涨跌幅。搜索框输代码或名称，看某只票在 `price` 表里的全部时点：可选起止日期，画**收盘价曲线**（点上标注累计涨跌幅，Tooltip 含当日/累计），表格按时间正序并同时给出当日与累计涨跌；表格里的「打开 ↗」直接跳东方财富行情页 |
+| `/trend` 大势历史 | 每周五的大势判断按**基准日**存一行：同一周重跑覆盖当周，跨周追加。可按起止基准日查询；表里同时给数据截至、趋势、ERP 分位、PE、10Y 国债、破净分位、量能。首页的大势卡片只摆最近 8 周，完整历史进这一页 |
+| `/extreme` 冷热极点 | **定位是"留档"——记录 A 股全市场最热和最冷时的股票情况，便于日后回溯**；内容上是一份**结果库的全市场横截面**：下拉选交易日 → 全市场 5500+ 只的价格/PE/PB/PS（框内滚动，表头固定）；四张全市场卡是那天的涨跌家数、涨跌停、估值中位数，第五张是沪深300 当日收盘/涨跌幅。搜索框输代码或名称，看某只票在 `price` 表里的全部时点：可选起止日期，画**收盘价曲线**（点上标注累计涨跌幅，Tooltip 含当日/累计），表格按时间正序并同时给出当日与累计涨跌；表格里的「打开 ↗」直接跳东方财富行情页 |
 | `/stock/<代码>` | 单只票：一份**原版报告**（顶部 / 质量 / 周期三个标签切换） |
 
-`/price` 读 `results.db` 的 `price` + `price_stat` + `index_price`（由
-`stock_price_show` 从 `shared.db` 镜像并同事务算好摘要；见 `stock_price_show/README.md`）。所以它的下拉是
+`/extreme` 读 `results.db` 的 `price` + `price_stat` + `index_price`（由
+`stock_extreme_point` 从 `shared.db` 镜像并同事务算好摘要；见 `stock_extreme_point/README.md`）。所以它的下拉是
 "哪天有全市场行情"，与前面几页那个"哪天跑过工具"的批次下拉不是同一条时间轴——
 行情每个交易日都能有，四个工具一周才跑一批。排序按钮点当前列会反向；
 PE/PB/PS 排序时**负值（亏损）一律排最后**，与中位数只取正值同一个口径。
@@ -345,7 +345,7 @@ PE/PB/PS 排序时**负值（亏损）一律排最后**，与中位数只取正�
 四个工具各说各的，这一页把它们拼成一个**赔率分**再排序。
 它是**候选池排序器**，不是买入清单：排在前面的票仍然要自己读完个股页再决定。
 
-规则在 `stock_review/`（2026-11-20 从 `web/review.py` 搬出来，与
+规则在 `stock_review_assess/`（2026-11-20 从 `web/review.py` 搬出来，与
 `stock_kline_screen` 平级；`web/review.py` 只剩一层兼容 shim）。
 **分档只有两条一票否决**：
 
@@ -362,7 +362,7 @@ PE/PB/PS 排序时**负值（亏损）一律排最后**，与中位数只取正�
 **它们不参与分档、不参与排序、也不把票拿掉**——「优先研究 / 观察 / 排除」的
 判断和以前一模一样，还是只看质量。标识只出现在三处：「超级成长股标识」列的小方块、
 顶部三张卡、以及方块悬停的 tooltip。（2026-11-20 之前页面上叫「3 条硬门槛」，
-代码和 `stock_review/` 里的文档仍沿用 `gates` / 门槛的叫法。）
+代码和 `stock_review_assess/` 里的文档仍沿用 `gates` / 门槛的叫法。）
 
 | # | 标识 | 判定条件 | 数据字段 | 缺数据 |
 |---|---|---|---|---|
@@ -394,7 +394,7 @@ PE/PB/PS 排序时**负值（亏损）一律排最后**，与中位数只取正�
 
 页面底部那行会直接写出「门槛全过」的股票名字（超过 12 只显示前 12 只 + 等）。
 
-阈值全部集中在 `stock_review/config.py`（`GATE1_DEDUCTED_RATIO_MIN` /
+阈值全部集中在 `stock_review_assess/config.py`（`GATE1_DEDUCTED_RATIO_MIN` /
 `GATE2_REV_YOY_MIN` / `GATE3_CL_YOY_MIN` / `GATE3_CL_SHARE_MIN` /
 `GATE3_CL_YOY_FAIL`），改一个数刷新页面即生效。
 
@@ -429,7 +429,7 @@ PE/PB/PS 排序时**负值（亏损）一律排最后**，与中位数只取正�
 * 非周期股的强弹性照样加分，但「为什么值得看」里标「·存疑」：DOL 在它身上是
   经营杠杆，不是周期放大器（与工具自己那句「①否②强·存疑」对齐）。
 
-阈值集中在 `stock_review/config.py`（`Q_HARD / BUY_CUT / MCAP_STEPS / PCT_STEPS /
+阈值集中在 `stock_review_assess/config.py`（`Q_HARD / BUY_CUT / MCAP_STEPS / PCT_STEPS /
 Q_STEPS / TREND_PENALTY / V_WEAK`，以及上面那几个 `GATE*`）。**唯一的松紧旋钮是 `BUY_CUT`**：
 2026-11-06 那批实测 5 分 → 14 只、4 分 → 19 只、6 分 → 8 只。
 **利润弹性的 2× 不在这里**：它是 `stock_cycle_elastic/config.py` 的
@@ -482,7 +482,7 @@ python3 -m stock_kline_screen.tests                # 选股 4 个文件
 python3 -m unittest discover -s stock_quality_screen/tests -t stock_quality_screen
 python3 -m unittest discover -s stock_cycle_elastic/tests -t stock_cycle_elastic
 python3 -m stock_judge_top.tests
-python3 -m stock_price_show.tests.test_price_show  # 全市场快照（87 项）
+python3 -m stock_extreme_point.tests.test_extreme_point  # 全市场快照（87 项）
 python3 -m unittest discover -s tests -t .         # 入口脚本 + 看板 + 综合评估门槛
 ```
 

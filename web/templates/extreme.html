@@ -1,19 +1,19 @@
 {% extends "base.html" %}
-{% block title %}冷热时点{% endblock %}
+{% block title %}冷热极点{% endblock %}
 {% block body %}
 
 {# 这一页读的是 **results.db**（`price` 一天一份、`price_stat` 一天一行），
-   与四个工具共用一个库：`stock_price_show` 抓完后会把价格镜像过来，看板
+   与四个工具共用一个库：`stock_extreme_point` 抓完后会把价格镜像过来，看板
    只读结果层，上游怎么变都不影响已经存下来的时点。
 
    两种浏览方式共用同一个页面：
    * **不搜索** → 某个时点的全市场表，表体在框内滚动（5500+ 行整页吐出去浏览器会卡）；
    * **搜索**   → 唯一命中摊开这只票的区间曲线 + 全部时点；多命中先给清单。
-   形态由 `db.price_page()` 决定（`shape`），模板只管按 shape 摆块。 #}
+   形态由 `db.extreme_page()` 决定（`shape`），模板只管按 shape 摆块。 #}
 
 <section class="hero">
   <div class="eyebrow">results.db · price</div>
-  <h1>冷热时点</h1>
+  <h1>冷热极点</h1>
   <p>这个页面主要用来记录 A 股全市场<b style="color:#fff">最热和最冷</b>的时候的股票情况，便于以后的回溯和查看。</p>
 </section>
 
@@ -54,7 +54,7 @@
   </span>
   {% endif %}
   {% if cur_date != dates[0].date %}
-  <a class="pick-latest" href="{{ url_for('price_page') }}">回到最新时点</a>
+  <a class="pick-latest" href="{{ url_for('extreme_page') }}">回到最新时点</a>
   {% endif %}
 </form>
 
@@ -66,7 +66,7 @@
   <button type="submit">查</button>
   {% if q %}
   <span class="pick-meta">当前搜索「{{ q }}」</span>
-  <a class="pick-latest" href="{{ url_for('price_page', date=cur_date) }}">清除搜索</a>
+  <a class="pick-latest" href="{{ url_for('extreme_page', date=cur_date) }}">清除搜索</a>
   {% else %}
   <span class="pick-meta">查某只票在 <code>price</code> 表里的全部时点</span>
   {% endif %}
@@ -141,7 +141,7 @@
         {% for m in matches %}
         <tr>
           <td class="code">{{ m.symbol }}</td>
-          <td class="name"><a href="{{ url_for('price_page', q=m.symbol) }}">{{ m.name or '—' }}</a></td>
+          <td class="name"><a href="{{ url_for('extreme_page', q=m.symbol) }}">{{ m.name or '—' }}</a></td>
           <td class="n date">{{ m.last_date }}</td>
           <td class="n">{{ m.last_close|num(2) }}</td>
           <td class="n {{ 'price-up' if (m.last_pct or 0) > 0 else ('price-down' if (m.last_pct or 0) < 0 else '') }}">{{ m.last_pct|spct }}</td>
@@ -180,7 +180,7 @@
       {% endfor %}
     </select>
     <button type="submit">查看</button>
-    <a class="pick-latest" href="{{ url_for('price_page', q=hist_symbol) }}">全部</a>
+    <a class="pick-latest" href="{{ url_for('extreme_page', q=hist_symbol) }}">全部</a>
     {% if hist_swapped %}<span class="chip warn">起止已对调</span>{% endif %}
     {% if hist_reset %}<span class="chip warn">日期不在该股历史，已显示全部</span>{% endif %}
     <span class="pick-meta">当前 {{ hist_count }} / {{ hist_all_total }} 个时点</span>
@@ -236,7 +236,7 @@
       <tbody>
         {% for r in rows %}
         <tr>
-          <td class="date"><a href="{{ url_for('price_page', date=r.date) }}">{{ r.date }}（{{ r.date|weekday }}）</a></td>
+          <td class="date"><a href="{{ url_for('extreme_page', date=r.date) }}">{{ r.date }}（{{ r.date|weekday }}）</a></td>
           <td class="n">{{ r.close|num(2) }}</td>
           <td class="n {{ 'price-up' if (r.pct_chg or 0) > 0 else ('price-down' if (r.pct_chg or 0) < 0 else '') }}">{{ r.pct_chg|spct }}</td>
           <td class="n {{ 'price-up' if (r.cum or 0) > 0 else ('price-down' if (r.cum or 0) < 0 else '') }}">{{ r.cum|spct }}</td>
@@ -261,7 +261,7 @@
   {# 点当前列 = 反向；点别的列 = 按那列降序（"最热/最贵"先看到） #}
   {% set next_order = ('asc' if order == 'desc' else 'desc') if key == sort else 'desc' %}
   <a class="tab {{ 'on' if key == sort }}"
-     href="{{ url_for('price_page', date=cur_date, sort=key, order=next_order) }}">{{ meta[1] }}</a>
+     href="{{ url_for('extreme_page', date=cur_date, sort=key, order=next_order) }}">{{ meta[1] }}</a>
   {% endfor %}
   <span class="tab-meta">
     按 <b>{{ sorts[sort][1] }}</b> {{ order_label }} · 再点一次当前列切换
@@ -289,7 +289,7 @@
         <tr>
           <td class="n idx">{{ loop.index }}</td>
           <td class="code">{{ r.symbol }}</td>
-          <td class="name"><a href="{{ url_for('price_page', date=cur_date, q=r.symbol) }}">{{ r.name or '—' }}</a></td>
+          <td class="name"><a href="{{ url_for('extreme_page', date=cur_date, q=r.symbol) }}">{{ r.name or '—' }}</a></td>
           <td>{% if r.symbol|quoteurl %}<a class="quote-link" href="{{ r.symbol|quoteurl }}" target="_blank" rel="noopener noreferrer" title="在东方财富打开 {{ r.name or r.symbol }} 的行情页">打开 ↗</a>{% else %}—{% endif %}</td>
           <td class="n">{{ r.close|num(2) }}</td>
           <td class="n {{ 'price-up' if (r.pct_chg or 0) > 0 else ('price-down' if (r.pct_chg or 0) < 0 else '') }}">{{ r.pct_chg|spct }}</td>
