@@ -272,6 +272,21 @@ def _clock(value):
     return text[5:10].replace("-", "-") + " " + text[11:16]
 
 
+def _iso_or_none(value):
+    """查询参数里的日期：合法就归一成 `YYYY-MM-DD`，非法/空就返回 None。
+
+    历史筛选是只读查询，参数脏了不该 500；忽略它、按“不限”处理，
+    页面上再让用户重选即可。
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return dt.date.fromisoformat(text[:10]).isoformat()
+    except (TypeError, ValueError):
+        return None
+
+
 def create_app(db_path: str | Path | None = None) -> Flask:
     here = Path(__file__).resolve().parent
     app = Flask(__name__, template_folder=str(here / "templates"),
@@ -310,6 +325,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             ("/batches", "首页"), ("/select", "选股"),
             ("/cycle", "周期"), ("/quality", "质量"), ("/top", "顶部"),
             ("/review", "综合评估"), ("/price", "冷热时点"),
+            ("/regime", "大势"),
         ]}
 
     def _pick(conn):
@@ -414,6 +430,25 @@ def create_app(db_path: str | Path | None = None) -> Flask:
                                    cur_date=db.batch_date(c), meta=None,
                                    regime=db.regime(c),
                                    summary=db.summary(c), counts=db.counts(c))
+
+    @app.route("/regime")
+    def regime_page():
+        """大势历史：按基准日查全部周记。
+
+        首页只摆最近 8 周（`db.regime` 默认 limit），这里不截断；`start` /
+        `end` 是闭区间，口径是**基准日**，不是 `data_asof`。所以筛选结果
+        不会因为中证晚一天而改变——那一天的判断仍然属于跑它的那个周五。
+        """
+        start = _iso_or_none(request.args.get("start"))
+        end = _iso_or_none(request.args.get("end"))
+        if start and end and start > end:
+            start, end = end, start
+        with conn() as c:
+            return render_template(
+                "regime.html", regime=db.regime(c, limit=None,
+                                                start=start, end=end),
+                start=start or "", end=end or "",
+                cur_date=db.batch_date(c), batches=db.batches(c), meta=None)
 
     @app.route("/select")
     def select():

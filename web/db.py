@@ -668,8 +668,12 @@ REGIME_HEAD_TIPS = {
 }
 
 
-def regime(conn, limit: int = 8) -> dict:
+def regime(conn, limit: int | None = 8, *, start: str | None = None,
+           end: str | None = None) -> dict:
     """A股大势的最近几周（最新在前）。
+
+    `limit=None` 表示不截断（历史页用）；`start` / `end` 是闭区间，
+    按**基准日**过滤，不是 `data_asof`——两者不是一回事。
 
     **不在这里算任何东西**：分位、趋势、状态全是 `stock_market_regime` 跑完就定格的，
     看板只负责摆出来。也不去 `shared.db` 取原件——页面只读这一个库。
@@ -679,7 +683,8 @@ def regime(conn, limit: int = 8) -> dict:
     * 表在但没有行（跑过、但三路都没算出来）→ `row=None`
     * 某几列是 NULL（那一路当天没数据）→ 字段为 None，页面显示 `—`
     """
-    empty = {"row": None, "weeks": [], "head_tips": REGIME_HEAD_TIPS}
+    empty = {"row": None, "weeks": [], "total": 0, "matched": 0,
+             "head_tips": REGIME_HEAD_TIPS}
     if conn is None or not _has(conn, "market_regime"):
         return empty
 
@@ -687,10 +692,28 @@ def regime(conn, limit: int = 8) -> dict:
             "trend_close, ma20, ma60, ma60_slope, weeks_below_ma20, erp, "
             "pe_ttm, bond10y, erp_pct, below_na, below_na_pct, turnover, "
             "turnover_q10, volume_dry")
-    rows = conn.execute(
-        f"SELECT {cols} FROM market_regime ORDER BY date DESC").fetchall()
+
+    where, params = [], []
+    if start:
+        where.append("date >= ?")
+        params.append(start)
+    if end:
+        where.append("date <= ?")
+        params.append(end)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+
+    total = conn.execute("SELECT count(*) FROM market_regime").fetchone()[0]
+    matched = conn.execute(
+        f"SELECT count(*) FROM market_regime{clause}", params).fetchone()[0]
+
+    sql = f"SELECT {cols} FROM market_regime{clause} ORDER BY date DESC"
+    qparams = list(params)
+    if limit is not None:
+        sql += " LIMIT ?"
+        qparams.append(int(limit))
+    rows = conn.execute(sql, qparams).fetchall()
     if not rows:
-        return empty
+        return {**empty, "total": total, "matched": 0}
 
     def _row(r) -> dict:
         d = dict(r)
@@ -699,8 +722,12 @@ def regime(conn, limit: int = 8) -> dict:
         d["tips"] = _regime_tips(d)
         return d
 
-    weeks = [_row(r) for r in rows[:limit]]
-    return {"row": weeks[0], "weeks": weeks, "head_tips": REGIME_HEAD_TIPS}
+    weeks = [_row(r) for r in rows]
+    # 卡片永远展示“最新一周”，不受历史页筛选影响；筛选只作用于下表。
+    latest = conn.execute(
+        f"SELECT {cols} FROM market_regime ORDER BY date DESC LIMIT 1").fetchone()
+    return {"row": _row(latest), "weeks": weeks, "total": total,
+            "matched": matched, "head_tips": REGIME_HEAD_TIPS}
 
 
 def _regime_tips(w: dict) -> dict[str, str]:

@@ -186,11 +186,49 @@ class TestRegimeBanner(WebCase):
         self.assertEqual(n, 1, "一周一行，重跑覆盖而不是追加")
 
 
+class TestRegimeHistory(WebCase):
+    """`/regime`：每周的大势要按基准日留下来，并且能按日期查。"""
+
+    def _seed(self, day: str) -> None:
+        from stock_market_regime import store
+        conn = store.connect(self.db_path)
+        try:
+            store.save(conn, day, TestRegimeBanner.RESULT)
+        finally:
+            conn.close()
+
+    def test_weeks_are_stored_and_filterable(self):
+        self._seed("2026-11-13")
+        self._seed("2026-11-20")
+
+        conn = __import__("sqlite3").connect(self.db_path)
+        try:
+            n = conn.execute("select count(*) from market_regime").fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(n, 2, "跨周追加，不覆盖上一周")
+
+        client = self.client()
+        html = client.get("/regime").get_data(as_text=True)
+        self.assertIn("2026-11-13", html)
+        self.assertIn("2026-11-20", html)
+
+        filtered = client.get("/regime?start=2026-11-20").get_data(as_text=True)
+        self.assertIn("2026-11-20", filtered)
+        self.assertNotIn("2026-11-13", filtered, "start 之后的旧周不该出现")
+
+    def test_home_links_to_full_history(self):
+        self._seed("2026-11-20")
+        html = self.client().get("/batches").get_data(as_text=True)
+        self.assertIn("查看全部历史", html)
+        self.assertIn("/regime", html)
+
+
 class TestPages(WebCase):
     def test_all_pages_render(self):
         client = self.client()
         for url in ("/select", "/cycle", "/quality", "/top", "/review",
-                    "/batches", "/stock/sh600019"):
+                    "/batches", "/regime", "/stock/sh600019"):
             with self.subTest(url=url):
                 self.assertEqual(client.get(url).status_code, 200)
 
@@ -849,7 +887,7 @@ class TestNavAndLinks(WebCase):
         html = self.client().get("/review").get_data(as_text=True)
         self.assertEqual(self.nav_labels(html),
                          ["首页", "选股", "周期", "质量", "顶部", "综合评估",
-                          "冷热时点"])
+                          "冷热时点", "大势"])
         self.assertNotIn("运行记录", html)
 
     def test_select_names_are_not_links(self):

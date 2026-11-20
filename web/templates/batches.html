@@ -82,7 +82,7 @@
   </div>
 
   <details class="regime-hist">
-    <summary>近 {{ regime.weeks|length }} 周怎么变的<span class="regime-hint">悬停每格看明细</span></summary>
+    <summary>近 {{ regime.weeks|length }} 周怎么变的<span class="regime-hint">悬停每格看明细</span><a class="regime-all" href="{{ url_for('regime_page') }}">查看全部历史 →</a></summary>
     <div class="scroll">
       <table class="grid">
         <thead>
