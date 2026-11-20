@@ -33,6 +33,10 @@
     弹性：强 {{ rows|selectattr('elastic_label','equalto','strong')|list|length }}
     / 弱 {{ rows|selectattr('elastic_label','equalto','weak')|list|length }}
     / 不稳定 {{ rows|selectattr('elastic_label','equalto','unstable')|list|length }}。
+    「位置」后面那半句（如「低位 · 订单回升」）是**需求端**的限定语，来自合同负债
+    （预收款）同比：产能分位只说供给端紧不紧，它补的是需求在不在回来。
+    它<b>不改变分位、也不改变标签</b>——和工具里那个「扩产中 / 产能在退」是一个性质。
+    悬停看金额和占比。
   </p>
   {{ stock_jump(rows, "cycle-table") }}
   <div class="scroll stock-scroll" id="cycle-table">
@@ -57,7 +61,10 @@
           <td class="n">{{ r.elasticity|ratio }}</td>
           <td><span class="chip {{ 'good' if r.elastic_label == 'strong' else ('muted' if r.elastic_label == 'weak' else 'info') }}">{{ {'strong':'强','weak':'弱','unstable':'不稳定'}.get(r.elastic_label, r.elastic_label or '—') }}</span></td>
           <td class="n">{{ r.position_pct|num(1) }}</td>
-          <td><span class="chip {{ r.position_label|tone }}">{{ r.position_label|poslabel }}</span></td>
+          <td>
+            <span class="chip {{ r.position_label|tone }}">{{ r.position_label|poslabel }}</span>
+            {% if r.demand %}<span class="demand {{ r.demand.tone }}" title="{{ r.demand.tip }}">{{ r.demand.text }}</span>{% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>

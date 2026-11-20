@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """四个功能模块的统一入口。
 
-    python3 run.py all             # 全流程：日历 → 选股 → 周期 → 质量 → 顶部（不起看板）
+    python3 run.py all             # 全流程：日历 → 选股 → 周期 → 质量 → 顶部 → 大势（不起看板）
     python3 run.py menu            # 交互菜单
     python3 run.py -h              # 帮助
     python3 run.py select          # 只跑选股（stock_kline_screen）
@@ -1133,12 +1133,13 @@ def db_hint() -> str:
 # ---------------------------------------------------------------------------
 
 MENU = """
-  1) 全流程：日历 → 选股 → 周期弹性 → 质量初筛 → 顶部判断  ← 每周五盘后
+  1) 全流程：日历 → 选股 → 周期弹性 → 质量初筛 → 顶部判断 → 大势  ← 每周五盘后
   2) 只跑选股            stock_kline_screen
   3) 周期弹性            stock_cycle_elastic     （回车=批量，或填单只代码）
   4) 质量初筛            stock_quality_screen    （回车=批量，或填单只代码）
   5) 顶部判断            stock_judge_top         （单只/多只；回车=当天选股批量）
   6) 全市场价格/估值     price               （全市场 价/PE/PB/PS + 沪深300，收盘后跑）
+  7) A股大势             stock_market_regime （趋势 / 赔率 / 情绪；写 results.db，不参与选股）
   0) 退出
 """
 
@@ -1151,14 +1152,14 @@ def interactive() -> int:
     while True:
         say(MENU)
         try:
-            choice = input("选择 [0-6]: ").strip()
+            choice = input("选择 [0-7]: ").strip()
         except (EOFError, KeyboardInterrupt):
             say("")
             return 130
         if choice in ("0", "q", ""):
             return 0
-        if choice not in {"1", "2", "3", "4", "5", "6"}:
-            say("请输入 0-6。")
+        if choice not in {"1", "2", "3", "4", "5", "6", "7"}:
+            say("请输入 0-7。")
             continue
 
         day_hint = input(f"基准日（回车=自动，今天 {dt.date.today()}）: ").strip() or None
@@ -1190,6 +1191,10 @@ def interactive() -> int:
                                           code=None, force=False, prune_keep=0,
                                           extra=[])
                 rc = cmd_single("price")(args, tee)
+            elif choice == "7":
+                args = argparse.Namespace(date=day_hint, no_calendar=False,
+                                          extra=[])
+                rc = cmd_single("regime")(args, tee)
             else:
                 raw = input("股票代码（可多个，空格分隔；回车=用当天选股结果批量跑）: ").split()
                 args = argparse.Namespace(date=day_hint, no_calendar=False,
@@ -1203,7 +1208,9 @@ def interactive() -> int:
             tee.close()
 
         say("")
-        say(f"—— 退出码 {rc}；日志 {tee.fh.name}")
+        # 用 tee.path 而不是 tee.fh.name：close() 会把 fh 置成 None，
+        # 而这一行在 finally 之后 —— 用 fh 会必崩（2026-11-20 修）。
+        say(f"—— 退出码 {rc}；日志 {tee.path}")
         try:
             input("回车回到菜单…")
         except (EOFError, KeyboardInterrupt):
@@ -1222,7 +1229,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="四个功能模块的统一入口。不带参数只打印帮助；"
                     "跑全流程用 all，想选着跑用 menu。",
         epilog="""示例：
-  ./run.py all                            # 周五盘后全流程（日历→选股→周期→质量→顶部）
+  ./run.py all                            # 周五盘后全流程（日历→选股→周期→质量→顶部→大势）
   ./run.py menu                           # 交互菜单
   ./run.py select --date 2026-11-20       # 只跑选股，指定基准日
   ./run.py cycle   --stock 600519         # 周期弹性，单只
@@ -1263,7 +1270,8 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
                         help="即使日历过期也不要自动更新")
 
     sp = sub.add_parser("all", aliases=["weekly"],
-                        help="全流程：日历 → 选股 → 周期 → 质量 → 顶部（不起看板）")
+                        help="全流程：日历 → 选股 → 周期 → 质量 → 顶部 → 大势"
+                             "（不起看板）")
     add_date(sp)
     add_verbose(sp)
     sp.add_argument("--skip-cycle", action="store_true", help="跳过周期弹性")
@@ -1419,13 +1427,15 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
     sp.add_argument("--list", dest="list_only", action="store_true",
                     help="只列出已有备份，不做备份")
 
-    sp = sub.add_parser("web", help="打开看板：Flask + Chart.js，读 results.db")
+    sp = sub.add_parser("web",
+                        help="打开看板：Flask + Chart.js，读 results.db"
+                             "（默认进首页 /batches）")
     sp.add_argument("--port", type=int, default=5000, help="端口，默认 5000")
     sp.add_argument("--host", default="127.0.0.1", help="监听地址，默认只本机")
     sp.add_argument("--debug", action=argparse.BooleanOptionalAction, default=True,
                     help="Flask 调试模式（默认开，改模板/代码自动重载；--no-debug 关闭）")
 
-    sub.add_parser("menu", help="交互菜单（0-5 选择）")
+    sub.add_parser("menu", help="交互菜单（0-7 选择）")
     return p
 
 

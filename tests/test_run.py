@@ -422,7 +422,7 @@ class ParserTest(unittest.TestCase):
         self.assertFalse(p.parse_args(["web", "--no-debug"]).debug)
 
     def test_all_is_full_pipeline(self) -> None:
-        """全流程 = 日历 → 选股 → 周期 → 质量 → 顶部，默认不含看板。"""
+        """全流程 = 日历 → 选股 → 周期 → 质量 → 顶部 → 大势，默认不含看板。"""
         a = run.build_parser().parse_args(["all"])
         self.assertEqual(a.cycle_args, "--workers 2")
         self.assertEqual(a.quality_args, "--workers 2")
@@ -465,6 +465,38 @@ class ParserTest(unittest.TestCase):
         self.assertIn("run.py all", text)
         self.assertIn("./run.py menu", text)
         self.assertNotIn("① 选股", text)
+
+    def test_menu_option_7_runs_regime(self) -> None:
+        """菜单 7) 要真的调 `step_regime`——选项加了、分支没接是最容易漏的错。
+
+        补这一条是因为 7 是 2026-11-20 新加的：菜单文案、`input()` 的 [0-7]、
+        校验集合、分支四处必须同时改，少一处就静默走到「顶部判断」。
+        """
+        from unittest import mock
+
+        calls = []
+
+        def fake_step_regime(tee, day, extra):
+            calls.append((day, list(extra)))
+            return 0
+
+        class _FakeTee:
+            path = "fake.log"
+            def line(self, *_a, **_k): pass
+            def alert(self, *_a, **_k): pass
+            def close(self): pass
+
+        answers = iter(["7", "2026-11-20", "", "0"])
+        with mock.patch("builtins.input", lambda *a: next(answers)), \
+                mock.patch.object(run, "ensure_calendar",
+                                  lambda *a, **k: ("2026-11-20", 0)), \
+                mock.patch.object(run, "step_regime", fake_step_regime), \
+                mock.patch.object(run, "load_calendar", lambda: []), \
+                mock.patch.object(run, "Tee", lambda *a, **k: _FakeTee()), \
+                mock.patch.object(run, "say", lambda *a, **k: None):
+            rc = run.interactive()
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, [("2026-11-20", [])])
 
     def test_help_lists_csv_examples_for_all_three_tools(self) -> None:
         """`-h` 里要能直接抄到 cycle/quality/top 的 --csv 用法。"""

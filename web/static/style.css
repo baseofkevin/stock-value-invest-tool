@@ -37,6 +37,20 @@ a:hover{text-decoration:underline}
 }
 .nav a:hover{background:#fff;border-color:var(--line);text-decoration:none}
 .nav a.on{background:var(--navy);color:#fff;border-color:var(--navy)}
+/* 大标题下面那排五条规则：编号 + 原文，11px、灰色，像书页边上的批注 */
+.creed{
+  max-width:1200px;margin:9px auto 0;padding:0;list-style:none;
+  display:flex;flex-wrap:wrap;align-items:baseline;gap:3px 20px;
+  font-size:11px;line-height:1.5;color:var(--muted);letter-spacing:.01em;
+  counter-reset:creed;
+}
+.creed li{counter-increment:creed;display:flex;gap:7px;min-width:0;max-width:100%}
+.creed li::before{
+  content:counter(creed,decimal-leading-zero);
+  color:var(--teal);font-weight:700;font-size:10px;letter-spacing:.08em;
+  flex:none;padding-top:1px;
+}
+.creed li span{min-width:0}
 
 /* ---------------------------------------------------------------- Hero */
 .hero{
@@ -61,6 +75,8 @@ a:hover{text-decoration:underline}
 .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px}
 /* 冷热时点：四张全市场卡 + 沪深300，宽屏一行摆五张 */
 .cards.cards-5{grid-template-columns:repeat(5,1fr)}
+/* 综合评估顶部只有三条门槛卡（第③条 2026-11-20 下线） */
+.cards.cards-3{grid-template-columns:repeat(3,1fr)}
 .card{
   background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px 16px;
   box-shadow:0 2px 10px rgba(16,32,54,.04);display:block;color:inherit;
@@ -131,6 +147,22 @@ table.grid tr.dim td{opacity:.55}
 .chip.info{color:var(--info);background:var(--info-bg);border-color:#bfdbfe}
 .chip.muted{color:#64748b;background:var(--muted-bg);border-color:#dbe3ed}
 .chip.ok{color:var(--ok);background:var(--ok-bg);border-color:#99f6e4}
+
+/* 综合评估：四条硬门槛并排的小方块。pass/fail/unknown 三色，
+   颜色语义和 .chip 一致（绿=过、橙=不过、灰=未核实）。 */
+.gates{display:inline-flex;gap:3px;vertical-align:middle}
+.gates b{
+  font-weight:600;font-size:10.5px;line-height:1;padding:4px 5px;border-radius:4px;
+  white-space:nowrap;cursor:help;
+}
+.demand{font-size:11px;margin-left:5px;color:#64748b;white-space:nowrap}
+.demand.good{color:#0f766e}
+.demand.warn{color:#b45309}
+
+.gates b i{font-style:normal;font-size:9px;opacity:.75;margin-left:1px}
+.gates b.pass{color:#065f46;background:var(--ok-bg)}
+.gates b.fail{color:#991b1b;background:#fee2e2}
+.gates b.unknown{color:#64748b;background:#f1f5f9}
 
 /* ---------------------------------------------------------------- 图表 */
 .charts{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px}

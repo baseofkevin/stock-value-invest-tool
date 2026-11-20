@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_stock_jump.html" import stock_jump %}
+{% from "_gates.html" import gates_cell %}
 {% block title %}综合评估{% endblock %}
 {% block body %}
 
@@ -7,14 +8,55 @@
   <div class="eyebrow">Cross-tool review</div>
   <h1>这一批，谁排在前面</h1>
   <p>
-    选股 × 周期 × 质量 × 顶部，四个工具的话拼在一起，算一个<b style="color:#fff">赔率分</b>：
-    小市值、估值低位、周期底部、弹性强、有垄断性，占得越多分越高。
-    只有两条会一票否决——质量分 &lt; 45、命中致命风险。
+    先看<b style="color:#fff">超级成长股标识</b>——不亏损、增速、有供需矛盾，
+    在表格里逐条标出来：过、不过、未核实。
+    <b>标识不改变分档，也不改变名次</b>，下面的排序还是原来那套
+    <b style="color:#fff">赔率分</b>：小市值、估值低位、周期底部、弹性强、有垄断性，
+    占得越多排得越前。质量分 &lt; 45 或命中致命风险，照旧一票否决。
     {% if cur_date %}当前批次 <strong style="color:#fff">{{ cur_date }}</strong>。{% endif %}
   </p>
 </section>
 
 {% include "_bar.html" %}
+
+{% if review.gate_stats %}
+<section class="panel">
+  <h2>超级成长股标识 <span class="tag">不参与分档</span></h2>
+  <p class="sub">
+    这一层是<b>标识</b>，不参与分档、不参与排序，也不把谁从表里拿掉——
+    下面「优先研究 / 观察 / 排除」的判断和以前完全一样，还是只看质量。
+    <b>三条都只用数据库里现成的数算</b>：前两条读扣非与同比；供需有两条证据——
+    毛利率环比（营收 − 成本）和合同负债同比（预收款），占一条就算「过」。
+    数据缺一季就显示「未核实」，不猜。
+    图例：<b style="color:#065f46">✓ 过</b>　<b style="color:#991b1b">✗ 不过</b>　
+    <b style="color:#64748b">? 未核实</b>（鼠标停在方块上看具体数值）。
+  </p>
+  <div class="cards cards-3">
+    {% for g in review.gate_stats %}
+    <div class="card">
+      <div class="k">{{ g.label }}</div>
+      <div class="v">{{ g.pass }}<span class="muted" style="font-size:13px">/{{ g.total }}</span></div>
+      <div class="s">{{ g.rule }}</div>
+      <div class="s" style="margin-top:6px">
+        过 <b style="color:#0f766e">{{ g.pass }}</b>　
+        不过 <b style="color:#b45309">{{ g.fail }}</b>　
+        未核实 <b style="color:#94a3b8">{{ g.unknown }}</b>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <p class="sub" style="margin-top:12px">
+    这一批门槛全过 <b>{{ review.gate_all_pass }}</b> 只{% if review.gate_pass_rows %}
+    （{% for r in review.gate_pass_rows[:12] %}{{ r.name }}{% if not loop.last %}、{% endif %}{% endfor %}{% if review.gate_pass_rows|length > 12 %} 等{% endif %}）{% endif %}，明确不过
+    <b>{{ review.gate_blocked }}</b> 只，没有明确不过、但还有门槛没核实
+    <b>{{ review.gate_pending|length }}</b> 只。这些数字只说明"筛得有多严"，
+    不影响右边表格里任何一只票的档位。
+    {% if review.gate_all_pass == 0 %}
+      全过是 0 说明这一批确实没有三条都干净的票——不用找原因，换一批看。
+    {% endif %}
+  </p>
+</section>
+{% endif %}
 
 {% if review.rows %}
 <div class="cards">
@@ -40,7 +82,7 @@
   <div class="scroll stock-scroll" id="review-buy-table">
     <table class="grid">
       <thead><tr>
-        <th class="n">#</th><th>代码</th><th>名称</th><th>东财</th>
+        <th class="n">#</th><th>代码</th><th>名称</th><th>东财</th><th>超级成长股标识</th>
         <th class="n">赔率分</th><th class="n">市值</th>
         <th class="n">Q</th><th class="n">V</th><th class="n">估值分位</th>
         <th>周期</th><th>弹性</th><th>垄断</th><th>为什么值得看</th>
@@ -52,6 +94,7 @@
           <td class="code">{{ r.symbol }}</td>
           <td class="name"><a href="/stock/{{ r.symbol }}">{{ r.name or '—' }}</a></td>
           <td>{% if r.symbol|quoteurl %}<a class="quote-link" href="{{ r.symbol|quoteurl }}" target="_blank" rel="noopener noreferrer" title="在东方财富打开 {{ r.name or r.symbol }} 的行情页">打开 ↗</a>{% else %}—{% endif %}</td>
+          <td>{{ gates_cell(r) }}</td>
           <td class="n" title="{{ r.score_text }}"><b>{{ r.score }}</b><span
               class="muted" style="font-size:11px">/{{ review.score_max }}</span></td>
           <td class="n">{{ r.mcap|num(0) if r.mcap is not none else '—' }}</td>
@@ -104,7 +147,7 @@
   <div class="scroll stock-scroll" id="review-all-table">
     <table class="grid">
       <thead><tr>
-        <th class="n">#</th><th>代码</th><th>名称</th><th>东财</th><th>评级</th>
+        <th class="n">#</th><th>代码</th><th>名称</th><th>东财</th><th>评级</th><th>超级成长股标识</th>
         <th class="n">赔率分</th><th class="n">市值</th>
         <th class="n">Q</th><th class="n">V</th><th class="n">估值分位</th>
         <th>周期</th><th>弹性</th><th>垄断</th><th>提示</th>
@@ -117,6 +160,7 @@
           <td class="name"><a href="/stock/{{ r.symbol }}">{{ r.name or '—' }}</a></td>
           <td>{% if r.symbol|quoteurl %}<a class="quote-link" href="{{ r.symbol|quoteurl }}" target="_blank" rel="noopener noreferrer" title="在东方财富打开 {{ r.name or r.symbol }} 的行情页">打开 ↗</a>{% else %}—{% endif %}</td>
           <td><span class="chip {{ r.tier_tone }}">{{ r.tier_label }}</span></td>
+          <td>{{ gates_cell(r) }}</td>
           <td class="n" title="{{ r.score_text }}"><b>{{ r.score }}</b></td>
           <td class="n">{{ r.mcap|num(0) if r.mcap is not none else '—' }}</td>
           <td class="n">{{ r.q|num(1) }}</td>
@@ -146,16 +190,50 @@
   <details>
     <summary style="cursor:pointer;font-weight:600;font-size:14px">这一页的打分规则（点开看）</summary>
     <p class="sub" style="margin-top:10px">
-      规则是<b>硬门槛 + 赔率分</b>。硬门槛只留"会不会亏光"的两条，其余全部
-      加减分——差一条只扣几分，<b>不会让一只票消失</b>。
+      规则是<b>超级成长股标识（三条）+ 赔率分</b>，两件事分工明确：
+      <b>标识只标注</b>（不改档、不排序、不把票拿掉），<b>赔率分只排序</b>
+      （分低只排后面，不消失）。
     </p>
+
     <table class="kv" style="max-width:900px">
+      <tr><th>① 不亏损</th><td>扣非 TTM（凑不齐四季用累计扣非）&gt; 0；最新单季扣非不为负；
+        <b>扣非/归母 ≥ 80%</b>——最后这条比"扣非为正"更管用：靠补助、卖资产转正的公司，
+        报表上不亏，主业在失血。</td></tr>
+      <tr><th>② 增速</th><td>单季营收同比 ≥ <b>25%</b>，<b>且</b>单季扣非增速 &gt; 营收增速。
+        两条缺一不可：只看营收会选到"增收不增利"的铺货型公司，只看利润会被低基数和
+        一次性收益骗（+161% 可能是去年同季在亏损）。</td></tr>
+      <tr><th>③ 供需</th><td>两条证据，<b>占一条即可</b>：<br>
+        <b>a. 毛利率环比连升两季</b>：当季 &gt; 上季 &gt; 上上季。涨价或产品结构上移
+        会推高它，降价换量会压低它（<code>OperatingRevenue_Q</code> −
+        <code>OperatingCost_Q</code>）。<br>
+        <b>b. 合同负债同比 ≥ 20%</b>，且合同负债 ≥ 年化营收的 5%：预收款变多
+        说明订单在手、客户肯先付钱（<code>ContractLiability</code>，比的是去年同季，
+        避开 Q4 集中确认的季节性）。占比门槛是必须的——中位公司的合同负债只有
+        年化营收的 2.4%，小基数上翻一倍只是噪声。<br>
+        两条打架（毛利率涨、订单缩）时不下结论，标「未核实」。金融股两条都判不了。</td></tr>
+    </table>
+
+    <p class="sub" style="margin-top:8px">
+      <b>为什么②是 25% 不是 40%</b>：40% 照字面执行会筛掉用户自己举的那个例子
+      （营收 +33%、扣非 +75%、Q3 扣非 +161%）——模组行业是"老业务价格战拖累总量、
+      新业务爆发"，总量增速天然低于结构增速。所以总量只留 25% 的底线
+      （原来那条"新业务爆发"的门槛因为库里没有新业务收入字段，已经整条去掉）。
+      想回到原口径，把
+      <code>stock_review/config.py</code> 的 <code>GATE2_REV_YOY_MIN</code> 改成 40.0。
+    </p>
+    <p class="sub" style="margin-top:6px">
+      <b>未核实不否决</b>：工具查不到的事不替人做决定，也不让它冒充通过。第 ③ 条
+      默认就是未核实，如果它挡买入，整页一只都进不来——所以未核实的票可以进
+      「优先研究」，但提示列会一直挂着"还有几条没核实"。
+    </p>
+
+    <table class="kv" style="max-width:900px;margin-top:10px">
       <tr><th>排除</th><td>Q &lt; 45，或命中致命风险（利息保障 &lt; 1、商誉/净资产 &gt; 50% 等）。
-        <b>只有这一档是真正的否决</b>。</td></tr>
+        <b>三条标识都不参与这一档</b>——它们只在表格里做标注。</td></tr>
       <tr><th>待补数据</th><td>这一批没有质量结果（工具没跑或这只票失败）。</td></tr>
-      <tr><th>观察</th><td>过了质量硬门槛，但赔率分不到 {{ review.cut }}；
+      <tr><th>观察</th><td>没进「排除」档（Q ≥ 45 且无致命风险），但赔率分不到 {{ review.cut }}；
         或者工具自己判了「回避」/「数据不足」——<b>降档但不排除</b>，理由在「提示」列里。</td></tr>
-      <tr><th>优先研究</th><td>过了硬门槛，且赔率分 ≥ {{ review.cut }}（满分 {{ review.score_max }}，见下表）。</td></tr>
+      <tr><th>优先研究</th><td>没进「排除」档，且赔率分 ≥ {{ review.cut }}（满分 {{ review.score_max }}，见下表）。</td></tr>
       <tr><th>档内排序</th><td>按赔率分从高到低；同分看盈利弹性（强的靠前），然后 Q，最后按代码。</td></tr>
     </table>
 

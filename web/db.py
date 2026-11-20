@@ -123,6 +123,123 @@ def moats(db: str | Path | None = None) -> dict[str, str]:
     return {str(s).lower(): (t or "无标注") for s, t in rows}
 
 
+FIN_PERIODS = 5
+"""取最近几个报告期。门槛要"最近四季扣非"，Q3 报告下四季要跨到去年年报，
+所以 5 个报告期留一格余量（某只票缺一期时不至于整条算不出来）。"""
+
+
+def financials(symbols, db: str | Path | None = None,
+               periods: int = FIN_PERIODS) -> dict[str, dict]:
+    """`{symbol: fin}`——硬门槛要的那几个数，从 `shared.db.finance` 拼出来。
+
+    为什么不在 `stock_review.gates` 里直接查库：那个包要和
+    `stock_kline_screen` 一样"只吃字典"，才能单测、才能换数据源。
+    这里负责把 `raw_json` 里那几个只在原始字段里有的数（单季营收同比、
+    单季扣非同比、累计扣非）挖出来，拼成一个扁平字典。
+
+    `cl` / `cl_prev` 是合同负债的最新一季与**去年同季**（不是上一季）：
+    合同负债是年末集中确认的，环比比出来的多半是季节性，同比才看得出来
+    "订单在手是变厚还是变薄"。
+
+    覆盖情况（2026-11-16 批 311 只）：财务数据 311/311，单季营收同比 303，
+    单季扣非同比 304，季度成本 292，合同负债两期齐全 299。缺的那些让门槛
+    落到 `unknown`，页面标「未核实」——不猜，也不当通过。
+    """
+    p = Path(db or SHARED_DB)
+    if not p.exists() or not symbols:
+        return {}
+    try:
+        conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return {}
+    try:
+        conn.row_factory = sqlite3.Row
+        marks = ",".join("?" * len(symbols))
+        rows = conn.execute(
+            f"select symbol, period, OperatingRevenue_Q, OperatingCost_Q, "
+            f"ContractLiability, raw_json "
+            f"from finance where period in (select distinct period from finance "
+            f"order by period desc limit ?) and symbol in ({marks})",
+            (periods, *symbols)).fetchall()
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+
+    by_sym: dict[str, list] = {}
+    for r in rows:
+        by_sym.setdefault(str(r["symbol"]).lower(), []).append(r)
+
+    out = {}
+    for sym, items in by_sym.items():
+        items.sort(key=lambda r: r["period"], reverse=True)
+        latest = items[0]
+        by_period = {r["period"]: r for r in items}
+        j = _js(latest["raw_json"])
+        inc = j.get("income") or {}
+        cf = j.get("cashflow") or {}
+        cut_qs = [_num((_js(r["raw_json"]).get("cashflow") or {})
+                       .get("NPDeductNonRecurringPL_Q")) for r in items[:4]]
+        cut_ttm = (sum(cut_qs) if len(cut_qs) == 4
+                   and all(x is not None for x in cut_qs) else None)
+        out[sym] = {
+            "period": latest["period"],
+            "rev_yoy_q": _num(inc.get("OperatingRevenueGrowRate_Q")),
+            "cut_yoy_q": _num(inc.get("NPParentCompanyCutYOY_Q")),
+            "cut_cum": _num(inc.get("NPDeductNonRecurringPL")),
+            "np_cum": _num(inc.get("NPParentCompanyOwners")),
+            "cut_q": next((x for x in cut_qs if x is not None), None),
+            "cut_ttm": cut_ttm,
+            "gm_q": [_gm(r) for r in items[:3]],
+            "rev_q": _num(latest["OperatingRevenue_Q"]),
+            "cl": _num(latest["ContractLiability"]),
+            "cl_prev": _num(by_period.get(_last_year(latest["period"]),
+                                          {"ContractLiability": None})
+                            ["ContractLiability"]),
+        }
+    return out
+
+
+def contract_liability(symbols, db: str | Path | None = None) -> dict[str, dict]:
+    """`{symbol: {value, prev, yoy, share}}`——合同负债（预收款）的体检。
+
+    **只给页面展示用，不参与任何判断。** 周期页拿它当"需求端先行指标"看：
+    产能处在低位、预收款同比在涨，比单看产能分位多一个方向。
+
+    `yoy` 是同比（去年同季，不是环比——合同负债在 Q4 集中确认）；
+    `share` 是占年化营收（本季营收 ×4）的比重。两者都算不出来就是 None。
+    """
+    out = {}
+    for sym, fin in financials(symbols, db).items():
+        cl, prev, rev = fin.get("cl"), fin.get("cl_prev"), fin.get("rev_q")
+        yoy = cl / prev - 1.0 if (cl is not None and prev and prev > 0) else None
+        share = cl / (rev * 4.0) if (cl is not None and rev and rev > 0) else None
+        out[sym] = {"value": cl, "prev": prev, "yoy": yoy, "share": share}
+    return out
+
+
+def _last_year(period: str) -> str:
+    """`2026-09-30` → `2025-09-30`。合同负债要同比，不能拿上一季环比。"""
+    return f"{int(period[:4]) - 1}{period[4:]}"
+
+
+def _num(v):
+    if v is None or v == "":
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _gm(r) -> float | None:
+    """单季毛利率（%）。成本缺失（银行/券商没有营业成本）就是 None。"""
+    rev, cost = _num(r["OperatingRevenue_Q"]), _num(r["OperatingCost_Q"])
+    if rev is None or cost is None or rev <= 0:
+        return None
+    return (rev - cost) / rev * 100.0
+
+
 # ---------------------------------------------------------------- 冷热时点（results.db 的 price）
 #
 # 「冷热时点」页读的是**结果库**：`stock_price_show` 抓完原始层后会把同一天

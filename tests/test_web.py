@@ -194,14 +194,24 @@ class TestPages(WebCase):
             with self.subTest(url=url):
                 self.assertEqual(client.get(url).status_code, 200)
 
-    def test_root_goes_to_review(self):
-        """/ 是旧书签和 ./run.py web 打印的地址：转到综合评估，不是 404。
+    def test_cycle_has_no_standalone_contract_liability_column(self):
+        """合同负债**不单独占一列**：它融进「位置」当限定语（2026-11-20 改）。
 
-        原来的「概览」页删了——它那张合并表就是综合评估下面的全表。
+        单独一列没人看、也读不出结论；并入「低位 · 订单回升」才有意义。
+        """
+        html = self.client().get("/cycle").get_data(as_text=True)
+        self.assertNotIn("合同负债</th>", html)
+        self.assertIn("需求端", html)
+
+    def test_root_goes_to_batches(self):
+        """/ 是旧书签和 ./run.py web 打印的地址：转到批次页，不是 404。
+
+        2026-11-20 起默认门面是批次（原来是综合评估）：批次页是"先挑批次"
+        那条链的第一格。
         """
         resp = self.client().get("/")
         self.assertEqual(resp.status_code, 302)
-        self.assertTrue(resp.headers["Location"].endswith("/review"))
+        self.assertTrue(resp.headers["Location"].endswith("/batches"))
 
     def test_unknown_page_is_404_with_nav(self):
         resp = self.client().get("/nope")
@@ -838,7 +848,7 @@ class TestNavAndLinks(WebCase):
     def test_nav_order_and_removed_pages(self):
         html = self.client().get("/review").get_data(as_text=True)
         self.assertEqual(self.nav_labels(html),
-                         ["批次", "选股", "周期", "质量", "顶部", "综合评估",
+                         ["首页", "选股", "周期", "质量", "顶部", "综合评估",
                           "冷热时点"])
         self.assertNotIn("运行记录", html)
 
@@ -1105,6 +1115,70 @@ class AnnotationStateTest(unittest.TestCase):
     def test_none_and_moat(self):
         self.assertFalse(self._rec("无标注")["annotated"])
         self.assertTrue(self._rec("技术壁垒")["annotated"])
+
+
+class DemandSuffixTest(unittest.TestCase):
+    """`_demand_suffix()`：合同负债怎么并进「位置」这句话。"""
+
+    INFO = {"yoy": 0.5, "share": 0.03, "value": 1e8, "prev": 6e7}
+
+    def _s(self, label, **kw):
+        from web.app import _demand_suffix
+        return _demand_suffix(label, {**self.INFO, **kw})
+
+    def test_wording_follows_position(self):
+        self.assertEqual(self._s("low")["text"], "订单回升")
+        self.assertEqual(self._s("high")["text"], "订单仍强")
+        self.assertEqual(self._s("low", yoy=-0.30)["text"], "订单仍弱")
+        self.assertEqual(self._s("high", yoy=-0.30)["text"], "需求转弱")
+
+    def test_immaterial_is_silent(self):
+        """占营收 <2%：说它有订单变化是噪声，不如不说。"""
+        self.assertIsNone(self._s("low", share=0.01))
+
+    def test_flat_is_silent(self):
+        self.assertIsNone(self._s("low", yoy=0.03))
+
+    def test_missing_data_is_silent(self):
+        self.assertIsNone(self._s("low", yoy=None))
+        self.assertIsNone(self._s("low", share=None))
+        self.assertIsNone(self._demand_none())
+
+    def _demand_none(self):
+        from web.app import _demand_suffix
+        return _demand_suffix("low", None)
+
+    def test_tone_matches_direction(self):
+        self.assertEqual(self._s("low")["tone"], "good")
+        self.assertEqual(self._s("high", yoy=-0.30)["tone"], "warn")
+
+
+class ContractLiabilityTest(unittest.TestCase):
+    """`db.contract_liability()` 只算两个数：同比、占年化营收。"""
+
+    def _call(self, fin):
+        from web import db
+        orig = db.financials
+        db.financials = lambda symbols, _db=None: {
+            "sh600000": fin} if symbols else {}
+        try:
+            return db.contract_liability(["sh600000"])["sh600000"]
+        finally:
+            db.financials = orig
+
+    def test_yoy_and_share(self):
+        v = self._call({"cl": 2e8, "cl_prev": 1e8, "rev_q": 5e8})
+        self.assertAlmostEqual(v["yoy"], 1.0)          # 2亿 / 1亿 - 1
+        self.assertAlmostEqual(v["share"], 0.10)       # 2亿 / (5亿*4)
+
+    def test_missing_prev_year_leaves_yoy_none(self):
+        v = self._call({"cl": 2e8, "cl_prev": None, "rev_q": 5e8})
+        self.assertIsNone(v["yoy"])
+        self.assertAlmostEqual(v["share"], 0.10)
+
+    def test_zero_prev_is_not_divided_by_zero(self):
+        v = self._call({"cl": 2e8, "cl_prev": 0.0, "rev_q": 5e8})
+        self.assertIsNone(v["yoy"])
 
 
 if __name__ == "__main__":

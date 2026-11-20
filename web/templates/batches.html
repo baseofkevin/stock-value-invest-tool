@@ -1,13 +1,16 @@
 {% extends "base.html" %}
-{% block title %}批次{% endblock %}
+{% block title %}首页{% endblock %}
 {% block body %}
 
 <section class="hero">
-  <div class="eyebrow">BATCHES</div>
-  <h1>批次</h1>
+  <div class="eyebrow">HOME</div>
+  <h1>首页</h1>
   <p>
-    每个基准日算一批：周五盘后跑完，这一天的选股 → 周期 → 质量 → 顶部就是同一批票。
-    这里看每批的四步齐不齐；点某一格进那一批的对应页面。
+    每周五收盘后执行 <b style="color:#fff">run.py all</b>：选股工具先筛出入围股票，
+    接着自动跑周期、质量、顶部和 A 股大势；四份结论再汇成综合评估的赔率分，
+    一起显示在页面上。周期、质量、顶部这三块可以单独使用（单只，或批量 CSV 导入计算）。
+    冷热时点用来留档 A 股全市场最冷最热时点的情况，也能记录个股。
+    首页的 A 股大势同样可以单独使用。
   </p>
 </section>
 

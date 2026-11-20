@@ -1,0 +1,7 @@
+{% macro gates_cell(r) -%}
+{%- if r.gates -%}
+<span class="gates">{% for g in r.gates %}<b class="{{ g.state }}" title="{{ g.label }}（{{ g.state_cn }}）：{{ g.rule }}{% if g.value %}｜{{ g.value }}{% endif %}{% if g.note %}｜{{ g.note }}{% endif %}">{{ g.short }}<i>{{ {"pass": "✓", "fail": "✗", "unknown": "?"}[g.state] }}</i></b>{% endfor %}</span>
+{%- else -%}
+<span class="chip muted" title="这一批没有财务数据，门槛都算不了">—</span>
+{%- endif -%}
+{%- endmacro %}

@@ -8,13 +8,13 @@
 
 页面分工
 --------
-    /            跳转到 /review（原来的「概览」页已删，合并表就是综合评估的全表）
-    /batches     批次：每周五盘后那一批票，四步齐不齐一目了然；顶部是 A股大势横幅
+    /            跳转到 /batches（首页：批次表 + A股大势；原来的「概览」页已删）
+    /batches     首页：全流程总览 + 每周五盘后那一批票四步齐不齐；顶部是 A股大势横幅
     /select      选股：池内换手分位（排序依据）+ 行业分布（名称不可点）
     /cycle       周期：三个判断的分布 + 毛利率波动 × 弹性散点
     /quality     质量：Q × V 散点（结论用颜色区分）+ 结论分布
     /top         顶部：距 250 日高点的横条（谁在高位）+ 四因子状态矩阵
-    /review      综合评估：四边结论拼成优先级排序，标出「可以开始研究」的票
+    /review      综合评估：硬门槛（只做标识）+ 赔率分（排序），标出「可以开始研究」的票
     /price       冷热时点：**results.db** 的全市场价格/估值（按日横截面 + 每日摘要）
     /stock/<code> 个股：四边结论并排 + 旁证/周期（**只摆最近一份**，取 `run.id` 最大的那条）
                  `?focus=cycle|quality|top` 决定哪一块排最上面（从哪个工具页点进来的）
@@ -41,6 +41,7 @@ from pathlib import Path
 from flask import Flask, Response, abort, redirect, render_template, request, url_for
 
 from . import db, review
+from stock_review import config as review_config
 
 #: 状态词 → 色调（与四工具报告的 CSS 变量同一套语言）
 TONE_MAP = (
@@ -94,6 +95,53 @@ def _fmt_yi(value, digits=0):
         return f"{float(value) / 1e8:,.{digits}f}"
     except (TypeError, ValueError):
         return str(value)
+
+
+def _demand_suffix(label: str | None, info: dict | None) -> dict | None:
+    """把合同负债（预收款）并进「位置」这个结论，做成一句限定语。
+
+    为什么不单独占一列：合同负债是**需求端**的量，单独摆一列既没人看、
+    也读不出结论；只有和「位置」放在一起才有意义——「低位 + 订单回升」
+    和「低位 + 订单还在掉」是两回事。
+
+    为什么不改分位本身：判断③ 的分位是产能周转率（供给端）的历史位置，
+    算法是干净的，塞一个资产负债表项进去这个数就没法复算了。所以做法和
+    工具里已有的 `capacity_direction`（扩产中 / 产能在退）完全一样：
+    **只加限定语，不改标签**。
+
+    门限：占比 ≥ 2%（这批 113 只的中位数是 1.5%，压在略高一点的位置）才认，
+    同比 ≥ +20% 记回升、≤ −10% 记走弱。比 `/review` 那道 5% 松——那边 CL 要让「供需」判过，
+    是门槛；这边只是一句话，严了就等于没有。
+    """
+    if not info:
+        return None
+    yoy, share = info.get("yoy"), info.get("share")
+    if yoy is None or share is None or share < 0.02:
+        return None
+    if yoy >= review_config.GATE3_CL_YOY_MIN:
+        direction, tone = "up", "good"
+    elif yoy <= review_config.GATE3_CL_YOY_FAIL:
+        direction, tone = "down", "warn"
+    else:
+        return None
+
+    # 措辞跟着位置走：低位讲"能不能起来了"，高位讲"是不是还在撑着"
+    text = {
+        ("low", "up"): "订单回升",
+        ("low", "down"): "订单仍弱",
+        ("neutral", "up"): "订单回升",
+        ("neutral", "down"): "订单走弱",
+        ("high", "up"): "订单仍强",
+        ("high", "down"): "需求转弱",
+    }.get((label, direction))
+    if text is None:
+        return None
+    tip = (f"合同负债 {_fmt_yi(info['value'], 1)} 亿（去年同季 "
+           f"{_fmt_yi(info.get('prev') or 0, 1)} 亿），同比 {yoy:+.0%}，"
+           f"占年化营收 {share:.1%}。\n"
+           f"这是需求端的方向，只给「位置」加一句限定语，"
+           f"不改变分位和标签（位置仍由产能周转率分位决定）。")
+    return {"text": text, "tone": tone, "tip": tip}
 
 
 def _quote_url(symbol):
@@ -257,9 +305,9 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         # 顺序就是看板的取用顺序：先挑批次，再看四个工具，最后看汇总排序。
         # 「概览」和「运行记录」删掉了——概览那张合并表就是综合评估的全表，
         # 运行台账原打算挂在个股页的「历次结果」里，2026-11-15 也一起去掉了；
-        # 现在查"某一次运行"从批次页点进那只票，或直接用 `?run=<id>` 定位。
+        # 现在查"某一次运行"从首页点进那只票，或直接用 `?run=<id>` 定位。
         return {"nav": [
-            ("/batches", "批次"), ("/select", "选股"),
+            ("/batches", "首页"), ("/select", "选股"),
             ("/cycle", "周期"), ("/quality", "质量"), ("/top", "顶部"),
             ("/review", "综合评估"), ("/price", "冷热时点"),
         ]}
@@ -305,24 +353,34 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
     @app.route("/")
     def index():
-        """根路径直接进综合评估（页签里不再有「概览」）。保留 `/` 是为了
-        旧书签、`./run.py web` 打印的那个地址都还能用。"""
-        return redirect(url_for("review_page"))
+        """根路径进首页（2026-11-20 用户指定）。保留 `/` 是为了旧书签和
+        `./run.py web` 打印的那个地址都还能用。
+
+        顺序是「先挑批次，再看四个工具，最后看汇总」——首页就是这条链的
+        第一格，所以它当门面：四步齐不齐、缺哪一步、要不要补跑，一眼看完。
+        """
+        return redirect(url_for("batches"))
 
     @app.route("/review")
     def review_page():
-        """综合评估：不查库里的新表，全在 `review.build()` 里现算。
+        """综合评估：不查库里的新表，全在 `stock_review.build()` 里现算。
 
         四个工具的结论本来就各存一份（`merged()` 已经把它们并到一只票一行），
-        这一页要的是**规则**，不是新数据——所以规则放 `web/review.py`，
-        这里只负责挑批次、把结果交给模板。
+        这一页要的是**规则**，不是新数据——规则在 `stock_review/`（与
+        `stock_kline_screen` 平级的顶层包），这里只负责挑批次、把三类外部
+        数据读好交过去：
+
+            垄断性    `shared.db` 的 `annotation`（`db.moats()`）
+            财务      `shared.db` 的 `finance`（`db.financials()`，门槛用）
+
+        `stock_review` 自己不连库：它只吃字典，所以能单测、也能换数据源。
         """
         with conn() as c:
             date, _run_id = _pick(c)
             date = date or db.batch_date(c)
-            # 垄断性标注在 `shared.db`（不是结果库），单独读一次带进来——
-            # `review.py` 保持纯函数，不自己连库。
-            report = review.build(db.merged(c, date), db.moats())
+            rows = db.merged(c, date)
+            report = review.build(
+                rows, db.moats(), db.financials([r["symbol"] for r in rows]))
             return render_template("review.html", meta=None, cur_date=date,
                                    batches=db.batches(c), review=report,
                                    summary=db.summary(c, date),
@@ -363,7 +421,27 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
     @app.route("/cycle")
     def cycle():
-        return _page("cycle.html", "cycle")
+        """周期弹性。比 `_page()` 多一步：给每行挂上合同负债（预收款）。
+
+        这一列**只做展示**：周期工具的判据只有三个（是不是周期股 / 弹性强弱 /
+        位置），合同负债不参与其中任何一条——工具那边的阈值契约也不动。
+        放这一列是因为产能分位只回答"供给端紧不紧"，预收款回答"需求端在不在
+        回来"，周期底部两个方向一起看才有意义。
+        """
+        with conn() as c:
+            date, run_id = _pick(c)
+            meta, rows = db.scope(c, "cycle", date=date, run_id=run_id)
+            if meta:
+                date = meta["target_date"]
+            date = date or db.batch_date(c)
+            cl = db.contract_liability([r["symbol"] for r in rows]) if rows else {}
+            for r in rows:
+                r["demand"] = _demand_suffix(r.get("position_label"),
+                                             cl.get(r["symbol"]))
+            return render_template(
+                "cycle.html", rows=rows, meta=meta,
+                batches=db.batches(c), cur_date=date,
+                summary=db.summary(c, date), counts=db.counts(c, date))
 
     @app.route("/quality")
     def quality():

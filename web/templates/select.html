@@ -6,7 +6,13 @@
 <section class="hero">
   <div class="eyebrow">stock_kline_screen</div>
   <h1>选股名单</h1>
-  <p>5 日涨幅池 → K 线形态 → 板块/财务过滤。名单按<b style="color:#fff">池内换手分位升序</b>排列：最冷门的在前。</p>
+  <p>
+    <b style="color:#fff">池</b>：最近 5 个交易日里，任一天涨幅落在 0.5%–20.5%。
+    <b style="color:#fff">形态</b>：真上穿 MA20、启动日放量 ≥ 1.5 倍、MA20 ≥ MA60 × 0.95。
+    <b style="color:#fff">风控</b>：非 ST、上市满 3 年、距启动不超过 4 个交易日。
+    财务（毛利率改善）和行业只做标注、不参与取舍；
+    名单按<b style="color:#fff">池内换手分位升序</b>排列：最冷门的在前。
+  </p>
 </section>
 
 {% include "_bar.html" %}
