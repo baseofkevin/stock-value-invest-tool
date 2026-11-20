@@ -98,17 +98,17 @@ cd /home/kevin/MyData/stock-value-invest-tool
 做六步，**跑完就结束、默认不起看板**：
 
 ```
-⓪ 日历 → ① 选股 → ② 周期弹性 → ③ 质量初筛 → ④ 顶部判断 → ⑤ 大势
+⓪ 日历 → ① 选股 → ② 周期弹性 → ③ 质量初筛 → ④ 顶部判断 → ⑤ A股大势
 ```
 
-⑤ 大势是背景板（趋势 / 赔率 / 情绪），算不成也不拦前面四步——它是加在
+⑤ A股大势是背景板（趋势 / 赔率 / 情绪），算不成也不拦前面四步——它是加在
 `/batches` 顶部那块横幅上的，跟这一批票的结论没有关系。
 
 看结果时单独跑 `./run.py web`（读 `results.db`，只读）。
 
 - **必须在 15:05 之后**。之前跑会退到上一个交易日，并打一行黄字提醒。
 - 工作日发现日历过期会**自动**跑一次 `build_calendar`（周末不自动，省一次无用请求）。
-- 屏幕只有四条进度条，其余全进 `logs/run-<时间戳>.log`。
+- 屏幕只有五条进度条，其余全进 `logs/run-<时间戳>.log`。
 
 常用变体：
 
@@ -116,7 +116,7 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ./run.py all --web                   # 跑完顺便起看板（默认不起）
 ./run.py all --web --port 8080       # 看板换端口
 ./run.py all --skip-top              # 今天不想跑顶部
-./run.py all --skip-regime           # 今天不算大势（横幅停在上一周）
+./run.py all --skip-regime           # 今天不算 A股大势（横幅停在上一周）
 ./run.py all --strict                # 任何一只失败就停（默认是有产出就继续）
 ./run.py all -v                      # 不画条，子进程输出全打到屏幕（排查用）
 ```
@@ -128,13 +128,13 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ```
 
 ```
-  1) 全流程：日历 → 选股 → 周期弹性 → 质量初筛 → 顶部判断 → 大势  ← 每周五盘后
+  1) 全流程：日历 → 选股 → 周期弹性 → 质量初筛 → 顶部判断 → A股大势  ← 每周五盘后
   2) 只跑选股            stock_kline_screen
   3) 周期弹性            stock_cycle_elastic     （回车=批量，或填单只代码）
   4) 质量初筛            stock_quality_screen    （回车=批量，或填单只代码）
   5) 顶部判断            stock_judge_top         （单只/多只；回车=当天选股批量）
-  6) 全市场价格/估值     price               （全市场 价/PE/PB/PS + 沪深300，收盘后跑）
-  7) A股大势             stock_market_trend （趋势 / 赔率 / 情绪；写 results.db，不参与选股）
+  6) 冷热极点            stock_extreme_point     （全市场 价/PE/PB/PS + 沪深300，收盘后跑）
+  7) A股大势             stock_market_trend      （趋势 / 赔率 / 情绪；写 results.db，不参与选股）
   0) 退出
 ```
 
@@ -334,7 +334,7 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 | `--date X` | 真基准日（单只、批量都生效） |
 | `--workers N` `--refresh` | 并发 / 重取并重算 |
 
-### `regime`（A股大势，独立包 `stock_market_trend`）
+### A股大势（命令 `regime`，独立包 `stock_market_trend`）
 
 ```bash
 ./run.py regime                       # 按最近交易日算
@@ -360,7 +360,7 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 升级/排错：先 `--recompute` 排除网络问题；四路数据源见
 `stock_market_trend/source.py` 顶部的注释（中证那一路是官方估值，滞后 1–2 个交易日）。
 
-### `price`（全市场价格 / 估值快照，独立工具 `stock_extreme_point`）
+### 冷热极点（命令 `price`，独立工具 `stock_extreme_point`）
 
 | 参数 | 说明 |
 |---|---|

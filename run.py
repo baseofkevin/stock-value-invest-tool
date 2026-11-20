@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""四个功能模块的统一入口。
+"""每周研究流程的统一入口。
 
-    python3 run.py all             # 全流程：日历 → 选股 → 周期 → 质量 → 顶部 → 大势（不起看板）
+    python3 run.py all             # 全流程：日历 → 选股 → 周期 → 质量 → 顶部 → A股大势（不起看板）
     python3 run.py menu            # 交互菜单
     python3 run.py -h              # 帮助
     python3 run.py select          # 只跑选股（stock_kline_screen）
@@ -12,7 +12,7 @@
     python3 run.py quality --stock 600519   # 质量初筛单只
     python3 run.py top sh600519    # 顶部判断（stock_judge_top，单只，随时可跑）
     python3 run.py top --from-select            # 顶部判断批量：读结果库的名单
-    python3 run.py price --date 2026-11-17  # 全市场快照（价 + PE + PB + PS + 沪深300）
+    python3 run.py price --date 2026-11-17  # 冷热极点快照（价 + PE + PB + PS + 沪深300）
     python3 run.py price --code 002096 --date 2026-11-03  # 单只补数（只改这一只）
     python3 run.py web                          # 打开看板（Flask + Chart.js）
 
@@ -667,7 +667,7 @@ def step_top(tee: Tee, day: str, codes: list[str], extra: list[str],
 
 def step_price(tee: Tee, day: str | None, extra: list[str],
                stock_code: str | None = None) -> int:
-    """全市场价格/估值快照：`price` + `price_stat` + `index_price`，一天一份。
+    """冷热极点：`price` + `price_stat` + `index_price`，一天一份。
 
     跑的是 `stock_extreme_point` 子进程——它是独立工具，自己抓东财、自己写两个库，
     入口这边只负责"把日期定下来、把输出收进日志、画进度条"。
@@ -686,8 +686,8 @@ def step_price(tee: Tee, day: str | None, extra: list[str],
         ["--date", day] if day else []) + (
         ["--code", stock_code] if stock_code else []) + extra
     label = f"{day} · {stock_code}" if stock_code else (day or "按已有数据")
-    rc, _ = run_step(tee, f"全市场价格 price（{label}）", argv, ROOT,
-                     short=f"全市场价格（{label}）", echo=bool(stock_code))
+    rc, _ = run_step(tee, f"冷热极点 price（{label}）", argv, ROOT,
+                     short=f"冷热极点（{label}）", echo=bool(stock_code))
     if rc == 0 and day and not stock_code:
         n = _price_count(day)
         if n > 0:
@@ -729,7 +729,8 @@ def step_regime(tee: Tee, day: str, extra: list[str]) -> int:
     本步的产出不在 `*_result` 表里。
     """
     argv = py_module("stock_market_trend") + ["--date", day] + extra
-    rc, _ = run_step(tee, f"大势 stock_market_trend（{day}）", argv, ROOT, short="大势")
+    rc, _ = run_step(tee, f"A股大势 stock_market_trend（{day}）", argv, ROOT,
+                     short="A股大势")
     return rc
 
 
@@ -863,13 +864,13 @@ def cmd_all(args, tee: Tee) -> int:
             return rc
 
     if getattr(args, "skip_regime", False):
-        tee.line("（按 --skip-regime 跳过大势）")
+        tee.line("（按 --skip-regime 跳过 A股大势）")
     else:
         rc = step_regime(tee, day, getattr(args, "regime_args", []) or [])
-        steps.append(("⑤ 大势", rc, LAST_SPENT["s"]))
+        steps.append(("⑤ A股大势", rc, LAST_SPENT["s"]))
         if rc != 0:
-            # 不 return、不进 judge_step：大势算不成不影响这一批票的任何结论
-            tee.line("  ⚠️ 大势没算成；看板继续显示上一周的判断")
+            # 不 return、不进 judge_step：A股大势算不成不影响这一批票的任何结论
+            tee.line("  ⚠️ A股大势没算成；看板继续显示上一周的判断")
 
     summary(tee, day, steps)
 
@@ -1146,13 +1147,13 @@ def db_hint() -> str:
 # ---------------------------------------------------------------------------
 
 MENU = """
-  1) 全流程：日历 → 选股 → 周期弹性 → 质量初筛 → 顶部判断 → 大势  ← 每周五盘后
+  1) 全流程：日历 → 选股 → 周期弹性 → 质量初筛 → 顶部判断 → A股大势  ← 每周五盘后
   2) 只跑选股            stock_kline_screen
   3) 周期弹性            stock_cycle_elastic     （回车=批量，或填单只代码）
   4) 质量初筛            stock_quality_screen    （回车=批量，或填单只代码）
   5) 顶部判断            stock_judge_top         （单只/多只；回车=当天选股批量）
-  6) 全市场价格/估值     price               （全市场 价/PE/PB/PS + 沪深300，收盘后跑）
-  7) A股大势             stock_market_trend （趋势 / 赔率 / 情绪；写 results.db，不参与选股）
+  6) 冷热极点            stock_extreme_point     （全市场 价/PE/PB/PS + 沪深300，收盘后跑）
+  7) A股大势             stock_market_trend      （趋势 / 赔率 / 情绪；写 results.db，不参与选股）
   0) 退出
 """
 
@@ -1239,16 +1240,16 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="run.py",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="四个功能模块的统一入口。不带参数只打印帮助；"
+        description="每周研究流程的统一入口。不带参数只打印帮助；"
                     "跑全流程用 all，想选着跑用 menu。",
         epilog="""示例：
-  ./run.py all                            # 周五盘后全流程（日历→选股→周期→质量→顶部→大势）
+  ./run.py all                            # 周五盘后全流程（日历→选股→周期→质量→顶部→A股大势）
   ./run.py menu                           # 交互菜单
   ./run.py select --date 2026-11-20       # 只跑选股，指定基准日
   ./run.py cycle   --stock 600519         # 周期弹性，单只
   ./run.py quality --stock 600519         # 质量初筛，单只
   ./run.py top     600519                 # 顶部判断
-  ./run.py price --date 2026-11-17    # 全市场价格/估值快照（价 + PE + PB + PS）
+  ./run.py price --date 2026-11-17    # 冷热极点快照（价 + PE + PB + PS）
   ./run.py price --code 002096 --date 2026-11-03  # 只补这一只
   ./run.py web                            # 只打开看板（读 results.db，只读）
   ./run.py backup                         # 备份数据库（VACUUM INTO + 保留 7 份）
@@ -1283,7 +1284,7 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
                         help="即使日历过期也不要自动更新")
 
     sp = sub.add_parser("all", aliases=["weekly"],
-                        help="全流程：日历 → 选股 → 周期 → 质量 → 顶部 → 大势"
+                        help="全流程：日历 → 选股 → 周期 → 质量 → 顶部 → A股大势"
                              "（不起看板）")
     add_date(sp)
     add_verbose(sp)
@@ -1300,7 +1301,7 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
     sp.add_argument("--top-args", default="", help="透传给 stock_judge_top 的参数")
     sp.add_argument("--top-workers", type=int, default=4, help="顶部判断并发数，默认 4")
     sp.add_argument("--skip-regime", action="store_true",
-                    help="跳过大势（趋势/赔率/情绪，它的结论不参与四步判断）")
+                    help="跳过 A股大势（趋势/赔率/情绪，它的结论不参与四步判断）")
     sp.add_argument("--regime-args", default="",
                     help="透传给 stock_market_trend 的参数（如 --recompute 用原件重算）")
     sp.add_argument("--web", action="store_true",
@@ -1316,11 +1317,11 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
     sp.add_argument("extra", nargs="*", default=[], help="透传给 stock_kline_screen 的参数")
 
     sp = sub.add_parser("regime",
-                        help="A股大势粗判：趋势 / 赔率 / 情绪（写 results.db）",
+                        help="A股大势（stock_market_trend）：趋势 / 赔率 / 情绪（写 results.db）",
                         description="""沪深300 周线趋势 + ERP 赔率 + 破净/量能情绪。
 
 三路各算各的，不合成总分。原件落 shared.db，结论落 results.db，
-看板 /batches 顶部那块横幅读的就是它。`all` 的最后一步会顺带跑一次。
+看板 /trend 与 /batches 顶部那块横幅读的就是它。`all` 的最后一步会顺带跑一次。
 
 示例：
   ./run.py regime                     按今天（或最近交易日）算
@@ -1395,7 +1396,8 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
     sp.add_argument("extra", nargs="*", default=[], help="透传给 stock_judge_top 的参数")
 
     sp = sub.add_parser("price",
-                        help="全市场价格/估值快照：价 + PE + PB + PS（写 shared.db + results.db）",
+                        help="冷热极点（stock_extreme_point）：全市场价格/估值快照"
+                             "（写 shared.db + results.db）",
                         formatter_class=argparse.RawDescriptionHelpFormatter,
                         epilog="""示例：
   ./run.py price                      # 今天（过了 15:05）或上一交易日
@@ -1408,7 +1410,7 @@ quality/cycle 的 --csv 与 --stock 二选一，top 的 --csv 与 --from-select 
 
 一天一份、一股一行，全市场约 5500 只（含北交所），约 6 个上游请求。
 字段：收盘价 / 涨跌幅 / PE(TTM) / PB(MRQ) / PS(TTM) / 总市值 / 流通市值。
-落两个库：shared.db 的 price 是原件；results.db 的 price 是看板读的复制品，
+落两个库：shared.db 的 price 是原件；results.db 的 price 是看板 /extreme 读的复制品，
 同一天还会写 price_stat（涨跌家数 / 涨跌停 / 估值中位数 / 总市值合计），
 与 price 同事务写入。抓取与落库都在独立工具 `stock_extreme_point` 里。
 

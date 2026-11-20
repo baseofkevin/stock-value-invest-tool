@@ -16,7 +16,7 @@
 | `stock_quality_screen` | 质量初筛：质量分 Q + 估值分 V + 14 项风险检查 | `run.py quality [--stock 代码]` |
 | `stock_judge_top` | 顶部判断：四因子观察股票是否到顶部 | `run.py top <代码>` / `top --from-select` |
 | `stock_review_assess` | 综合评估：赔率分排序 + 「超级成长股标识」（只做标识，不改档位） | `run.py web` → `/review` |
-| `stock_extreme_point` | 全市场价格/估值快照：一天一份全市场（独立工具，不走共享数据层） | `run.py price` |
+| `stock_extreme_point` | 冷热极点：全市场价格/估值快照，一天一份全市场（独立工具，不走共享数据层） | `run.py price` |
 | `stock_market_trend` | A股大势：沪深300 周线趋势 / ERP 赔率 / 破净+量能情绪（背景板，不参与选股结论） | `run.py regime` |
 
 ## 每周五收盘后（15:10 之后）
@@ -55,7 +55,7 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ② 周期弹性（2026-11-13）  [██████░░░░░░░░░░░░░░░░░] 12/38   ⚠️ 35 只 · 失败 3 只 · 1.4s
 ③ 质量初筛（2026-11-13）  [████████████████████████] 38/38  ✅ 38 只 · 22.6s
 ④ 顶部判断（38 只 @ 2026-11-13）  [████████████████████] 36/38  ✅ 38 只 · 18.2s
-⑤ 大势（2026-11-13）  ✅ · 4.1s
+⑤ A股大势（2026-11-13）  ✅ · 4.1s
 
 ⚠️ ② 周期弹性 有失败，其余步骤完成 · 63.4s
 日志 logs/run-20261115-173000.log
@@ -122,7 +122,7 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ./run.py select  --date 2026-11-13         # 只选股（只能批量）
 ./run.py cycle                             # 周期弹性批量（用库里的选股名单）
 ./run.py quality                           # 质量初筛批量（用库里的选股名单）
-./run.py price --date 2026-11-13       # 全市场价格/估值快照（价 + PE + PB + PS）
+./run.py price --date 2026-11-13       # 冷热极点快照（价 + PE + PB + PS）
 ./run.py price --code 002096 --date 2026-11-03  # 只补一只股票的某一天
 ./run.py regime                            # A股大势（趋势/赔率/情绪），写 results.db
 ./run.py web                               # 只打开看板
