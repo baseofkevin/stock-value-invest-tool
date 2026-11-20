@@ -9,7 +9,8 @@ from __future__ import annotations
 import importlib
 import sys
 
-MODULES = ("test_rules", "test_turnover", "test_turnaround", "test_pipeline")
+MODULES = ("test_rules", "test_turnover", "test_turnaround", "test_pipeline",
+           "test_cli")
 
 
 def main() -> int:

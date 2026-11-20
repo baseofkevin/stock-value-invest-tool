@@ -381,6 +381,46 @@ class TeeFilterTest(unittest.TestCase):
                       Path(self.tmp, "t.log").read_text())
 
 
+class SummaryTest(unittest.TestCase):
+    """收尾文案必须和"实际跑了几步"一致。
+
+    2026-11-20 的真实故障：选股在取横截面时就失败了，只跑了第 ① 步，
+    汇总却打「① 选股 有失败，其余步骤完成」——把"流程刚开头就停了"
+    说成了"其它步骤都跑完了"。
+    """
+
+    def _summary(self, steps):
+        import io
+        from contextlib import redirect_stdout
+        self.tmp = tempfile.mkdtemp(prefix="summary-")
+        tee = run.Tee(Path(self.tmp) / "t.log")
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            run.summary(tee, "2026-11-20", steps)
+        tee.close()
+        return buf.getvalue()
+
+    def test_stopped_after_first_failure_does_not_claim_others_done(self) -> None:
+        out = self._summary([("① 选股", 1, 16.3)])
+        self.assertIn("流程在此停止", out)
+        self.assertIn("共完成 1 步", out)
+        self.assertNotIn("其余步骤完成", out)
+
+    def test_partial_failure_with_later_steps_keeps_other_steps_wording(self) -> None:
+        """② 失败但 ③ 继续跑了，才可以说"其余步骤完成"。"""
+        out = self._summary([("① 选股", 0, 10.0),
+                             ("② 周期弹性", 1, 20.0),
+                             ("③ 质量初筛", 0, 5.0)])
+        self.assertIn("其余步骤完成", out)
+        self.assertNotIn("流程在此停止", out)
+
+    def test_zero_stock_stop_is_not_called_data_failure(self) -> None:
+        """3 只表示"选股 0 只"，不是取数失败。"""
+        out = self._summary([("① 选股", 3, 16.3)])
+        self.assertIn("0 只入选", out)
+        self.assertNotIn("其余步骤完成", out)
+
+
 class ParserTest(unittest.TestCase):
     def test_subcommands_exist(self) -> None:
         p = run.build_parser()

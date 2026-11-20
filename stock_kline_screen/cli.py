@@ -54,8 +54,10 @@ def main(argv=None):
         # 版本不符拒绝启动、盘中只标记不拦（联网才拦）。
         hub = preflight(db_path=a.db) if a.db else preflight()
     except HubError as e:
+        # 数据层错误是“这一步失败”，不是“选股 0 只”。3 留给 run.py 表示
+        # 交接处发现名单为空；这里退 1，避免汇总把数据层故障说成 0 只入选。
         print(f"错误：{e}", file=sys.stderr)
-        return 3
+        return 1
     try:
         with hub:
             return run(a, hub)
@@ -63,8 +65,9 @@ def main(argv=None):
         print(str(e), file=sys.stderr)
         return 1
     except HubError as e:
+        # 同上：库版本不符、磁盘不足、上游取数失败都属于“某步失败”，退 1。
         print(f"\n错误（数据层）：{e}", file=sys.stderr)
-        return 3
+        return 1
     except RuntimeError as e:
         # run() 里的数据类错误都用 RuntimeError 表达「宁可失败也不出不可信名单」。
         # 不打 traceback：用户要的是那句原因，不是调用栈。

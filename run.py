@@ -775,13 +775,26 @@ def summary(tee: Tee, day: str, steps: list[tuple[str, int, float]]) -> None:
     """流程收尾：屏幕上两行（成没成 + 日志在哪），`--verbose` 才打整张表。"""
     if not tee.verbose:
         bad = [(name, rc) for name, rc, _ in steps if rc != 0]
+        bad_idx = [i for i, (_, rc, _) in enumerate(steps) if rc != 0]
         spent = sum(t for _, _, t in steps)
         if not bad:
             head = f"✅ 全部完成 · {len(steps)} 步 · {spent:.1f}s"
         elif all(rc in (1, 3) for _, rc in bad):
-            # 1/3 是"有票失败但已写入一部分"：流程继续，别当成整步失败
-            head = ("⚠️ {0} 有失败，其余步骤完成 · {1:.1f}s".format(
-                "、".join(n for n, _ in bad), spent))
+            # 1/3 是"有票失败但已写入一部分"：流程继续，别当成整步失败。
+            # 但失败如果落在**最后一步**，说明流程根本没继续——此时说
+            # "其余步骤完成"是假话（2026-11-20 选股取数失败就是这样：
+            # 只跑了第 ① 步，汇总却说其余步骤都完成了）。
+            stopped = bad_idx[-1] == len(steps) - 1
+            names = "、".join(n for n, _ in bad)
+            if stopped:
+                if all(rc == 3 for _, rc in bad):
+                    # 修完 cli 的退出码后，3 只剩"选股 0 只"这一种含义。
+                    head = f"⚠️ {names} 0 只入选，流程停止 · {spent:.1f}s"
+                else:
+                    head = (f"⚠️ {names} 有失败，流程在此停止 · "
+                            f"共完成 {len(steps)} 步 · {spent:.1f}s")
+            else:
+                head = f"⚠️ {names} 有失败，其余步骤完成 · {spent:.1f}s"
         else:
             head = "❌ {0} 失败，流程停止 · {1:.1f}s".format(
                 "、".join(n for n, _ in bad), spent)
