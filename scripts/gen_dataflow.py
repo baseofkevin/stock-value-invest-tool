@@ -1,24 +1,31 @@
 # -*- coding: utf-8 -*-
-"""生成仓库根目录的 dataflow.svg / dataflow.html（数据流转与筛选条件全景图）。
+"""生成仓库根目录的 dataflow.html（数据流转与筛选条件全景图）。
 
 为什么要写成脚本，而不是一张手画图
 ----------------------------------
-图里写的几乎全是**当前代码里的常量**：18 张表、9 张表、六道闸、K=5、
+页面上写的几乎全是**当前代码里的常量**：18 张表、9 张表、六道闸、K=5、
 `KLINE_KEEP_BARS=400`、ERP 2400 日分位 95/80/20、BUY_CUT=5、GATE2 的 25%……
-代码一动，图就开始说谎；而手改一张 1720×2754 的 SVG 是件没人愿意干的事，
-改完也说不清哪句还对、哪句已经过期。所以这里把图拆成「排版引擎 + 内容」：
+代码一动，页面就开始说谎；而手改一页两百多块文字是件没人愿意干的事，
+改完也说不清哪句还对、哪句已经过期。所以这里把页面拆成「渲染层 + 内容」：
 
-* 排版引擎只管三件事：量字宽、折行、按行画盒子（自动高度，不用手算 y）。
+* 渲染层只做一件事：把 `Section / Row / Block / Inv` 四型结构吐成 HTML，
+  排版交给 CSS（Grid 定列数、折行交给浏览器，不再自己量字宽）。
 * 内容是九个 `s_*` 函数，一个章节一个函数，改哪节翻哪节。
-* 画布固定 1720 宽；每行等宽排（末行不足一排时用 `fixed_w` 对齐，不拉宽）。
+* 每条要点就是一行文本，想改措辞直接改字符串，不用管坐标。
 
-改图的时候只改内容，别改坐标——坐标是算出来的。
+为什么从「一张 1720×2754 的 SVG」改成 HTML
+------------------------------------------
+老版本把整页画成一张固定宽度的 SVG，套上 `svg{width:100%}`：画布 1720 宽、
+正文 9.6px，在 1400 宽的屏幕上等比缩到 0.82 倍，实际可读字号不到 8px——
+字小不是字号设小了，是**整张图被缩放**了，而且浏览器放大也救不了（越放大
+横向越要拖）。改成 HTML 之后正文 14px 起步，字号与画布宽度脱钩，缩放、
+选中复制、Ctrl+F、窄窗口换行、打印分页都由浏览器自己处理好。
 
 产出
 ----
-    dataflow.svg   纯图，可单独嵌到别处（/dataflow.svg 也读这一份）
-    dataflow.html  套了一层吸顶条 + 纸张边框的版本；看板的「本项目代码执行流程」
-                   入口（`GET /dataflow`）读的就是它，只在 `</body>` 前补返回浮标
+    dataflow.html  自包含一页（样式内联，无外链、无网络请求）；看板的
+                   「本项目代码执行流程」入口（`GET /dataflow`）读的就是它，
+                   只在 `</body>` 前补一个返回浮标（见 web/app.py）
 
 用法
 ----
@@ -26,337 +33,199 @@
     python3 scripts/gen_dataflow.py --out /tmp/flow      # 写到别处比对
     python3 scripts/gen_dataflow.py --check              # 只比对：仓库那份是不是最新的
 
-`--check` 是给「改完代码忘了重画图」用的：它把图重新渲染一遍和磁盘上的比，
+`--check` 是给「改完代码忘了重画」用的：它把页面重新渲染一遍和磁盘上的比，
 不一样就退出码 1，并列出先改的那个文件。CI 或提交前顺手跑一下即可。
 
-依赖：只用标准库（不要求装浏览器、不要求联网）。图里的字体是系统 CJK 字体，
-量宽是估算（`_cw` 那张表），所以只要文字内容不变，两次生成的产物逐字节相同。
+依赖：只用标准库。产物是纯字符串拼接，内容不变则两次生成逐字节相同。
 """
 from __future__ import annotations
 
 import argparse
+from html import escape as _esc
 from pathlib import Path
 
-#: 图右下角那个日期：内容核对到哪一天。改了内容记得一起改。
+#: 页脚那个日期：内容核对到哪一天。改了内容记得一起改。
 VER = "2026-11-20"
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# ---------------------------------------------------------------- 画布常量
-W = 1720
-M = 40
-CW = W - 2 * M           # 1640
-FONT = ("Noto Sans CJK SC, Source Han Sans SC, WenQuanYi Micro Hei, "
-        "Microsoft YaHei, PingFang SC, sans-serif")
-MONO = "ui-monospace, SFMono-Regular, Menlo, monospace"
-
-INK = "#22303c"
-BODY = "#1f2328"
-MUTED = "#5b6570"
-FAINT = "#8a949e"
-LINE = "#e3e6e8"
-PAPER = "#fdfcfa"
+TITLE = "stock-value-invest-tool · 数据流转与筛选条件"
+LEAD = ("共享数据层按需取数 → 四个裁决工具各自定性 → 结论只进 results.db → 看板读库；"
+        "两个旁路（全市场快照 / A股大势）各抓各的、各写各的表，不参与选股结论")
+FOOT_L = "说明：只画「谁把什么写到哪」，不含全部参数与例外；阈值以各包 config.py 为准。"
+FOOT_R = f"{VER} · 按当前代码与 README 核对"
 
 #: 盒子配色：底色 / 描边 / 标题字 / monospace 副标题 / bullet 圆点。
 #: 一套颜色对应一类东西（上游 / 数据层 / 表 / 工具 / 旁路 / 看板），
 #: 换色就是换「这类东西长什么样」，九个章节共用，别在一节里单独调。
+#: 渲染层会按这张表生成 `.tone-*` 的 CSS 变量与章节徽章配色，改这里就够了。
 PAL = {
-    "up":     dict(bg="#f6f1e7", bd="#c3ae8b", title="#6b5636", mono="#9a6700", dot="#c3ae8b"),
-    "layer":  dict(bg="#eaf2ee", bd="#8bb3a4", title="#2f6152", mono="#3f7a67", dot="#8bb3a4"),
-    "db":     dict(bg="#ffffff", bd="#b9c2cc", title="#33414f", mono="#5b6570", dot="#b9c2cc"),
-    "tool":   dict(bg="#eef3f8", bd="#9db8d0", title="#1f4e79", mono="#3f6a92", dot="#9db8d0"),
-    "bypass": dict(bg="#f7f2ea", bd="#cbb894", title="#7a5c2e", mono="#9a7233", dot="#cbb894"),
-    "web":    dict(bg="#ffffff", bd="#bda8cd", title="#5b4a70", mono="#7a6790", dot="#bda8cd"),
-    "rule":   dict(bg="#ffffff", bd="#9db8d0", title="#1f4e79", mono="#3f6a92", dot="#9db8d0"),
+    "up":     dict(bg="#faf5ea", bd="#dfcfb2", title="#6b5636", mono="#9a6700", dot="#c9b28a"),
+    "layer":  dict(bg="#eef5f1", bd="#a9c7ba", title="#2f6152", mono="#3f7a67", dot="#9dc0b2"),
+    "db":     dict(bg="#ffffff", bd="#d5dbe2", title="#33414f", mono="#5b6570", dot="#c3cad2"),
+    "tool":   dict(bg="#f1f6fa", bd="#b6cade", title="#1f4e79", mono="#3f6a92", dot="#adc3d8"),
+    "bypass": dict(bg="#fbf6ee", bd="#ddcdae", title="#7a5c2e", mono="#9a7233", dot="#d3bd93"),
+    "web":    dict(bg="#ffffff", bd="#d9cde3", title="#5b4a70", mono="#7a6790", dot="#c9b8d6"),
+    "rule":   dict(bg="#ffffff", bd="#b6cade", title="#1f4e79", mono="#3f6a92", dot="#adc3d8"),
 }
 
 
-# ================================================================ 排版引擎
-# ---------------------------------------------------------------- 量宽 / 折行
-def _cw(ch: str) -> float:
-    """单字宽度（相对字号）。只求「不挤不空」，不追求和真实字体逐像素一致。"""
-    o = ord(ch)
-    if o < 128:
-        if ch == " ":
-            return 0.30
-        if ch in "iljI.:,;!'|":
-            return 0.32
-        if ch in "()[]{}":
-            return 0.38
-        if ch in "MW@%":
-            return 0.82
-        if ch.isupper():
-            return 0.66
-        return 0.56
-    if ch == "·":
-        return 0.52
-    return 1.0
-
-
-def measure(s: str, size: float) -> float:
-    return sum(_cw(c) for c in s) * size
-
-
-def _tokens(s: str) -> list[str]:
-    """ASCII 连续串（MA20 / ≥ / -5% / RPT_XXX）当一个整体，不从中间断。"""
-    out, buf = [], ""
-    for ch in s:
-        if ord(ch) < 128 and ch not in " ":
-            buf += ch
-        else:
-            if buf:
-                out.append(buf)
-                buf = ""
-            out.append(ch)
-    if buf:
-        out.append(buf)
-    return out
-
-
-def wrap(s: str, size: float, width: float) -> list[str]:
-    lines, cur, w = [], "", 0.0
-    for tk in _tokens(s):
-        tw = measure(tk, size)
-        if cur and w + tw > width:
-            lines.append(cur.rstrip())
-            cur, w = ("" if tk == " " else tk), (0.0 if tk == " " else tw)
-        else:
-            cur += tk
-            w += tw
-    if cur.strip():
-        lines.append(cur.rstrip())
-    return lines or [""]
-
-
-# ---------------------------------------------------------------- SVG 画布
-class Canvas:
-    """只攒字符串；高度最后才知道，所以先画后开 `<svg>`。"""
-
-    def __init__(self) -> None:
-        self.parts: list[str] = []
-
-    def rect(self, x, y, w, h, *, fill, stroke="none", rx=8, sw=1.2, dash=None):
-        d = f' stroke-dasharray="{dash}"' if dash else ""
-        self.parts.append(
-            f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="{rx}" '
-            f'fill="{fill}" stroke="{stroke}" stroke-width="{sw}"{d}/>')
-
-    def line(self, x1, y1, x2, y2, *, stroke=LINE, sw=1.2, arrow=False, color_marker=None):
-        m = f' marker-end="url(#{color_marker or "arrow"})"' if arrow else ""
-        self.parts.append(
-            f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
-            f'stroke="{stroke}" stroke-width="{sw}"{m}/>')
-
-    def text(self, x, y, s, *, size=10, fill=BODY, weight=400, anchor="start",
-             mono=False, ls=None):
-        if not s:
-            return
-        fam = f' font-family="{MONO}"' if mono else ""
-        lsp = f' letter-spacing="{ls}"' if ls else ""
-        s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        self.parts.append(
-            f'<text x="{x:.1f}" y="{y:.1f}" font-size="{size}" fill="{fill}" '
-            f'font-weight="{weight}" text-anchor="{anchor}"{fam}{lsp}>{s}</text>')
-
-    def svg(self, h: int) -> str:
-        defs = ('<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" '
-                'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
-                '<path d="M 0 1 L 9 5 L 0 9 z" fill="#8a949e"/></marker>'
-                '<marker id="arrow-v" viewBox="0 0 10 10" refX="9" refY="5" '
-                'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
-                '<path d="M 0 1 L 9 5 L 0 9 z" fill="#bda8cd"/></marker></defs>')
-        head = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{h}" '
-                f'viewBox="0 0 {W} {h}" font-family="{FONT}">{defs}')
-        body = f'<rect x="0" y="0" width="{W}" height="{h}" fill="{PAPER}"/>'
-        return head + body + "".join(self.parts) + "</svg>"
-
-
-# ---------------------------------------------------------------- 内容块
+# ================================================================ 内容结构
 class Block:
-    """一个盒子：标题 + monospace 副标题 + 若干条。
+    """一张卡片：标题 + monospace 副标题 + 若干条。
 
-    条目三型：`("h", …)` 小标题、`("b", …)` 带圆点的要点、`("t", …)` 灰字说明。
-    高度按折行结果算，所以同排盒子会被拉齐到最高的那个（`draw_row` 负责）。
+    条目三型，按顺序渲染（顺序有意义，别合并）：
+        ("h", …)  段内小标题（加粗、无圆点）
+        ("b", …)  带圆点的要点
+        ("t", …)  灰字说明 / 结论行
+    短条目不必手写折行——浏览器会折，这里一个字都不量。
     """
 
-    def __init__(self, title, items=(), *, sub=None, tone="db", size=10, lineh=17.6,
-                 pad=12):
+    def __init__(self, title, items=(), *, sub=None, tone="db"):
         self.title = title
         self.sub = sub
         self.items = list(items)
-        self.p = PAL[tone]
-        self.size = size
-        self.lineh = lineh
-        self.pad = pad
         self.tone = tone
 
-    def height(self, w: float) -> float:
-        inner = w - 2 * self.pad
-        h = self.pad + 15                                   # 标题行
-        if self.sub:
-            h += 3 + 13
-        for kind, txt in self.items:
-            if kind == "h":
-                h += 6 + 15
-            elif kind == "b":
-                h += max(1, len(wrap(txt, self.size, inner - 11))) * self.lineh
-            else:
-                h += max(1, len(wrap(txt, self.size + .4, inner))) * self.lineh
-        return h + self.pad - 4
 
-    def draw(self, c: Canvas, x, y, w, h):
-        p, pad = self.p, self.pad
-        c.rect(x, y, w, h, fill=p["bg"], stroke=p["bd"], rx=8)
-        cy = y + pad + 11
-        c.text(x + pad, cy, self.title, size=11.6 if self.tone != "db" else 11,
-               fill=p["title"], weight=700)
-        if self.sub:
-            cy += 13.5
-            c.text(x + pad, cy, self.sub, size=9.6, fill=p["mono"], mono=True)
-        cy += 4
-        for kind, txt in self.items:
-            if kind == "h":
-                cy += 15
-                c.text(x + pad, cy, txt, size=self.size + .4, fill=p["title"], weight=700)
-                cy += 1
-            elif kind == "b":
-                cy += self.lineh
-                c.text(x + pad, cy - 0.6, "·", size=self.size + 2, fill=p["dot"], weight=700)
-                for i, ln in enumerate(wrap(txt, self.size, w - 2 * pad - 11)):
-                    if i:
-                        cy += self.lineh
-                    c.text(x + pad + 10, cy, ln, size=self.size, fill=BODY)
-            else:
-                for ln in wrap(txt, self.size + .4, w - 2 * pad):
-                    cy += self.lineh
-                    c.text(x + pad, cy, ln, size=self.size + .4, fill=MUTED)
+class Inv:
+    """清单卡：一批「名字 + 一句话」成对列出（表名、页面路径）。
 
-
-def draw_row(c, blocks, y, *, x=M, total=CW, gap=16, h=None, fixed_w=None):
-    """等宽一行，返回行高。
-
-    `fixed_w` 给了就按该宽度排——末行只有两三块时用它，盒子不会突然变宽；
-    不给就按 `total` 平分。
+    为什么不用卡片：18 张表做成 18 个盒子，盒子会被挤到 200px 宽、每行只搁
+    十几个字，一屏里全是小的等高方块，反而看不清。清单是两列「名字 | 说明」
+    的行，一列 9 行，边扫边对，这是表格该有的样子。
     """
-    if fixed_w:
-        w, hh = fixed_w, (h or max(b.height(fixed_w) for b in blocks))
-    else:
-        n = len(blocks)
-        w = (total - gap * (n - 1)) / n
-        hh = h or max(b.height(w) for b in blocks)
-    for i, b in enumerate(blocks):
-        b.draw(c, x + i * (w + gap), y, w, hh)
-    return hh
+
+    def __init__(self, items, *, tone="db", cols=2):
+        self.items = list(items)
+        self.tone = tone
+        self.cols = cols
 
 
-# ---------------------------------------------------------------- 章节标题 / 竖箭头
-def section(c, y, title, sub="", *, arrow=False):
-    c.text(M, y, title, size=14, fill="#33414f", weight=700, ls="0.5")
-    if sub:
-        c.text(M + measure(title, 14) + 18, y, sub, size=11, fill=MUTED)
-    return y
+class Row:
+    """一行，里面是卡片（Block）或清单（Inv）。
+
+    `cols` 不给就按这一行的块数等分——**别再交给 `auto-fit` 自己算**：
+    六块的整数行在 1400 宽的屏幕上会被算成 5 列，第 6 块掉到下一行单独一个，
+    看着像漏了。窄屏时由 CSS 的媒体查询接管，退回自动换行。
+    """
+
+    def __init__(self, blocks, *, tone=None, cols=None):
+        self.blocks = list(blocks)
+        self.tone = tone          # 给了就覆盖整行卡片的配色
+        self.cols = cols
 
 
-def vgap(c, y, label="", *, h=44, x=860):
-    """两节之间的竖箭头 + 旁注（写在箭头右边，别压在别的文字上）。"""
-    c.line(x, y, x, y + h - 6, stroke=FAINT, sw=1.5, arrow=True)
-    if label:
-        c.text(x + 12, y + h / 2 + 4, label, size=10, fill=MUTED)
-    return y + h
+class Section:
+    """一章：`① 上游数据源` + 若干行卡片 + 若干条脚注 + 通往下一章的箭头旁注。
+
+    `nav` 是目录里那个短标签（章节标题太长，粘在顶上会占满两行）。
+    `after` 是本章画完、箭头指着的那句话——它说明「下一步发生了什么」，
+    和老 SVG 版里两个章节之间的竖箭头旁注是同一句话。
+    """
+
+    def __init__(self, sid, num, title, sub="", *, nav, rows=(), notes=(), tone="layer",
+                 after=""):
+        self.sid = sid
+        self.num = num
+        self.title = title
+        self.sub = sub
+        self.nav = nav
+        self.rows = list(rows)
+        self.notes = list(notes)
+        self.tone = tone
+        self.after = after
 
 
 # ================================================================ 内容
 # ---------------------------------------------------------------- ① 上游
-def s_upstream(c, y):
-    section(c, y, "① 上游数据源",
-            "只有这一层联网；一次取数只走一条通道，限频 / 断连按源分别退避")
-    y += 16
-    row1 = [
-        Block("东财 push2his", [
-            ("b", "一次给全历史，K 线主源之一"),
-            ("b", "突发配额用完会整段拒连 TCP"),
-        ], sub="日K（不复权 fqt=0）· 沪深300", tone="up"),
-        Block("东财 datacenter", [
-            ("b", "估值周频 PE/PB/PS"),
-            ("b", "按日全市场横截面（价/PE/PB/PS/市值）"),
-            ("b", "分页 1000 行/页"),
-        ], sub="RPT_VALUEANALYSIS_DET", tone="up"),
-        Block("腾讯自选股 westock", [
-            ("b", "kline 多码批量（首选）"),
-            ("b", "财报 / 分红 / 行情 / 档案"),
-            ("b", "全市场横截面 scan"),
-        ], sub="MCP 通道 · 按返回行数计费", tone="up"),
-        Block("腾讯 web · 通达信", [
-            ("b", "fqkline：raw 真值，无成交额"),
-            ("b", "tdx：要 OAuth，独立进程 401"),
-        ], sub="K 线的第二、第三条腿", tone="up"),
-        Block("深交所 · baostock", [
-            ("b", "深交所：逐日 0/1，日历权威腿"),
-            ("b", "baostock：本机黑名单，不可用"),
-        ], sub="日历与交叉校验", tone="up"),
-    ]
-    y += draw_row(c, row1, y) + 14
-
-    row2 = [
-        Block("旁路① 全市场快照的源", [
-            ("b", "东财 datacenter 一天一份全市场：6 页 × 1000 行"),
-            ("b", "沪深300 日K 一次（给 /extreme 第五张卡）"),
-            ("b", "翻到第 30 页说明拿到的不是「一天」，直接报错"),
-        ], sub="stock_extreme_point · 自己抓，不经 hub", tone="bypass"),
-        Block("旁路② A股大势的源", [
-            ("b", "东财 push2his 周K：f61 就是周换手率（中证不给）"),
-            ("b", "中证 index-perf：日频收盘 + 滚动 PE，一次 970KB"),
-            ("b", "东财国债 RPTA_WEB_TREASURYYIELD：10Y，2015 起"),
-            ("b", "乐咕破净统计：2005 至今全A破净家数/总数"),
-        ], sub="stock_market_trend · 四个源，全部标准库", tone="bypass"),
-    ]
-    return y + draw_row(c, row2, y)
+def s_upstream():
+    return Section(
+        "s1", "①", "上游数据源",
+        "只有这一层联网；一次取数只走一条通道，限频 / 断连按源分别退避",
+        nav="① 上游", tone="up",
+        after="取数请求（按域 / 按股；阻塞在闸与节流上）",
+        rows=[
+            Row([
+                Block("东财 push2his", [
+                    ("b", "一次给全历史，K 线主源之一"),
+                    ("b", "突发配额用完会整段拒连 TCP"),
+                ], sub="日K（不复权 fqt=0）· 沪深300", tone="up"),
+                Block("东财 datacenter", [
+                    ("b", "估值周频 PE/PB/PS"),
+                    ("b", "按日全市场横截面（价/PE/PB/PS/市值）"),
+                    ("b", "分页 1000 行/页"),
+                ], sub="RPT_VALUEANALYSIS_DET", tone="up"),
+                Block("腾讯自选股 westock", [
+                    ("b", "kline 多码批量（首选）"),
+                    ("b", "财报 / 分红 / 行情 / 档案"),
+                    ("b", "全市场横截面 scan"),
+                ], sub="MCP 通道 · 按返回行数计费", tone="up"),
+                Block("腾讯 web · 通达信", [
+                    ("b", "fqkline：raw 真值，无成交额"),
+                    ("b", "tdx：要 OAuth，独立进程 401"),
+                ], sub="K 线的第二、第三条腿", tone="up"),
+                Block("深交所 · baostock", [
+                    ("b", "深交所：逐日 0/1，日历权威腿"),
+                    ("b", "baostock：本机黑名单，不可用"),
+                ], sub="日历与交叉校验", tone="up"),
+            ]),
+            Row([
+                Block("旁路① 全市场快照的源", [
+                    ("b", "东财 datacenter 一天一份全市场：6 页 × 1000 行"),
+                    ("b", "沪深300 日K 一次（给 /extreme 第五张卡）"),
+                    ("b", "翻到第 30 页说明拿到的不是「一天」，直接报错"),
+                ], sub="stock_extreme_point · 自己抓，不经 hub", tone="bypass"),
+                Block("旁路② A股大势的源", [
+                    ("b", "东财 push2his 周K：f61 就是周换手率（中证不给）"),
+                    ("b", "中证 index-perf：日频收盘 + 滚动 PE，一次 970KB"),
+                    ("b", "东财国债 RPTA_WEB_TREASURYYIELD：10Y，2015 起"),
+                    ("b", "乐咕破净统计：2005 至今全A破净家数/总数"),
+                ], sub="stock_market_trend · 四个源，全部标准库", tone="bypass"),
+            ]),
+        ])
 
 
 # ---------------------------------------------------------------- ② 数据层
-def s_layer(c, y):
-    section(c, y, "② 共享数据层 stock_data_fetch",
-            "唯一的联网出口：六道闸 → 路由 → 节流 → 覆盖判定；命中即返回，缺才打上游")
-    y += 16
-    inner = [
-        Block("preflight 六道闸", [
-            ("b", "盘中（联网才拦）· 库可用 · 版本=6"),
-            ("b", "PRAGMA wal · 日历 · 磁盘空间"),
-            ("b", "库够用就随时能跑"),
-        ], tone="layer"),
-        Block("router + PREFERRED", [
-            ("b", "kline：westock → 东财 → 腾讯 → tdx"),
-            ("b", "冷却中的源排到后面，不摘掉"),
-            ("b", "换源只补洞，不覆盖已有 bar"),
-            ("b", "同域主源连败 3 次 → 进程内降级"),
-        ], tone="layer"),
-        Block("throttle 令牌桶", [
-            ("b", "按返回行数计（不是请求数）"),
-            ("b", "westock 20 万行/分 · 东财 1.5 万行/分"),
-            ("b", "另有最小间隔：westock 1s · 东财 0.4s"),
-            ("b", "单次 take 预算 300s"),
-        ], tone="layer"),
-        Block("coverage.hit()", [
-            ("b", "fp + partial=0 + end ≥ need"),
-            ("b", "+ 无阻塞洞 + n ≥ min_points"),
-            ("b", "停牌股的 permanent 洞不阻塞"),
-        ], tone="layer"),
-        Block("失败语义", [
-            ("b", "InsufficientDepth 绝不降级返回部分"),
-            ("b", "HoleUnreachable 唯一可逐股跳过"),
-            ("b", "partial 不推进 end_date"),
-        ], tone="layer"),
-    ]
-    iw = (CW - 20 - 4 * 12) / 5
-    ih = max(b.height(iw) for b in inner)
-    c.rect(M, y, CW, ih + 24, fill="#eaf2ee", stroke="#8bb3a4", rx=10)
-    for i, b in enumerate(inner):
-        b.draw(c, M + 10 + i * (iw + 12), y + 12, iw, ih)
-    y += ih + 24 + 16
-    c.text(M, y + 10, "日历 state/trading_calendar.json（12 年 · 2900+ 个交易日）→ "
-                      "hub.target：15:05 之后今天才算「已收盘」；日历落后 >3 天只告警不阻断",
-           size=10.4, fill=MUTED)
-    return y + 5
+def s_layer():
+    return Section(
+        "s2", "②", "共享数据层 stock_data_fetch",
+        "唯一的联网出口：六道闸 → 路由 → 节流 → 覆盖判定；命中即返回，缺才打上游",
+        nav="② 数据层", tone="layer",
+        after="写入 + coverage 同事务",
+        rows=[
+            Row([
+                Block("preflight 六道闸", [
+                    ("b", "盘中（联网才拦）· 库可用 · 版本=6"),
+                    ("b", "PRAGMA wal · 日历 · 磁盘空间"),
+                    ("b", "库够用就随时能跑"),
+                ], tone="layer"),
+                Block("router + PREFERRED", [
+                    ("b", "kline：westock → 东财 → 腾讯 → tdx"),
+                    ("b", "冷却中的源排到后面，不摘掉"),
+                    ("b", "换源只补洞，不覆盖已有 bar"),
+                    ("b", "同域主源连败 3 次 → 进程内降级"),
+                ], tone="layer"),
+                Block("throttle 令牌桶", [
+                    ("b", "按返回行数计（不是请求数）"),
+                    ("b", "westock 20 万行/分 · 东财 1.5 万行/分"),
+                    ("b", "另有最小间隔：westock 1s · 东财 0.4s"),
+                    ("b", "单次 take 预算 300s"),
+                ], tone="layer"),
+                Block("coverage.hit()", [
+                    ("b", "fp + partial=0 + end ≥ need"),
+                    ("b", "+ 无阻塞洞 + n ≥ min_points"),
+                    ("b", "停牌股的 permanent 洞不阻塞"),
+                ], tone="layer"),
+                Block("失败语义", [
+                    ("b", "InsufficientDepth 绝不降级返回部分"),
+                    ("b", "HoleUnreachable 唯一可逐股跳过"),
+                    ("b", "partial 不推进 end_date"),
+                ], tone="layer"),
+            ]),
+        ],
+        notes=["日历 state/trading_calendar.json（12 年 · 2900+ 个交易日）→ "
+               "hub.target：15:05 之后今天才算「已收盘」；日历落后 >3 天只告警不阻断"])
 
 
 # ---------------------------------------------------------------- ③ shared.db
@@ -382,78 +251,70 @@ SHARED_TABLES = [
 ]
 
 
-def s_shared_db(c, y):
-    section(c, y, "③ shared.db（原件层 · 18 张表）",
-            "只存不复权原值；财报 / 分红 append-only；数据与 coverage 同事务")
-    y += 16
-    per, gap = 6, 12
-    bw = (CW - gap * (per - 1)) / per
-    for i in range(0, len(SHARED_TABLES), per):
-        chunk = SHARED_TABLES[i:i + per]
-        blocks = [Block(t, [("t", d)], tone="db", size=9.6, pad=10) for t, d in chunk]
-        y += draw_row(c, blocks, y, total=CW, gap=gap, fixed_w=bw) + gap
-    y -= gap
-    c.text(M, y + 18, "18 张里 13 张由 ② 写；price / index_price / market_* 这 5 张由两个旁路直接写——"
-                      "它们不走 hub，只借这一层「同一个文件、同一套路径约定」",
-           size=10.2, fill=MUTED)
-    return y + 6
+def s_shared_db():
+    return Section(
+        "s3", "③", "shared.db（原件层 · 18 张表）",
+        "只存不复权原值；财报 / 分红 append-only；数据与 coverage 同事务",
+        nav="③ shared.db", tone="db",
+        after="按需取数：ensure / ensure_many / scan_many",
+        rows=[Row([Inv(SHARED_TABLES)])],
+        notes=["18 张里 13 张由 ② 写；price / index_price / market_* 这 5 张由两个旁路直接写——"
+               "它们不走 hub，只借这一层「同一个文件、同一套路径约定」"])
 
 
 # ---------------------------------------------------------------- ④ 四个工具
-def s_tools(c, y):
-    section(c, y, "④ 四个裁决工具（各自的裁决点）",
-            "顺序有依赖：选股是名单源头；批量时下游三个读「基准日 = 那一天」的名单")
-    y += 16
-    inner = [
-        Block("选股 stock_kline_screen", [
-            ("h", "定位：谁刚刚启动（量价）"),
-            ("b", "粗筛：K=n+1=5 个交易日里任一天涨幅 ∈ [0.5%, 20.5%] → 池 ≈ 4300 只"),
-            ("b", "排除：名称含 ST；次新（上市<3 年）只对幸存者惰性查"),
-            ("b", "启动日 d*：连续收盘>MA20 回扫 ≤20 根，且前一日未站上 MA20（真上穿）；需 ≥71 根"),
-            ("b", "⑦ age ≤4 │ ② 放量 ≥1.5× │ ③ d* 涨幅 ∈[0.5,20.5]%"),
-            ("b", "④ MA20 ≥ MA60×0.95 且 MA20 > 3 日前 ×0.99"),
-            ("b", "换手分位只排序（--turn-pct 0），不删票"),
-            ("b", "入选后标注：毛利率改善、一级行业、市值、分位星级（只展示，不裁决）"),
-            ("t", "产出：名单（历史中位 ~18 只）· ./run.py select"),
-        ], sub="./run.py select", tone="tool"),
-        Block("周期弹性 stock_cycle_elastic", [
-            ("h", "只给标签，不评分不排序"),
-            ("b", "① 周期股：20 季毛利率 σ ≥5pp；或 CV ≥20% 且中位 ≥5% 且 σ ≥2pp"),
-            ("b", "② 弹性：8 季 DOL（环比利润增速 ÷ 营收增速）中位 ≥2.0 → 强"),
-            ("b", "　 不稳定：营收同比中位 <3%，或利润跨零 >1/3（取代强 / 弱）"),
-            ("b", "③ 位置：产能周转率 40 季分位 <40% 低位、>60% 高位；40~60 不给标签"),
-            ("b", "金融股位置标「不适用」；方向标「扩产中 / 产能在退」"),
-            ("b", "窗口：取 44 季（40 季位置 + 4 季算同比）；<20 季标「历史不足」仍出报告"),
-            ("b", "「弱」与「不稳定」严格分开：前者是知道且不强，后者只是算不出来"),
-            ("t", "只加限定语，不改分位 · ./run.py cycle --stock 代码"),
-        ], sub="./run.py cycle", tone="tool"),
-        Block("质量初筛 stock_quality_screen", [
-            ("h", "Q + V + 14 项风险 → 一句结论"),
-            ("b", "Q100 = 资本回报 30 + 现金 25 + 资产负债表 20 + 成长 15 + 会计 10"),
-            ("b", "V100 = 目标价空间 40% + 预测PE相对 20% + 净利增速 40%（无覆盖不算 V）"),
-            ("b", "14 项风险（真伪 / 趋势 / 质量 / 安全）→ 命中 / 提示 / 已知"),
-            ("b", "4 条致命直接回避：净资产为负、利息保障<1、商誉>50%、3 年经营现金流为负且净负债/EBIT>4"),
-            ("b", "结论 = Q×V 矩阵 9 种；Q<45 一律回避；一致性闸门：命中 ≥2 项，买入类降为回避"),
-            ("b", "数据前置不满足（机构覆盖不足 / 关键检查缺失）→ 观察，等待数据完整"),
-            ("t", "机构预期 / 十年分位 / 垄断标注都在报告里给依据 · ./run.py quality"),
-        ], sub="./run.py quality", tone="tool"),
-        Block("顶部判断 stock_judge_top", [
-            ("h", "四因子各自出结论，不合计"),
-            ("b", "动量：位置 pos250（−5% 内=高位）+ 速度 ret20 → 「位置·速度」"),
-            ("b", "换手：amount ÷ 流通市值；缺市值退成交额 250 日分位"),
-            ("b", "业绩：季报同比　│　量价：pos250 + 量能"),
-            ("b", "旁证（不参与结论）：估值十年分位 / 机构目标价空间 / 应收存货现金流反证"),
-            ("b", "周期股追加「周期位置」卡；<30 根报错，<250 根只告警"),
-            ("b", "口径：价格一律 raw（与选股同口径）；商誉查不到，改存货增速做第二项反证"),
-            ("t", "单只 / --from-select 批量 / --csv 清单 · ./run.py top sh600519"),
-        ], sub="./run.py top", tone="tool"),
-    ]
-    w = (CW - 20 - 3 * 12) / 4
-    hh = max(b.height(w) for b in inner)
-    c.rect(M, y, CW, hh + 24, fill="#eef3f8", stroke="#9db8d0", rx=10)
-    for i, b in enumerate(inner):
-        b.draw(c, M + 10 + i * (w + 12), y + 12, w, hh)
-    return y + hh + 24
+def s_tools():
+    return Section(
+        "s4", "④", "四个裁决工具（各自的裁决点）",
+        "顺序有依赖：选股是名单源头；批量时下游三个读「基准日 = 那一天」的名单",
+        nav="④ 工具", tone="tool",
+        after="写 select / cycle / quality / top_result（失败只 warn）",
+        rows=[
+            Row([
+                Block("选股 stock_kline_screen", [
+                    ("h", "定位：谁刚刚启动（量价）"),
+                    ("b", "粗筛：K=n+1=5 个交易日里任一天涨幅 ∈ [0.5%, 20.5%] → 池 ≈ 4300 只"),
+                    ("b", "排除：名称含 ST；次新（上市<3 年）只对幸存者惰性查"),
+                    ("b", "启动日 d*：连续收盘>MA20 回扫 ≤20 根，且前一日未站上 MA20（真上穿）；需 ≥71 根"),
+                    ("b", "⑦ age ≤4 │ ② 放量 ≥1.5× │ ③ d* 涨幅 ∈[0.5,20.5]%"),
+                    ("b", "④ MA20 ≥ MA60×0.95 且 MA20 > 3 日前 ×0.99"),
+                    ("b", "换手分位只排序（--turn-pct 0），不删票"),
+                    ("b", "入选后标注：毛利率改善、一级行业、市值、分位星级（只展示，不裁决）"),
+                    ("t", "产出：名单（历史中位 ~18 只）· ./run.py select"),
+                ], sub="./run.py select", tone="tool"),
+                Block("周期弹性 stock_cycle_elastic", [
+                    ("h", "只给标签，不评分不排序"),
+                    ("b", "① 周期股：20 季毛利率 σ ≥5pp；或 CV ≥20% 且中位 ≥5% 且 σ ≥2pp"),
+                    ("b", "② 弹性：8 季 DOL（环比利润增速 ÷ 营收增速）中位 ≥2.0 → 强"),
+                    ("b", "　 不稳定：营收同比中位 <3%，或利润跨零 >1/3（取代强 / 弱）"),
+                    ("b", "③ 位置：产能周转率 40 季分位 <40% 低位、>60% 高位；40~60 不给标签"),
+                    ("b", "金融股位置标「不适用」；方向标「扩产中 / 产能在退」"),
+                    ("b", "窗口：取 44 季（40 季位置 + 4 季算同比）；<20 季标「历史不足」仍出报告"),
+                    ("b", "「弱」与「不稳定」严格分开：前者是知道且不强，后者只是算不出来"),
+                    ("t", "只加限定语，不改分位 · ./run.py cycle --stock 代码"),
+                ], sub="./run.py cycle", tone="tool"),
+                Block("质量初筛 stock_quality_screen", [
+                    ("h", "Q + V + 14 项风险 → 一句结论"),
+                    ("b", "Q100 = 资本回报 30 + 现金 25 + 资产负债表 20 + 成长 15 + 会计 10"),
+                    ("b", "V100 = 目标价空间 40% + 预测PE相对 20% + 净利增速 40%（无覆盖不算 V）"),
+                    ("b", "14 项风险（真伪 / 趋势 / 质量 / 安全）→ 命中 / 提示 / 已知"),
+                    ("b", "4 条致命直接回避：净资产为负、利息保障<1、商誉>50%、3 年经营现金流为负且净负债/EBIT>4"),
+                    ("b", "结论 = Q×V 矩阵 9 种；Q<45 一律回避；一致性闸门：命中 ≥2 项，买入类降为回避"),
+                    ("b", "数据前置不满足（机构覆盖不足 / 关键检查缺失）→ 观察，等待数据完整"),
+                    ("t", "机构预期 / 十年分位 / 垄断标注都在报告里给依据 · ./run.py quality"),
+                ], sub="./run.py quality", tone="tool"),
+                Block("顶部判断 stock_judge_top", [
+                    ("h", "四因子各自出结论，不合计"),
+                    ("b", "动量：位置 pos250（−5% 内=高位）+ 速度 ret20 → 「位置·速度」"),
+                    ("b", "换手：amount ÷ 流通市值；缺市值退成交额 250 日分位"),
+                    ("b", "业绩：季报同比　│　量价：pos250 + 量能"),
+                    ("b", "旁证（不参与结论）：估值十年分位 / 机构目标价空间 / 应收存货现金流反证"),
+                    ("b", "周期股追加「周期位置」卡；<30 根报错，<250 根只告警"),
+                    ("b", "口径：价格一律 raw（与选股同口径）；商誉查不到，改存货增速做第二项反证"),
+                    ("t", "单只 / --from-select 批量 / --csv 清单 · ./run.py top sh600519"),
+                ], sub="./run.py top", tone="tool"),
+            ]),
+        ])
 
 
 # ---------------------------------------------------------------- ⑤ results.db
@@ -470,24 +331,19 @@ RESULT_TABLES = [
 ]
 
 
-def s_results_db(c, y):
-    section(c, y, "⑤ results.db（派生结论层 · 9 张表）",
-            "四个工具 + 两个旁路自动写，写失败只 warn 一行；每条结果带 payload = detail + report_html")
-    y += 16
-    per, gap = 6, 12
-    bw = (CW - gap * (per - 1)) / per
-    for i in range(0, len(RESULT_TABLES), per):
-        chunk = RESULT_TABLES[i:i + per]
-        blocks = [Block(t, [("t", d)], tone="db", size=9.6, pad=10) for t, d in chunk]
-        y += draw_row(c, blocks, y, total=CW, gap=gap, fixed_w=bw) + gap
-    y -= gap
-    c.text(M, y + 18, "payload.detail ≈ 4–5KB 摘要（旧行没存 report_html 时降级用）；"
-                      "payload.report_html = 工具自己渲染的整份 HTML（gzip+base64，约原文 1/2），看板只解压、不重画",
-           size=10.2, fill=MUTED)
-    c.text(M, y + 36, "↑ 反向依赖：④ 的周期 / 质量 / 顶部批量时读 select_result 的名单（--from-select）；"
-                      "market_regime 按「基准日」一周一行，重跑覆盖当周、跨周追加",
-           size=10.2, fill=MUTED)
-    return y + 14
+def s_results_db():
+    return Section(
+        "s5", "⑤", "results.db（派生结论层 · 9 张表）",
+        "四个工具 + 两个旁路自动写，写失败只 warn 一行；每条结果带 payload = detail + report_html",
+        nav="⑤ results.db", tone="db",
+        after="读库（只读连接）",
+        rows=[Row([Inv(RESULT_TABLES)])],
+        notes=[
+            "payload.detail ≈ 4–5KB 摘要（旧行没存 report_html 时降级用）；"
+            "payload.report_html = 工具自己渲染的整份 HTML（gzip+base64，约原文 1/2），看板只解压、不重画",
+            "↑ 反向依赖：④ 的周期 / 质量 / 顶部批量时读 select_result 的名单（--from-select）；"
+            "market_regime 按「基准日」一周一行，重跑覆盖当周、跨周追加",
+        ])
 
 
 # ---------------------------------------------------------------- ⑥ 看板
@@ -505,98 +361,95 @@ WEB_PAGES = [
 ]
 
 
-def s_web(c, y):
-    section(c, y, "⑥ 看板 ./run.py web",
-            "只读：results.db，加 shared.db 的 annotation 表（人工标注）；`/` 直接进首页")
-    y += 16
-    per, gap = 5, 14
-    for i in range(0, len(WEB_PAGES), per):
-        chunk = WEB_PAGES[i:i + per]
-        blocks = [Block(p, [("t", d)], tone="web", size=9.6, pad=10) for p, d in chunk]
-        y += draw_row(c, blocks, y, total=CW, gap=gap) + gap
-    y -= gap
-    c.text(M, y + 18, "人看页面 → 决定先研究哪几只（所有工具都不下买卖结论）；"
-                      "导航 9 项按取用顺序排，`/stock/<代码>` 从表格里的名称点进去",
-           size=10.2, fill=MUTED)
-    return y + 6
+def s_web():
+    return Section(
+        "s6", "⑥", "看板 ./run.py web",
+        "只读：results.db，加 shared.db 的 annotation 表（人工标注）；`/` 直接进首页",
+        nav="⑥ 看板", tone="web",
+        after="旁路一：./run.py extreme",
+        rows=[Row([Inv(WEB_PAGES, tone="web")])],
+        notes=["人看页面 → 决定先研究哪几只（所有工具都不下买卖结论）；"
+               "导航 9 项按取用顺序排，`/stock/<代码>` 从表格里的名称点进去"])
 
 
 # ---------------------------------------------------------------- ⑦ 旁路①
-def s_extreme(c, y):
-    section(c, y, "⑦ 旁路①：全市场快照 stock_extreme_point",
-            "独立工具：不 import 数据层、不过 schema 版本闸，只借文件路径约定；./run.py extreme --date YYYY-MM-DD")
-    y += 16
-    blocks = [
-        Block("东财横截面", [
-            ("b", "RPT_VALUEANALYSIS_DET"),
-            ("b", "按日 6 页 × 1000 行"),
-            ("b", "+ 沪深300 日K 1 次"),
-        ], sub="一天一份，约 6 个请求", tone="bypass"),
-        Block("抓取 / 清洗", [
-            ("b", "剔 B 股（900 / 200 开头）"),
-            ("b", "市值单位换算"),
-            ("b", "混进别的交易日直接报错"),
-        ], sub="缺失一律 NULL，不填 0", tone="bypass"),
-        Block("shared.db", [
-            ("b", "price + index_price"),
-            ("b", "原件：整天整份替换"),
-            ("b", "（DELETE + INSERT 同事务）"),
-        ], sub="丢了用 --force 重抓", tone="bypass"),
-        Block("results.db", [
-            ("b", "price + price_stat"),
-            ("b", "看板用的复制品"),
-            ("b", "+ 同事务摘要；--sync 可补"),
-        ], sub="写失败原件仍在", tone="bypass"),
-        Block("/extreme 冷热极点", [
-            ("b", "涨跌家数 / 涨跌停"),
-            ("b", "PE·PB·PS 中位数 / 沪深300"),
-            ("b", "单票全时点曲线 + 东财外链"),
-        ], sub="看板第五张卡读 index_price", tone="web"),
-    ]
-    y += draw_row(c, blocks, y, gap=14)
-    c.text(M, y + 16, "约 5579 只 ×（收盘价 / 涨跌幅 / PE(TTM) / PB(MRQ) / PS(TTM) / 总市值 / 流通市值）；"
-                      "涨跌停阈值 主板 9.8 · 双创 19.8 · 北交所 29.8 · ST 4.8；中位数只取正值",
-           size=10.2, fill=MUTED)
-    return y + 4
+def s_extreme():
+    return Section(
+        "s7", "⑦", "旁路①：全市场快照 stock_extreme_point",
+        "独立工具：不 import 数据层、不过 schema 版本闸，只借文件路径约定；"
+        "./run.py extreme --date YYYY-MM-DD",
+        nav="⑦ 旁路①", tone="bypass",
+        after="旁路二：./run.py trend",
+        rows=[
+            Row([
+                Block("东财横截面", [
+                    ("b", "RPT_VALUEANALYSIS_DET"),
+                    ("b", "按日 6 页 × 1000 行"),
+                    ("b", "+ 沪深300 日K 1 次"),
+                ], sub="一天一份，约 6 个请求", tone="bypass"),
+                Block("抓取 / 清洗", [
+                    ("b", "剔 B 股（900 / 200 开头）"),
+                    ("b", "市值单位换算"),
+                    ("b", "混进别的交易日直接报错"),
+                ], sub="缺失一律 NULL，不填 0", tone="bypass"),
+                Block("shared.db", [
+                    ("b", "price + index_price"),
+                    ("b", "原件：整天整份替换"),
+                    ("b", "（DELETE + INSERT 同事务）"),
+                ], sub="丢了用 --force 重抓", tone="bypass"),
+                Block("results.db", [
+                    ("b", "price + price_stat"),
+                    ("b", "看板用的复制品"),
+                    ("b", "+ 同事务摘要；--sync 可补"),
+                ], sub="写失败原件仍在", tone="bypass"),
+                Block("/extreme 冷热极点", [
+                    ("b", "涨跌家数 / 涨跌停"),
+                    ("b", "PE·PB·PS 中位数 / 沪深300"),
+                    ("b", "单票全时点曲线 + 东财外链"),
+                ], sub="看板第五张卡读 index_price", tone="web"),
+            ]),
+        ],
+        notes=["约 5579 只 ×（收盘价 / 涨跌幅 / PE(TTM) / PB(MRQ) / PS(TTM) / 总市值 / 流通市值）；"
+               "涨跌停阈值 主板 9.8 · 双创 19.8 · 北交所 29.8 · ST 4.8；中位数只取正值"])
 
 
 # ---------------------------------------------------------------- ⑧ 旁路②
-def s_trend(c, y):
-    section(c, y, "⑧ 旁路②：A股大势 stock_market_trend",
-            "独立工具：抓原件 → 三路判定 → 一周一行写结果库；./run.py trend [--date] [--recompute]")
-    y += 16
-    blocks = [
-        Block("抓四路原件", [
-            ("b", "东财周K（f61 = 周换手率）"),
-            ("b", "中证 index-perf（日频 PE）"),
-            ("b", "东财 10Y 国债 · 乐咕破净"),
-        ], sub="四个源，全部标准库", tone="bypass"),
-        Block("shared.db 三张 raw", [
-            ("b", "market_index_week"),
-            ("b", "market_index_perf"),
-            ("b", "market_macro"),
-        ], sub="只存上游原值，主键 upsert", tone="bypass"),
-        Block("三路判定 rules.py", [
-            ("b", "趋势 / 赔率 / 情绪"),
-            ("b", "纯函数，不碰网络与库"),
-            ("b", "三路各算各的，不合成总分"),
-        ], sub="阈值全是分位，不是固定数字", tone="bypass"),
-        Block("降级与 stale", [
-            ("b", "任一路失败 → 上次原件"),
-            ("b", "结果行标 stale=1"),
-            ("b", "三路全无才退出码 2"),
-        ], sub="--recompute 不联网重算", tone="bypass"),
-        Block("/trend + 首页横幅", [
-            ("b", "market_regime 一周一行"),
-            ("b", "首页只摆最近 8 周"),
-            ("b", "完整历史进 /trend"),
-        ], sub="只作背景板，不参与选股", tone="web"),
-    ]
-    y += draw_row(c, blocks, y, gap=14)
-    c.text(M, y + 16, "data_asof 取三路里最旧的那一天并照实标「数据截至」；中证滞后 1–2 个交易日是常态；"
-                      "乐咕是页面上的固定 token，变了就 403（只这一路降级）",
-           size=10.2, fill=MUTED)
-    return y + 4
+def s_trend():
+    return Section(
+        "s8", "⑧", "旁路②：A股大势 stock_market_trend",
+        "独立工具：抓原件 → 三路判定 → 一周一行写结果库；./run.py trend [--date] [--recompute]",
+        nav="⑧ 旁路②", tone="bypass",
+        rows=[
+            Row([
+                Block("抓四路原件", [
+                    ("b", "东财周K（f61 = 周换手率）"),
+                    ("b", "中证 index-perf（日频 PE）"),
+                    ("b", "东财 10Y 国债 · 乐咕破净"),
+                ], sub="四个源，全部标准库", tone="bypass"),
+                Block("shared.db 三张 raw", [
+                    ("b", "market_index_week"),
+                    ("b", "market_index_perf"),
+                    ("b", "market_macro"),
+                ], sub="只存上游原值，主键 upsert", tone="bypass"),
+                Block("三路判定 rules.py", [
+                    ("b", "趋势 / 赔率 / 情绪"),
+                    ("b", "纯函数，不碰网络与库"),
+                    ("b", "三路各算各的，不合成总分"),
+                ], sub="阈值全是分位，不是固定数字", tone="bypass"),
+                Block("降级与 stale", [
+                    ("b", "任一路失败 → 上次原件"),
+                    ("b", "结果行标 stale=1"),
+                    ("b", "三路全无才退出码 2"),
+                ], sub="--recompute 不联网重算", tone="bypass"),
+                Block("/trend + 首页横幅", [
+                    ("b", "market_regime 一周一行"),
+                    ("b", "首页只摆最近 8 周"),
+                    ("b", "完整历史进 /trend"),
+                ], sub="只作背景板，不参与选股", tone="web"),
+            ]),
+        ],
+        notes=["data_asof 取三路里最旧的那一天并照实标「数据截至」；中证滞后 1–2 个交易日是常态；"
+               "乐咕是页面上的固定 token，变了就 403（只这一路降级）"])
 
 
 # ---------------------------------------------------------------- ⑨ 明细
@@ -694,145 +547,366 @@ DETAILS = [
 ]
 
 
-def s_details(c, y):
-    section(c, y, "⑨ 筛选条件明细",
-            "阈值集中在各包 config.py 与 stock_review_assess/，改一处即可；这一节只列会改变结论的数")
-    y += 16
-    per, gap = 4, 14
-    for i in range(0, len(DETAILS), per):
-        chunk = DETAILS[i:i + per]
-        blocks = [Block(t, items, tone="rule", sub=sub, size=9.8, lineh=16.4, pad=11)
-                  for t, sub, items in chunk]
+def s_details():
+    rows = []
+    for i in range(0, len(DETAILS), 4):
+        blocks = [Block(t, items, sub=sub, tone="rule")
+                  for t, sub, items in DETAILS[i:i + 4]]
         # 第二行起换暖色底，读起来有分段感（也提示「后半段讲的是各工具自己的口径」）
-        if i:
-            for b in blocks:
-                b.p = PAL["bypass"]
-        y += draw_row(c, blocks, y, total=CW, gap=gap) + gap
-    return y - gap
+        rows.append(Row(blocks, tone=None if i == 0 else "bypass"))
+    return Section(
+        "s9", "⑨", "筛选条件明细",
+        "阈值集中在各包 config.py 与 stock_review_assess/，改一处即可；这一节只列会改变结论的数",
+        nav="⑨ 明细", tone="rule", rows=rows)
 
 
-# ================================================================ 拼装
+def sections() -> list[Section]:
+    return [s_upstream(), s_layer(), s_shared_db(), s_tools(), s_results_db(),
+            s_web(), s_extreme(), s_trend(), s_details()]
+
+
+# ================================================================ 渲染
+def esc(s: str) -> str:
+    """正文里的 `<35 太贵` `商誉>50%` 必须转义，否则浏览器当标签吃掉。"""
+    return _esc(s, quote=False)
+
+
+def tone_css() -> str:
+    """把 PAL 摊成 CSS 变量：卡片、章节徽章共用一套色。"""
+    out = []
+    for k, v in PAL.items():
+        out.append(f".tone-{k}{{--c-bg:{v['bg']};--c-bd:{v['bd']};"
+                   f"--c-title:{v['title']};--c-mono:{v['mono']};--c-dot:{v['dot']}}}")
+        out.append(f".sec.tone-{k} .num{{background:{v['bg']};border-color:{v['bd']};"
+                   f"color:{v['title']}}}")
+    return "\n".join(out)
+
+
+def r_block(b: Block, tone: str | None = None) -> str:
+    """一张卡片。连续的 `b` 条目合成一个 `<ul>`，遇到 h / t 就断开。"""
+    parts: list[str] = []
+    buf: list[str] = []
+
+    def flush() -> None:
+        if buf:
+            parts.append('<ul>' + "".join(f"<li>{esc(x)}</li>" for x in buf) + "</ul>")
+            buf.clear()
+
+    for kind, txt in b.items:
+        if kind == "b":
+            buf.append(txt)
+        else:
+            flush()
+            parts.append(f'<p class="{"ih" if kind == "h" else "it"}">{esc(txt)}</p>')
+    flush()
+
+    mono = b.title.startswith("/")
+    h3 = (f'<h3 class="mono">{esc(b.title)}</h3>' if mono
+          else f"<h3>{esc(b.title)}</h3>")
+    sub = f'<p class="sub">{esc(b.sub)}</p>' if b.sub else ""
+    return (f'<article class="card tone-{tone or b.tone}">{h3}{sub}'
+            f'{"".join(parts)}</article>')
+
+
+def r_inv(v: Inv) -> str:
+    """清单卡：两列「名字 | 说明」，一列 N 行；窄屏由 CSS 退回一列。
+
+    最后一行的条目不带分隔线（`class="last"`）——只有行数不是列数整数倍时，
+    才能看出哪几个是「最后一行」，所以这个判断放在这里做，不交给 CSS。
+    """
+    n = len(v.items)
+    tail = n % v.cols or v.cols
+    cells = []
+    for i, (k, d) in enumerate(v.items):
+        cls = "ii last" if i >= n - tail else "ii"
+        cells.append(f'<div class="{cls}"><dt>{esc(k)}</dt><dd>{esc(d)}</dd></div>')
+    return (f'<article class="card inv tone-{v.tone}">'
+            f'<dl class="ig" style="--inv:{v.cols}">{"".join(cells)}</dl></article>')
+
+
+def r_row(row: Row) -> str:
+    cards = [r_inv(b) if isinstance(b, Inv) else r_block(b, row.tone) for b in row.blocks]
+    n = row.cols or len(cards)
+    return f'<div class="row" style="--n:{n}">{"".join(cards)}</div>'
+
+
+def r_section(s: Section) -> str:
+    sub = f'<span class="sub">{esc(s.sub)}</span>' if s.sub else ""
+    out = [f'<section class="sec tone-{s.tone}" id="{s.sid}">',
+           "<details open>",
+           '<summary><span class="num" aria-hidden="true">' + esc(s.num) + "</span>"
+           f'<span class="hd"><span class="ttl">{esc(s.title)}</span>{sub}</span>'
+           '<span class="chev" aria-hidden="true"></span></summary>',
+           '<div class="body">']
+    out += [r_row(r) for r in s.rows]
+    out += [f'<p class="note">{esc(n)}</p>' for n in s.notes]
+    out += ["</div>", "</details>", "</section>"]
+    return "".join(out)
+
+
+def r_flow(label: str) -> str:
+    """两个章节之间那条竖箭头 + 旁注：说明「下一步发生了什么」。"""
+    return ('<div class="flow"><span class="rail" aria-hidden="true"></span>'
+            f'<span class="tag">{esc(label)}</span></div>')
+
+
+def build_body() -> str:
+    out = []
+    for s in sections():
+        out.append(r_section(s))
+        if s.after:
+            out.append(r_flow(s.after))
+    return "\n".join(out)
+
+
+def build_nav() -> str:
+    return "".join(f'<a href="#{s.sid}">{esc(s.nav)}</a>' for s in sections())
+
+
 def build() -> str:
-    """画完整张图，返回 SVG 文本（高度按内容算出来）。"""
-    c = Canvas()
-    y = 50.0
-    c.text(M, y, "stock-value-invest-tool · 数据流转与筛选条件",
-           size=24, fill=INK, weight=700)
-    c.text(M, y + 24,
-           "共享数据层按需取数 → 四个裁决工具各自定性 → 结论只进 results.db → 看板读库；"
-           "两个旁路（全市场快照 / A股大势）各抓各的、各写各的表，不参与选股结论",
-           size=12, fill=MUTED)
-    c.line(M, 90, W - M, 90, stroke=LINE)
-
-    y = s_upstream(c, 120)
-    y = vgap(c, y + 20, "取数请求（按域 / 按股；阻塞在闸与节流上）")
-    y = s_layer(c, y + 4)
-    y = vgap(c, y + 20, "写入 + coverage 同事务")
-    y = s_shared_db(c, y + 4)
-    y = vgap(c, y + 24, "按需取数：ensure / ensure_many / scan_many")
-    y = s_tools(c, y + 4)
-    y = vgap(c, y + 20, "写 select / cycle / quality / top_result（失败只 warn）")
-    y = s_results_db(c, y + 4)
-    y = vgap(c, y + 24, "读库（只读连接）")
-    y = s_web(c, y + 4)
-
-    y = vgap(c, y + 26, "旁路一：./run.py extreme")
-    y = s_extreme(c, y + 4)
-    y = vgap(c, y + 26, "旁路二：./run.py trend")
-    y = s_trend(c, y + 4)
-
-    y = vgap(c, y + 26, "")
-    y = s_details(c, y + 4)
-
-    y += 26
-    c.line(M, y, W - M, y, stroke=LINE)
-    c.text(M, y + 24,
-           "说明：只画「谁把什么写到哪」，不含全部参数与例外；阈值以各包 config.py 为准。",
-           size=10, fill=MUTED)
-    c.text(W - M, y + 24, f"{VER} · 按当前代码与 README 核对", size=10, fill=FAINT, anchor="end")
-    return c.svg(int(y + 40))
+    """整页 HTML。样式内联，无外链、无网络请求。"""
+    return (HTML.replace("%TONE%", tone_css())
+                .replace("%NAV%", build_nav())
+                .replace("%BODY%", build_body())
+                .replace("%TITLE%", esc(TITLE))
+                .replace("%LEAD%", esc(LEAD))
+                .replace("%FOOT_L%", esc(FOOT_L))
+                .replace("%FOOT_R%", esc(FOOT_R)))
 
 
-#: 套在 SVG 外面的那层：吸顶条（标题 / 打印提示 / 纯 SVG 入口）+ 纸张边框。
-#: 用 `%W%` `%SVG%` 占位而不是 `str.format`，因为 CSS 里满是花括号。
-#: 吸顶条上「打开纯 SVG」是相对链接，页面挂在 /dataflow 时由看板的
-#: `GET /dataflow.svg` 接住（见 web/app.py）。
+#: 页面骨架。用 `%XXX%` 占位而不是 `str.format`，因为 CSS 里满是花括号。
+#: 排版约定（改字号只改这里，不要动内容）：
+#:   正文 14px / 行高 1.62，卡片标题 15.5px，章节标题 19px，页面标题 26px。
+#:   三档字号即可，再多就没层次了。
 HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>stock-value-invest-tool · 数据流转与筛选条件</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>%TITLE%</title>
 <style>
-  :root { color-scheme: light; }
-  html, body { margin: 0; padding: 0; background: #f2f1ee; color: #1f2328;
-    font-family: "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif; }
-  .bar { position: sticky; top: 0; z-index: 3; display: flex; gap: 14px;
-    align-items: center; padding: 10px 18px; background: #ffffff;
-    border-bottom: 1px solid #e3e6e8; font-size: 12.5px; color: #5b6570; }
-  .bar b { color: #22303c; font-size: 13px; }
-  .bar span { color: #8a949e; }
-  .bar a { color: #2f6152; text-decoration: none; border-bottom: 1px dotted #8bb3a4; }
-  .wrap { padding: 18px; }
-  .paper { max-width: %W%px; margin: 0 auto; background: #fdfcfa;
-    border: 1px solid #e3e6e8; border-radius: 10px; overflow: hidden;
-    box-shadow: 0 1px 3px rgba(31,35,40,.06); }
-  svg { display: block; width: 100%; height: auto; }
+  :root { color-scheme: light;
+    --ink:#22303c; --body:#1f2328; --muted:#5b6570; --faint:#8a949e;
+    --line:#e3e6e8; --line2:#eef0f2; --paper:#fdfcfa; --bg:#f2f1ee;
+    --accent:#2f6152; --mono: ui-monospace, SFMono-Regular, Menlo, "DejaVu Sans Mono", monospace; }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin:0; background:var(--bg); color:var(--body);
+    font-family:"Noto Sans CJK SC","Source Han Sans SC","Microsoft YaHei","PingFang SC",sans-serif;
+    font-size:15px; line-height:1.65; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:1560px; margin:0 auto; padding:26px 26px 72px; }
+
+  /* ---------- 页头 ---------- */
+  .hero { padding:4px 0 16px; border-bottom:1px solid var(--line); }
+  .hero h1 { margin:0 0 10px; font-size:26px; line-height:1.35; color:var(--ink); letter-spacing:.2px; }
+  .hero p { margin:0; max-width:118ch; color:var(--muted); font-size:14.5px; }
+  .hero .meta { margin-top:10px; display:flex; gap:14px; flex-wrap:wrap; color:var(--faint); font-size:12.5px; }
+  .hero .meta b { color:var(--muted); font-weight:600; }
+
+  /* ---------- 目录（吸顶） ---------- */
+  .toc { position:sticky; top:0; z-index:20; display:flex; flex-wrap:wrap; gap:7px;
+    align-items:center; padding:9px 0 10px; margin-bottom:4px;
+    background:rgba(242,241,238,.95); backdrop-filter:blur(8px);
+    border-bottom:1px solid var(--line); }
+  .toc a { display:inline-flex; align-items:center; padding:4px 11px; border-radius:999px;
+    background:#fff; border:1px solid var(--line); color:#3b4653; font-size:13px;
+    text-decoration:none; white-space:nowrap; transition:.12s; }
+  .toc a:hover { border-color:#a9c7ba; color:var(--accent); background:#f4f9f6; }
+  .toc .sep { margin-left:auto; display:flex; gap:6px; }
+  .toc button { font:inherit; font-size:12.5px; padding:4px 10px; border-radius:8px;
+    background:#fff; border:1px solid var(--line); color:var(--muted); cursor:pointer; }
+  .toc button:hover { border-color:#a9c7ba; color:var(--accent); }
+
+  /* ---------- 章节 ---------- */
+  .sec { margin:22px 0 0; scroll-margin-top:58px; }
+  .sec > details { border:1px solid var(--line); border-radius:12px; background:#fff;
+    overflow:hidden; }
+  .sec > details > summary { display:flex; align-items:baseline; gap:11px; cursor:pointer;
+    padding:10px 15px; list-style:none; user-select:none; background:#fff; }
+  .sec > details > summary::-webkit-details-marker { display:none; }
+  .sec > details[open] > summary { border-bottom:1px solid var(--line2); }
+  .sec > details > summary:hover { background:#fcfdfc; }
+  .num { flex:none; display:inline-flex; align-items:center; justify-content:center;
+    width:25px; height:25px; border-radius:8px; border:1px solid var(--line);
+    font-size:14px; font-weight:700; transform:translateY(3px); }
+  /* 标题与副标题同属一块：窗口窄时副标题换到标题下面，不去挤标题 */
+  .hd { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; min-width:0; }
+  .ttl { font-size:19px; font-weight:700; color:var(--ink); letter-spacing:.2px;
+    white-space:nowrap; }
+  .sec > details > summary .sub { font-size:13px; color:var(--muted); line-height:1.5; }
+  .chev { margin-left:auto; flex:none; width:9px; height:9px; border-right:2px solid var(--faint);
+    border-bottom:2px solid var(--faint); transform:rotate(45deg) translateY(-2px);
+    transition:.18s; }
+  .sec > details:not([open]) .chev { transform:rotate(-45deg) translateX(-2px); }
+  .body { padding:14px 15px 15px; background:#f6f7f7; }
+  .sec > details:not([open]) > .body { display:none; }
+
+  /* ---------- 卡片 ---------- */
+  .row { display:grid; gap:12px; grid-template-columns:repeat(var(--n,4), minmax(0,1fr)); }
+  .row + .row { margin-top:12px; }
+  .card { background:var(--c-bg,#fff); border:1px solid var(--c-bd,var(--line));
+    border-radius:12px; padding:13px 15px 14px; box-shadow:0 1px 2px rgba(31,35,40,.045); }
+  .card h3 { margin:0; font-size:15.5px; line-height:1.4; color:var(--c-title,#33414f);
+    font-weight:700; letter-spacing:.2px; }
+  .card h3.mono { font-family:var(--mono); font-size:14.5px; letter-spacing:0; }
+  .card .sub { margin:3px 0 0; font-family:var(--mono); font-size:12px; line-height:1.45;
+    color:var(--c-mono,#5b6570); word-break:break-word; }
+  .card ul { margin:9px 0 0; padding:0; list-style:none; }
+  .card li { position:relative; padding-left:14px; font-size:14px; line-height:1.62; }
+  .card li + li { margin-top:4px; }
+  .card li::before { content:"·"; position:absolute; left:3px; top:-1px;
+    font-weight:700; font-size:16px; color:var(--c-dot,#c3cad2); }
+  .card .ih { margin:12px 0 0; font-size:13.5px; font-weight:700; line-height:1.5;
+    color:var(--c-title,#33414f); }
+  .card .it { margin:9px 0 0; font-size:13.5px; line-height:1.6; color:var(--muted); }
+  .card h3 + .it, .card h3 + ul, .card .sub + .it, .card .sub + ul { margin-top:8px; }
+
+  /* ---------- 清单卡（表名 / 页面路径） ---------- */
+  .card.inv { padding:11px 16px 12px; }
+  .ig { margin:0; display:grid; gap:0 34px;
+    grid-template-columns:repeat(var(--inv,2), minmax(0,1fr)); }
+  .ii { display:flex; gap:12px; align-items:baseline; padding:6px 0;
+    border-bottom:1px solid var(--line2); }
+  .ii.last { border-bottom:0; }
+  .ii dt { flex:0 0 148px; margin:0; font-family:var(--mono); font-size:13px;
+    font-weight:700; color:var(--c-title,#33414f); line-height:1.5; word-break:break-word; }
+  .ii dd { margin:0; font-size:13.5px; line-height:1.55; color:#495460; }
+
+  /* ---------- 脚注 / 章节间箭头 ---------- */
+  .note { margin:11px 0 0; padding:8px 14px; background:#fff; font-size:13.5px;
+    line-height:1.7; color:#4a5560; border:1px solid var(--line2);
+    border-left:3px solid var(--c-bd,var(--line)); border-radius:0 8px 8px 0; }
+  .flow { display:flex; align-items:center; gap:12px; margin:13px 0 0 34px; }
+  .flow .rail { position:relative; flex:none; width:2px; height:24px;
+    background:linear-gradient(#dfe4e8,#c9d2d9); border-radius:2px; }
+  .flow .rail::after { content:""; position:absolute; left:-4px; bottom:-6px;
+    border:5px solid transparent; border-top-color:#c9d2d9; }
+  .flow .tag { font-size:13px; color:var(--muted); background:#fff; border:1px solid var(--line);
+    padding:2px 11px; border-radius:999px; }
+
+  /* ---------- 页脚 ---------- */
+  .foot { margin-top:34px; padding-top:14px; border-top:1px solid var(--line);
+    display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap;
+    font-size:13px; color:var(--muted); }
+  .foot .r { color:var(--faint); }
+
+%TONE%
+
   @media print {
-    @page { size: A3 landscape; margin: 8mm; }
-    html, body { background: #ffffff; }
-    .bar { display: none; }
-    .wrap { padding: 0; }
-    .paper { border: 0; box-shadow: none; max-width: none; }
+    @page { size:A4 portrait; margin:12mm; }
+    html, body { background:#fff; font-size:11pt; }
+    .wrap { max-width:none; padding:0; }
+    .toc, .hero .meta { display:none; }
+    .sec { break-inside:auto; }
+    .sec > details { border-color:#d8d8d8; }
+    .sec > details > summary { break-after:avoid; }
+    .body { background:#fff !important; }
+    /* 卡片默认不许跨页；但 18 张表的清单卡比一页还高，必须允许它断，
+       否则整块被推到下一页，上一页留半个白页。断的时候以「行」为单位。 */
+    .card { box-shadow:none; break-inside:avoid; }
+    .card.inv { break-inside:auto; }
+    .ii { break-inside:avoid; }
+    .note { break-inside:avoid; }
+    .hero { break-after:avoid; }
+  }
+  /* 窄屏：放弃「每行固定几块」，退回自动换行；列宽下限 240px，两列清单退成一列 */
+  @media (max-width:1240px) {
+    .row { grid-template-columns:repeat(auto-fit, minmax(min(100%, 240px), 1fr)); }
+    .ig { grid-template-columns:repeat(auto-fit, minmax(min(100%, 380px), 1fr)); }
+    .ii dt { flex-basis:132px; }
+  }
+  @media (max-width:640px) {
+    .wrap { padding:16px 14px 48px; }
+    .hero h1 { font-size:21px; }
+    .ttl { font-size:17px; white-space:normal; }
+    .hd { display:block; }
+    .hd .sub { display:block; margin-top:2px; }
+    .ii { display:block; }
+    .ii dt { flex-basis:auto; margin-bottom:1px; }
   }
 </style>
 </head>
 <body>
-<div class="bar">
-  <b>stock-value-invest-tool · 数据流转与筛选条件</b>
-  <span>滚动查看 · Ctrl/⌘+P 可打印成 A3 横版 PDF</span>
-  <a href="dataflow.svg">打开纯 SVG</a>
+<div class="wrap">
+
+<header class="hero">
+  <h1>%TITLE%</h1>
+  <p>%LEAD%</p>
+  <div class="meta"><b>阅读</b><span>正文 14px · 章可折叠</span>
+    <b>打印</b><span>Ctrl/⌘+P 出 A4 竖版 PDF（自动展开全部章节）</span></div>
+</header>
+
+<nav class="toc" aria-label="章节">
+  %NAV%
+  <span class="sep">
+    <button type="button" data-act="open">全部展开</button>
+    <button type="button" data-act="close">全部收起</button>
+  </span>
+</nav>
+
+<main>
+%BODY%
+</main>
+
+<div class="foot">
+  <span>%FOOT_L%</span>
+  <span class="r">%FOOT_R%</span>
 </div>
-<div class="wrap"><div class="paper">
-%SVG%
-</div></div>
+
+</div>
+<script>
+(function () {
+  var all = function () { return document.querySelectorAll('main details'); };
+  // 目录跳转：目标章节要是收起的，先展开再跳，不然点了像没反应
+  document.querySelectorAll('.toc a').forEach(function (a) {
+    a.addEventListener('click', function () {
+      var el = document.querySelector(a.getAttribute('href'));
+      if (el && el.tagName === 'DETAILS') { el.open = true; }
+    });
+  });
+  document.querySelectorAll('.toc button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var open = b.dataset.act === 'open';
+      all().forEach(function (d) { d.open = open; });
+    });
+  });
+  // 打印前全部展开：折叠状态的内容打不出来
+  window.addEventListener('beforeprint', function () {
+    all().forEach(function (d) { d.open = true; });
+  });
+})();
+</script>
 </body>
 </html>
 """
 
 
-def render() -> tuple[str, str]:
-    """返回 (svg, html) 两份文本。"""
-    svg = build()
-    return svg, HTML.replace("%W%", str(W)).replace("%SVG%", svg)
+def render() -> str:
+    return build()
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="生成 dataflow.svg / dataflow.html")
+    ap = argparse.ArgumentParser(description="生成 dataflow.html")
     ap.add_argument("--out", default=str(ROOT), help="输出目录（默认仓库根目录）")
     ap.add_argument("--check", action="store_true",
                     help="不写文件，只比对磁盘上的是不是最新的；不一样则退出码 1")
     args = ap.parse_args()
 
     out = Path(args.out)
-    svg, html = render()
+    html = render()
+    name = "dataflow.html"
 
     if args.check:
-        stale = []
-        for name, text in (("dataflow.svg", svg), ("dataflow.html", html)):
-            p = out / name
-            if not p.is_file() or p.read_text(encoding="utf-8") != text:
-                stale.append(name)
-        if stale:
-            print("过期（跑一遍 scripts/gen_dataflow.py 重画）:", " ".join(stale))
+        p = out / name
+        if not p.is_file() or p.read_text(encoding="utf-8") != html:
+            print(f"过期（跑一遍 scripts/gen_dataflow.py 重画）: {name}")
             return 1
-        print("最新：图的产物与脚本内容一致")
+        print("最新：页面与脚本内容一致")
         return 0
 
     out.mkdir(parents=True, exist_ok=True)
-    (out / "dataflow.svg").write_text(svg, encoding="utf-8")
-    (out / "dataflow.html").write_text(html, encoding="utf-8")
-    print(f"written: {out / 'dataflow.svg'} ({len(svg):,} 字节), "
-          f"{out / 'dataflow.html'} ({len(html):,} 字节)")
+    (out / name).write_text(html, encoding="utf-8")
+    print(f"written: {out / name} ({len(html):,} 字节)")
     return 0
 
 
