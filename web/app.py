@@ -19,8 +19,7 @@
     /book        原书学习：《成功投资的五条法则》全书页（static 下的自包含 HTML，
                  只在末尾补一个「返回看板」浮标，正文一个字不动）
     /dataflow    本项目代码执行流程：仓库根目录的 dataflow.html（数据流转与筛选条件
-                 全景图，内嵌 SVG）原样吐出，同样只补一个返回浮标；
-    /dataflow.svg 它的纯 SVG 版（图上那条「打开纯 SVG」的链接要用，不能落空）
+                 全景图，自包含 HTML）原样吐出，同样只补一个返回浮标
     /stock/<code> 个股：四边结论并排 + 旁证/周期（**只摆最近一份**，取 `run.id` 最大的那条）
                  `?focus=cycle|quality|top` 决定哪一块排最上面（从哪个工具页点进来的）
 
@@ -50,6 +49,8 @@ from stock_review_assess import config as review_config
 
 #: 状态词 → 色调（与四工具报告的 CSS 变量同一套语言）
 TONE_MAP = (
+    ("天量", "hot"), ("放量", "warn"),
+    ("缩量", "ok"), ("地量", "good"), ("平稳", "muted"),
     ("高位", "warn"), ("偏高", "warn"), ("过热", "warn"), ("偏热", "warn"),
     ("加速", "warn"), ("命中", "warn"), ("回避", "warn"), ("贵", "warn"),
     ("低位", "muted"), ("偏低", "muted"), ("偏弱", "muted"), ("走平", "muted"),
@@ -331,9 +332,8 @@ def _with_back_home(html: str, snippet: str = BACK_HOME) -> str:
 #: 由生成脚本直接写到根目录，看板只负责原样端出去。这里读根目录那一份，
 #: 不再往 static/ 复制副本：图是会重画的，副本最容易忘记更新。
 FLOW_HTML = "dataflow.html"
-FLOW_SVG = "dataflow.svg"
 
-#: 流程图那一页没有看板顶栏（自己的吸顶条 + 一整张 SVG），所以同样补一个浮标。
+#: 流程图那一页没有看板顶栏（它有自己的吸顶条），所以同样补一个浮标。
 #: 它不像书页那样有一套 CSS 变量可借（dataflow.html 全是硬编码色值），
 #: 所以这里把颜色写死：墨绿 #2f6152 是那张图自己的强调色，底白、浅绿描边。
 FLOW_BACK = """
@@ -514,6 +514,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             return render_template(
                 "trend.html", regime=db.regime(c, limit=None,
                                                 start=start, end=end),
+                turnover=db.turnover_series(),
                 start=start or "", end=end or "",
                 cur_date=db.batch_date(c), batches=db.batches(c), meta=None)
 
@@ -553,17 +554,6 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             cache = (mtime, _with_back_home(path.read_text(encoding="utf-8"), FLOW_BACK))
             app.config["FLOW_CACHE"] = cache
         return Response(cache[1], mimetype="text/html")
-
-    @app.route("/dataflow.svg")
-    def dataflow_svg():
-        """流程图那一页吸顶条上的「打开纯 SVG」：图里是相对链接 dataflow.svg，
-        页面挂在 /dataflow 上就会解析成 /dataflow.svg，得有个路由接住。"""
-        path = here.parent / FLOW_SVG
-        if not path.is_file():
-            abort(404, description="没有 dataflow.svg")
-        resp = Response(path.read_bytes(), mimetype="image/svg+xml")
-        resp.headers["Cache-Control"] = "no-cache"
-        return resp
 
     @app.route("/select")
     def select():

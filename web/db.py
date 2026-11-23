@@ -28,6 +28,7 @@ import base64
 import datetime as dt
 import gzip
 import json
+import math
 import os
 import sqlite3
 from pathlib import Path
@@ -663,8 +664,10 @@ REGIME_HEAD_TIPS = {
            "近 10 年分位：≥80 便宜 · ≥95 极值 · ≤20 偏贵",
     "below": "全A破净率（股价低于每股净资产的公司占比）\n"
              "近 10 年分位：≥90 恐慌 · ≥70 偏冷",
-    "volume": "沪深300 周换手率\n"
-              "≤ 近 3 年 10% 分位 → 地量",
+    "volume": "沪深300 周换手率 · 一个水位派生出四条线\n"
+              "水位 = 近 52 周换手中位数\n"
+              "地量 ≤1%（固定）· 缩量 <0.9× · 平稳 · 放量 ≥1.1× · 天量 ≥1.5×\n"
+              "三条线逐周现算，跟着市场水位走，不用人工校准",
 }
 
 
@@ -691,7 +694,7 @@ def regime(conn, limit: int | None = 8, *, start: str | None = None,
     cols = ("date, computed_at, data_asof, stale, trend_state, trend_score, "
             "trend_close, ma20, ma60, ma60_slope, weeks_below_ma20, erp, "
             "pe_ttm, bond10y, erp_pct, below_na, below_na_pct, turnover, "
-            "turnover_q10, volume_dry")
+            "turnover_q10, volume_dry, payload")
 
     where, params = [], []
     if start:
@@ -719,6 +722,19 @@ def regime(conn, limit: int | None = 8, *, start: str | None = None,
         d = dict(r)
         d["stale"] = bool(d.get("stale"))
         d["volume_dry"] = None if d.get("volume_dry") is None else bool(d["volume_dry"])
+        # 量能分档是后加的字段，只存在 payload 里（表结构不动，符合"payload 是
+        # 任意 JSON"那条约定）。老行没有这几个键 → 退回「地量 / 未地量」两挡。
+        sent = _payload_sentiment(d.pop("payload", None))
+        d["volume_state"] = sent.get("volume_state")
+        d["turnover_pct"] = sent.get("turnover_pct")
+        d["turnover_q90"] = sent.get("turnover_q90")
+        d["dry_line"] = sent.get("dry_line")
+        d["low_line"] = sent.get("low_line")
+        d["high_line"] = sent.get("high_line")
+        d["heavy_line"] = sent.get("heavy_line")
+        d["median52"] = sent.get("median52")
+        # 「本周未走完」：档位是按上一完整周判的，页面要说出来
+        d["partial_week"] = sent.get("partial_week")
         d["tips"] = _regime_tips(d)
         return d
 
@@ -728,6 +744,22 @@ def regime(conn, limit: int | None = 8, *, start: str | None = None,
         f"SELECT {cols} FROM market_regime ORDER BY date DESC LIMIT 1").fetchone()
     return {"row": _row(latest), "weeks": weeks, "total": total,
             "matched": matched, "head_tips": REGIME_HEAD_TIPS}
+
+
+def _payload_sentiment(payload) -> dict:
+    """从 `market_regime.payload` 里取情绪那一路。读不出来就给空 dict。
+
+    后加的字段（`volume_state` / `turnover_pct` / `turnover_q90`）不进表，
+    只在 payload 里——这条库的约定就是"加字段不改表"，看板按需读取。
+    """
+    if not payload:
+        return {}
+    try:
+        data = json.loads(payload)
+    except (TypeError, ValueError):
+        return {}
+    sent = data.get("sentiment") if isinstance(data, dict) else None
+    return sent if isinstance(sent, dict) else {}
 
 
 def _regime_tips(w: dict) -> dict[str, str]:
@@ -755,12 +787,29 @@ def _regime_tips(w: dict) -> dict[str, str]:
              f"全A破净率 {n(w.get('below_na'), '%')}",
              f"近 10 年 {n(w.get('below_na_pct'), '%')} 分位（≥90 恐慌）"]
 
-    if w.get("volume_dry") is None:
+    vs = w.get("volume_state")
+    if not vs and w.get("volume_dry") is not None:
+        # 老行（没有分档字段）：退回两挡说法，别硬猜分位。
+        vs = "地量" if w["volume_dry"] else "未地量"
+    if vs is None:
         volume = ["量能：—", "缺周换手数据"]
     else:
-        volume = [f"量能：{'地量' if w['volume_dry'] else '未地量'}",
-                  f"沪深300 周换手 {n(w.get('turnover'), '%')}",
-                  f"近 3 年 10% 分位 {n(w.get('turnover_q10'), '%')}"]
+        volume = [f"量能：{vs}", f"沪深300 周换手 {n(w.get('turnover'), '%')}"]
+        dry = w.get("dry_line")
+        low = w.get("low_line")
+        high = w.get("high_line")
+        heavy = w.get("heavy_line")
+        if dry is not None and heavy is not None:
+            volume.append(f"地量 ≤{dry}%（固定）· 缩量 <{n(low, '%')}"
+                          f"（近一年中位 ×0.9）")
+            volume.append(f"放量 ≥{n(high, '%')}（×1.1）· 天量 ≥{heavy}%（×1.5）")
+        if w.get("turnover_pct") is not None:
+            volume.append(f"参考：近 5 年 {w['turnover_pct']}% 分位")
+        part = w.get("partial_week")
+        if part:
+            volume.insert(1, f"⚠ 本周未走完：{part.get('date')} 至今只累计了"
+                             f" {n(part.get('turnover'), '%')}，档位按上一完整周"
+                             f"（{part.get('prev_date') or '—'}）判")
 
     return {"trend": "\n".join(trend), "erp": "\n".join(erp),
             "below": "\n".join(below), "volume": "\n".join(volume)}
@@ -786,6 +835,178 @@ def _regime_state_na(pct) -> str:
     if pct >= 70:
         return "偏冷"
     return "正常"
+
+
+# ---------------------------------------------------------------- 量能曲线（shared.db 只读）
+#
+# 这一处**破例读 shared.db**，理由只有一条：图上那条线是原件（每周换手率序列），
+# `results.db.market_regime` 一周只有一行结论，凑不出 260 根周线。`moats()` /
+# `financials()` 已经是同一个先例，三条约定照抄：只读（`mode=ro`）、打不开就返回空、
+# 页面降级成"没有这张图"而不是 500。
+#
+# **自动延续**：序列直接来自 `market_index_week`。每周跑 `run.py all`，那一步会把
+# 新周线 upsert 进表；图下次刷新就自己往右长一根，没有任何人需要手工补点、补日期。
+
+TURNOVER_WEEKS = 260
+"""画多少根周线 = 5 年。
+
+注意：这个窗口只管画多点历史，不再决定"地量/天量"那条线。分位仍算出来当参考值，
+图上不画。
+"""
+
+TURNOVER_DRY_LINE = 1.0
+TURNOVER_LOW_MULT = 0.9
+TURNOVER_HIGH_MULT = 1.1
+TURNOVER_HOT_MULT = 1.5
+TURNOVER_HEAVY_WIN = 52
+_EPS = 1e-9                    # 取整时抵掉浮点噪声（与 rules 同值，别单独调）
+"""量能分档的口径，与 `stock_market_trend.rules` 同值（副本）。
+
+地量线是一个固定数（1%）；缩量线 / 放量线 / 天量线都不是数，而是
+`近 52 周中位数 × 0.9 / × 1.1 / × 1.5`（前两条取整到 0.1%，天量线向上取整到
+0.5%）——所以它们逐周不同，图上是**三条跟着市场起伏的折线**，不是平线。
+四条线全部从同一个水位派生，市场整体缩量或放量时一起漂，不用人工校准。
+`tests/test_web.py` 有一条断言把两边的常量与算法钉在一起，改一边不改另一边会挂测试。
+"""
+
+
+def _median(values: list[float]) -> float:
+    v = sorted(values)
+    n = len(v)
+    return v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2
+
+
+def _running_week(day: str, today: str | None = None) -> bool:
+    """这根周线是不是「本周还没走完」（判据与 `rules.split_partial` 一致）。
+
+    东财周K 在周中会给一根**当周至今**的 bar：close 是当天收盘（画价格没问题），
+    但 volume/turnover 只累计了几天。周中跑 `run.py all` 时，最后一根就是它。
+    这里只用来在图上把它标出来（空心点 + 悬停提示），不参与档位判定——
+    判定那边 `rules.split_partial` 已经把它摘掉了。
+    """
+    ref = today or dt.date.today().isoformat()
+    try:
+        if day > ref:
+            return False
+        a = dt.date.fromisoformat(day).isocalendar()[:2]
+        b = dt.date.fromisoformat(ref).isocalendar()[:2]
+        return a == b and dt.date.fromisoformat(ref).weekday() < 4
+    except ValueError:
+        return False
+
+
+def _volume_lines(values: list[float]) -> dict | None:
+    """三条线，取法与 `rules.volume_lines` 逐字一致（含取整方向与被地量线兜住）。"""
+    win = values[-TURNOVER_HEAVY_WIN:]
+    if len(win) < TURNOVER_HEAVY_WIN // 2:
+        return None
+    m = _median(win)
+    low = max(TURNOVER_DRY_LINE,
+              math.floor(m * TURNOVER_LOW_MULT * 10 + _EPS) / 10)
+    high = max(low, math.ceil(m * TURNOVER_HIGH_MULT * 10 - _EPS) / 10)
+    return {"low": low, "high": high,
+            "heavy": math.ceil(m * TURNOVER_HOT_MULT * 2 - _EPS) / 2}
+
+
+def _heavy_line(values: list[float]) -> float | None:
+    """只要天量线时的简写。"""
+    lines = _volume_lines(values)
+    return None if lines is None else lines["heavy"]
+
+
+def _quantile(values: list[float], pct: float) -> float:
+    """窗口内的 pct 分位值——取法与 `rules._quantile` 逐字一致。"""
+    v = sorted(values)
+    return v[max(0, min(len(v) - 1, int(len(v) * pct / 100) - 1))]
+
+
+def turnover_series(n: int = TURNOVER_WEEKS, db: str | Path | None = None,
+                    today: str | None = None) -> dict:
+    """沪深300 最近 n 周换手率 + 逐周三档线 + 周收盘价。读不到就给空壳。
+
+    `dry_line` 是一个数（1%）；`low` / `high` / `heavy` 都是**逐周**的值——
+    缩量线 / 放量线 / 天量线 = 该周往前 52 周的换手中位数 × 0.9 / 1.1 / 1.5，
+    所以图上它们是三条跟着市场起伏的折线。`q10` / `q90` 只是同期分位，
+    留给需要"排第几"的地方参考，图上不画。
+
+    收盘价是给同一张图画「价」用的：量能和价格共用一根时间轴，
+    才能看出放量到底是涨着放还是跌着放。
+
+    `partial_index` 指向「本周还没走完」的那根（周中才有，周五盘后为 None）。
+    它照样画（价格是真的），但量能不能按它判，页面上画成空心点、悬停说明。
+    """
+    empty = {"weeks": [], "q10": None, "q90": None, "q95": None,
+             "dry_line": TURNOVER_DRY_LINE,
+             "low_line": None, "high_line": None, "heavy_line": None,
+             "low_series": [], "high_series": [], "heavy_series": [],
+             "median52": None, "partial_index": None,
+             "n": 0, "latest": None, "latest_value": None,
+             "latest_close": None, "close_min": None, "close_max": None}
+    p = Path(db or SHARED_DB)
+    if not p.exists():
+        return empty
+    try:
+        conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return empty
+    try:
+        # 多取 52 行再截掉：最早画出来的那根周线，它的三条线也要有完整的 52 周
+        # 窗口，否则图的左端会是一段"窗口不够、线偏低"的假台阶。
+        rows = conn.execute(
+            "select date, turnover, pct_chg, close from market_index_week "
+            "where symbol='sh000300' and turnover is not null "
+            "order by date desc limit ?",
+            (int(n) + TURNOVER_HEAVY_WIN,)).fetchall()
+    except sqlite3.Error:
+        return empty
+    finally:
+        conn.close()
+    if not rows:
+        return empty
+
+    rows.reverse()
+    vals = [float(t) for _, t, _, _ in rows]
+    total = len(rows)
+    # 最后一根如果是「本周至今」，它自己的三天换手不能参与自己的 52 周中位——
+    # 那是拿一天的量去拉低水位。按"不含它自己"算，等于这条线停在上一完整周，
+    # 与 `rules.split_partial` 摘掉它再判的口径完全一致。
+    part_idx = total - 1 if _running_week(str(rows[-1][0]), today) else None
+    lines = [_volume_lines(vals[:i] if i == part_idx else vals[:i + 1])
+             for i in range(total)]
+    low = [None if x is None else x["low"] for x in lines]
+    high = [None if x is None else x["high"] for x in lines]
+    heavy = [None if x is None else x["heavy"] for x in lines]
+    cut = slice(-int(n), None)
+    rows, vals = rows[cut], vals[cut]
+    low, high, heavy = low[cut], high[cut], heavy[cut]
+    # 截断后再把下标挪回窗口内
+    part_idx = None if part_idx is None else part_idx - max(0, total - len(rows))
+    closes = [float(c) for _, _, _, c in rows if c is not None]
+    recent = vals[-TURNOVER_HEAVY_WIN:]
+    return {
+        "weeks": [{"date": str(d), "turnover": round(float(t), 2),
+                   "pct_chg": None if c is None else round(float(c), 2),
+                   "close": None if k is None else round(float(k), 2)}
+                  for d, t, c, k in rows],
+        "q10": round(_quantile(vals, 10), 2),
+        "q90": round(_quantile(vals, 90), 2),
+        "q95": round(_quantile(vals, 95), 2),
+        "dry_line": TURNOVER_DRY_LINE,
+        "low_line": low[-1],
+        "high_line": high[-1],
+        "heavy_line": heavy[-1],
+        "low_series": low,
+        "high_series": high,
+        "heavy_series": heavy,
+        "median52": round(_median(recent), 2) if len(recent) >= 26 else None,
+        "partial_index": part_idx,
+        "n": len(rows),
+        "latest": str(rows[-1][0]),
+        "latest_value": round(float(rows[-1][1]), 2),
+        "latest_close": None if rows[-1][3] is None else round(float(rows[-1][3]), 2),
+        "close_min": round(min(closes), 2) if closes else None,
+        "close_max": round(max(closes), 2) if closes else None,
+    }
 
 
 def batches(conn, limit: int = 52) -> list[dict]:

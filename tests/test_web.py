@@ -215,7 +215,11 @@ class TestRegimeHistory(WebCase):
 
         filtered = client.get("/trend?start=2026-11-20").get_data(as_text=True)
         self.assertIn("2026-11-20", filtered)
-        self.assertNotIn("2026-11-13", filtered, "start 之后的旧周不该出现")
+        # 只看表：页面上方那张量能图是固定的 5 年背景，不受日期筛选影响
+        # （筛选筛的是"周记"，而图是"量能的参照系"），所以断言得落在表格里，
+        # 不能拿整页 HTML 判"这个日期不出现"。
+        table = filtered.split('class="grid regime-history"', 1)[1].split("</table>", 1)[0]
+        self.assertNotIn("2026-11-13", table, "start 之后的旧周不该出现在表里")
 
     def test_home_links_to_full_history(self):
         self._seed("2026-11-20")
@@ -940,10 +944,20 @@ class TestNavAndLinks(WebCase):
         self.assertIn("数据流转与筛选条件", html)
         self.assertIn('<a class="flow-back" href="/batches"', html)
         self.assertTrue(html.rstrip().endswith("</html>"))
-        # 图里那条「打开纯 SVG」是相对链接，得有个路由接得住，不能 404
-        svg = self.client().get("/dataflow.svg")
-        self.assertEqual(svg.status_code, 200)
-        self.assertIn("svg", svg.headers.get("Content-Type", ""))
+
+    def test_dataflow_has_no_svg_sidecar(self):
+        """纯 SVG 副本已下线（2026-11-23 删除 dataflow.svg），页面只留自包含 HTML。
+
+        以前吸顶条上有一条「打开纯 SVG」的相对链接，`/dataflow.svg` 是给它接住的；
+        正文改成 HTML 之后那条链接没了、文件也删了，路由跟着一起删。这里钉三件事，
+        免得哪天又长回来：正文不引用、正文不拉外链、那个路径已经不响应。
+        """
+        html = self.client().get("/dataflow").get_data(as_text=True)
+        self.assertNotIn("dataflow.svg", html)
+        # 自包含：样式内联，没有外部 CSS / JS / 图片的引用
+        self.assertNotIn("<link ", html)
+        self.assertNotIn("<script src=", html)
+        self.assertEqual(self.client().get("/dataflow.svg").status_code, 404)
 
     def test_select_names_are_not_links(self):
         """选股页的名称不点：那一页看的是"名单和排序依据"，不需要跳走。"""
@@ -1296,6 +1310,189 @@ class ContractLiabilityTest(unittest.TestCase):
     def test_zero_prev_is_not_divided_by_zero(self):
         v = self._call({"cl": 2e8, "cl_prev": 0.0, "rev_q": 5e8})
         self.assertIsNone(v["yoy"])
+
+
+class TurnoverSeriesTest(unittest.TestCase):
+    """`/trend` 顶部那张量能图的数据源。
+
+    这张图是页面上**唯一**读 `shared.db` 的地方（其余都读 `results.db`），
+    所以两条底线要钉住：只取最后 N 周；文件/表缺失时返回空壳，让页面少画一张图，
+    而不是 500。
+    """
+
+    def _make_shared(self, n: int = 200) -> str:
+        import datetime as dt
+        import sqlite3
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        conn = sqlite3.connect(path)
+        try:
+            conn.execute("create table market_index_week(symbol text, date text, "
+                         "turnover real, pct_chg real, close real)")
+            start = dt.date(2020, 1, 3)
+            conn.executemany(
+                "insert into market_index_week values(?,?,?,?,?)",
+                [("sh000300", (start + dt.timedelta(weeks=i)).isoformat(),
+                  float(i % 50 + 1), 0.5, 3000.0 + i * 3) for i in range(n)])
+            conn.commit()
+        finally:
+            conn.close()
+        return path
+
+    def test_takes_last_n_weeks(self):
+        from web import db as webdb
+        path = self._make_shared(200)
+        try:
+            out = webdb.turnover_series(n=156, db=path)
+        finally:
+            os.remove(path)
+        self.assertEqual(out["n"], 156)
+        self.assertEqual(out["latest"], out["weeks"][-1]["date"])
+        self.assertGreater(out["latest"], out["weeks"][0]["date"])
+
+    def test_quantiles_are_ordered(self):
+        """三条线必须 q10 < q90 ≤ q95，否则图上的虚线会自己交叉。"""
+        from web import db as webdb
+        path = self._make_shared(200)
+        try:
+            out = webdb.turnover_series(n=156, db=path)
+        finally:
+            os.remove(path)
+        self.assertLess(out["q10"], out["q90"])
+        self.assertLessEqual(out["q90"], out["q95"])
+
+    def test_lines_match_rules(self):
+        """图上的三条线必须和 `rules` 的分档口径逐字相同。
+
+        两边各存一份（web 不 import 命令行包），所以要用测试把它们钉在一起：
+        地量线比常量，另外三条比**算法**——它们都是逐周现算的，不是一个数。
+        """
+        from stock_market_trend import rules
+        from web import db as webdb
+        self.assertEqual(webdb.TURNOVER_DRY_LINE, rules.TURNOVER_DRY)
+        self.assertEqual(webdb.TURNOVER_LOW_MULT, rules.TURNOVER_LOW_MULT)
+        self.assertEqual(webdb.TURNOVER_HIGH_MULT, rules.TURNOVER_HIGH_MULT)
+        self.assertEqual(webdb.TURNOVER_HOT_MULT, rules.TURNOVER_HOT_MULT)
+        self.assertEqual(webdb.TURNOVER_HEAVY_WIN, rules.TURNOVER_HEAVY_WIN)
+        path = self._make_shared(120)
+        try:
+            out = webdb.turnover_series(n=80, db=path)
+        finally:
+            os.remove(path)
+        self.assertEqual(out["dry_line"], rules.TURNOVER_DRY)
+        turns = [w["turnover"] for w in out["weeks"]]
+        lines = rules.volume_lines(turns)
+        self.assertEqual(out["heavy_line"], lines["heavy"])
+        self.assertEqual(out["low_line"], lines["low"])
+        self.assertEqual(out["high_line"], lines["high"])
+
+    def test_lines_are_per_week(self):
+        """三条线逐周不同：图上是三条跟着水位走的折线，不是平线。"""
+        from web import db as webdb
+        path = self._make_shared(200)
+        try:
+            out = webdb.turnover_series(n=60, db=path)
+        finally:
+            os.remove(path)
+        for key in ("low_series", "high_series", "heavy_series"):
+            self.assertEqual(len(out[key]), out["n"], key)
+        self.assertEqual(out["heavy_line"], out["heavy_series"][-1])
+        self.assertEqual(out["low_line"], out["low_series"][-1])
+        self.assertEqual(out["high_line"], out["high_series"][-1])
+        self.assertLessEqual(out["low_line"], out["high_line"])
+        self.assertLessEqual(out["high_line"], out["heavy_line"])
+        self.assertIsNotNone(out["median52"])
+
+    def test_running_week_is_flagged(self):
+        """本周还没走完的那根要标出来：`partial_index` 指到最后一根。
+
+        它照样画（价格是真的），但不能按它判量能档位——0.61% 只累计了周一一天。
+        """
+        import datetime as dt
+        import sqlite3
+        from web import db as webdb
+
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        last = "2026-11-23"                       # 周一
+        start = dt.date.fromisoformat(last) - dt.timedelta(weeks=79)
+        conn = sqlite3.connect(path)
+        try:
+            conn.execute("create table market_index_week(symbol text, date text, "
+                         "turnover real, pct_chg real, close real)")
+            conn.executemany(
+                "insert into market_index_week values(?,?,?,?,?)",
+                [("sh000300", (start + dt.timedelta(weeks=i)).isoformat(),
+                  2.0 if i < 79 else 0.61, 0.1, 3900.0 + i) for i in range(80)])
+            conn.commit()
+            mid = webdb.turnover_series(n=80, db=path, today="2026-11-23")
+            done = webdb.turnover_series(n=80, db=path, today="2026-11-27")
+        finally:
+            conn.close()
+            os.remove(path)
+        self.assertEqual(mid["partial_index"], mid["n"] - 1)
+        self.assertEqual(done["partial_index"], None)
+
+    def test_running_week_matches_rules(self):
+        """「本周至今」的判据必须和 `rules.split_partial` 一致，两边各存一份。"""
+        from stock_market_trend import rules
+        from web import db as webdb
+        cases = [("2026-11-23", "2026-11-23"),   # 周一：未走完
+                 ("2026-11-23", "2026-11-27"),   # 同一周的周五：走完
+                 ("2026-11-23", "2026-11-29"),   # 周日：走完
+                 ("2026-11-23", "2026-12-01"),   # 下一周：走完
+                 ("2026-11-27", "2026-11-23")]   # 数据超前：不算
+        for day, today in cases:
+            with self.subTest(day=day, today=today):
+                weeks = [{"date": day, "turnover": 1.0}]
+                _, part = rules.split_partial(weeks, today)
+                self.assertEqual(part is not None, webdb._running_week(day, today))
+
+    def test_missing_file_returns_empty(self):
+        from web import db as webdb
+        out = webdb.turnover_series(db="/nonexistent/shared.db")
+        self.assertEqual(out["weeks"], [])
+        self.assertIsNone(out["q90"])
+        self.assertIsNone(out["latest"])
+        # 图还能画：地量线是常量，其余三条没有数据就不画
+        self.assertEqual(out["dry_line"], webdb.TURNOVER_DRY_LINE)
+        for key in ("low_line", "high_line", "heavy_line"):
+            self.assertIsNone(out[key], key)
+        for key in ("low_series", "high_series", "heavy_series"):
+            self.assertEqual(out[key], [], key)
+
+    def test_price_series_aligns_with_turnover(self):
+        """周收盘和换手必须同长同序——两条线共用一根横轴，错一位整张图就错。"""
+        from web import db as webdb
+        path = self._make_shared(200)
+        try:
+            out = webdb.turnover_series(n=156, db=path)
+        finally:
+            os.remove(path)
+        self.assertEqual(len(out["weeks"]), out["n"])
+        for w in out["weeks"]:
+            self.assertIsNotNone(w["close"])
+        self.assertEqual(out["latest_close"], out["weeks"][-1]["close"])
+        self.assertLessEqual(out["close_min"], out["close_max"])
+
+    def test_week_without_close_keeps_the_week(self):
+        """个别周没收盘价时点位给 null（图上是个断点），整周不能被吞掉。"""
+        import sqlite3
+        from web import db as webdb
+        path = self._make_shared(80)
+        try:
+            conn = sqlite3.connect(path)
+            conn.execute("update market_index_week set close=null where date="
+                         "(select max(date) from market_index_week)")
+            conn.commit()
+            conn.close()
+            out = webdb.turnover_series(n=60, db=path)
+        finally:
+            os.remove(path)
+        self.assertEqual(out["n"], 60)
+        self.assertIsNone(out["weeks"][-1]["close"])
+        self.assertIsNone(out["latest_close"])
+        self.assertIsNotNone(out["latest_value"])
 
 
 if __name__ == "__main__":

@@ -12,6 +12,53 @@
   </p>
 </section>
 
+{% if turnover.weeks %}
+<section class="panel">
+  <div class="regime-head">
+    <div>
+      <h2>量能背景 · 沪深300 周换手率 & 周线</h2>
+      <p class="sub">
+        近 {{ turnover.n }} 周（约 {{ turnover.n // 52 }} 年），取自 <code>shared.db</code> 的周K原件
+        （表里只有结论，没有 {{ turnover.n }} 根周线）。<b>左轴</b>是周换手率，<b>右轴</b>是同期的周收盘点位——
+        两条腿共用一根时间轴，放量到底是涨着放还是跌着放，一眼能看出来。
+        四条线全部由一个水位派生：<b>近 52 周换手中位数</b>（当前
+        {{ turnover.median52 }}%）。地量线固定在 {{ turnover.dry_line }}%（换手率缩不下去，
+        十年 10% 分位一直在这个数附近，不用动）；往上三条都<b>逐周现算</b>——
+        缩量线 ×0.9（当前 {{ turnover.low_line }}%）、放量线 ×1.1
+        （{{ turnover.high_line }}%）、天量线 ×1.5（{{ turnover.heavy_line }}%）。
+        所以市场整体抬到 3%，三条线一起上移；回落到 1.5%，一起下移，不需要人校准。
+        表格里每一行的「量能」都按<b>各自基准日</b>的线算，图例上的数字是本周的。
+        分位（近 5 年排第几）仍在悬停里给出来当参考。
+        周中打开这张图时，最右那根是<b>空心点</b>——它只累计了几个交易日的量
+        （价格是真的，量能不是），所以量能档位不判它、按上一完整周算。
+        每周跑一次 <code>run.py all</code>，右端价、量各长一根，不用手工补点。
+        这张图是<b>固定背景</b>，不随下面的日期筛选变化。
+      </p>
+    </div>
+    <div class="regime-when">
+      最新 <b>{{ turnover.latest }}</b>
+      {% if turnover.partial_index is not none %}<span class="chip partial">本周未走完</span>{% endif %}
+      · 换手 <b>{{ turnover.latest_value }}%</b>
+      {% if turnover.latest_close %}· 收 <b>{{ '%.2f'|format(turnover.latest_close) }}</b>{% endif %}
+    </div>
+  </div>
+
+  <div class="turn-legend">
+    <span><i class="ln"></i>周换手率（左轴）</span>
+    <span><i class="ln price"></i>沪深300 周收盘（右轴）</span>
+    <span><i class="dash dry"></i>地量线 {{ turnover.dry_line }}%（固定，≤ 即地量）</span>
+    <span><i class="dash cool"></i>缩量线（中位 ×0.9，当前 {{ turnover.low_line }}%）</span>
+    <span><i class="dash warm"></i>放量线（中位 ×1.1，当前 {{ turnover.high_line }}%）</span>
+    <span><i class="dash hot"></i>天量线（中位 ×1.5，当前 {{ turnover.heavy_line }}%）</span>
+    <span><i class="dot hot"></i>天量</span>
+    <span><i class="dot warm"></i>放量</span>
+    <span><i class="dot cool"></i>缩量</span>
+    <span><i class="dot dry"></i>地量</span>
+  </div>
+  <div class="turn-wrap"><canvas id="turnChart"></canvas></div>
+</section>
+{% endif %}
+
 <section class="panel">
   <div class="regime-head">
     <div>
@@ -78,7 +125,9 @@
             {{ w.below_na_pct if w.below_na_pct is not none else '—' }}{% if w.below_na_pct is not none %}%{% endif %}
           </td>
           <td class="tip" title="{{ w.tips.volume }}">
-            {% if w.volume_dry is none %}—{% else %}{{ '地量' if w.volume_dry else '未地量' }}{% endif %}
+            {% if w.volume_state %}<span class="chip {{ w.volume_state|tone }}">{{ w.volume_state }}</span>
+            {%- if w.partial_week %} <span class="chip partial">未走完</span>{% endif %}
+            {%- elif w.volume_dry is none %}—{% else %}{{ '地量' if w.volume_dry else '未地量' }}{% endif %}
           </td>
           <td>{{ w.computed_at|clock }}</td>
         </tr>
@@ -98,4 +147,151 @@
   {% endif %}
 </section>
 
+{% endblock %}
+
+{% block scripts %}
+{% if turnover.weeks %}
+<script>
+(function(){
+  const T = {{ turnover|tojson }};
+  const box = document.getElementById('turnChart');
+  if (!box) return;
+  const labels = T.weeks.map(function(w){ return w.date.slice(2); });
+  const vals = T.weeks.map(function(w){ return w.turnover; });
+  const price = T.weeks.map(function(w){ return w.close; });
+  const hasPrice = price.some(function(v){ return v !== null; });
+  const lastIdx = vals.length - 1;
+  // 「本周还没走完」的那根：价格是真的，成交量/换手只累计了几天 → 档位不判。
+  const partIdx = (T.partial_index === null || T.partial_index === undefined) ? -1 : T.partial_index;
+  // 三条线都是逐周的（近一年中位 ×0.9 / ×1.1 / ×1.5），地量线是一个固定数——
+  // 判定必须用当周那根线，不能拿"当前线"去 judge 五年历史。
+  const series = function(arr, now){
+    return arr && arr.length === vals.length ? arr : labels.map(function(){ return now; });
+  };
+  const low = series(T.low_series, T.low_line);
+  const high = series(T.high_series, T.high_line);
+  const heavy = series(T.heavy_series, T.heavy_line);
+  const COLOR = {hot: '#b45309', warm: '#f59e0b', calm: '#1d4ed8',
+                 cool: '#0d9488', dry: '#047857'};
+  const kind = function(v, i){
+    if (i === partIdx) return 'partial';
+    if (v <= T.dry_line) return 'dry';
+    const h = heavy[i];
+    if (h !== null && v >= h) return 'hot';
+    const lo = low[i], hi = high[i];
+    if (lo !== null && v < lo) return 'cool';
+    if (hi !== null && v >= hi) return 'warm';
+    return 'calm';
+  };
+  const dot = function(v, i){
+    const k = kind(v, i);
+    return (k === 'calm' || k === 'partial') ? 'transparent' : COLOR[k];
+  };
+  const flat = function(v){ return labels.map(function(){ return v; }); };
+  const money = function(v){
+    return v.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0});
+  };
+  // 分位只当参考值：档位由四条线决定，不看排第几。
+  const sortedVals = vals.slice().sort(function(a, b){ return a - b; });
+  const rank = function(v){
+    let n = 0;
+    for (let i = 0; i < sortedVals.length; i++) { if (sortedVals[i] < v) n++; }
+    return Math.round(n / sortedVals.length * 100);
+  };
+  const nn = function(arr){ return arr.filter(function(v){ return v !== null; }); };
+  const yMax = Math.max(Math.max.apply(null, vals),
+                        Math.max.apply(null, nn(heavy).concat([0])),
+                        T.q90 || 0) * 1.12;
+
+  const sets = [];
+  if (hasPrice) {
+    sets.push(
+      {label: '沪深300 周收盘', data: price, yAxisID: 'y1',
+       borderColor: '#dc2626', borderWidth: 1.8, fill: false, tension: 0.2,
+       spanGaps: true,
+       pointRadius: function(c){ return c.dataIndex === lastIdx ? 4 : 0; },
+       pointBackgroundColor: '#dc2626', pointBorderColor: '#fff', pointBorderWidth: 1});
+  }
+  sets.push(
+      {label: '周换手率', data: vals, yAxisID: 'y',
+       borderColor: '#1d4ed8', borderWidth: 1.6,
+       backgroundColor: 'rgba(29,78,216,.06)', fill: true, tension: 0.25,
+       pointRadius: function(c){
+         const i = c.dataIndex;
+         return i === partIdx ? 4 : (i === lastIdx ? 4 : (kind(vals[i], i) === 'calm' ? 0 : 3));
+       },
+       pointBackgroundColor: function(c){
+         const i = c.dataIndex;
+         return i === partIdx ? '#ffffff' : (i === lastIdx ? '#1d4ed8' : dot(vals[i], i));
+       },
+       pointBorderColor: function(c){ return c.dataIndex === partIdx ? '#94a3b8' : '#fff'; },
+       pointBorderWidth: function(c){ return c.dataIndex === partIdx ? 2 : 1; }},
+      {label: '地量线', data: flat(T.dry_line), yAxisID: 'y', borderColor: '#047857', borderWidth: 1,
+       borderDash: [5, 4], pointRadius: 0, fill: false},
+      {label: '缩量线', data: low, yAxisID: 'y', borderColor: '#0d9488', borderWidth: 1,
+       borderDash: [2, 3], pointRadius: 0, fill: false, spanGaps: true},
+      {label: '放量线', data: high, yAxisID: 'y', borderColor: '#f59e0b', borderWidth: 1,
+       borderDash: [2, 3], pointRadius: 0, fill: false, spanGaps: true},
+      {label: '天量线', data: heavy, yAxisID: 'y', borderColor: '#b45309', borderWidth: 1,
+       borderDash: [5, 4], pointRadius: 0, fill: false, spanGaps: true});
+
+  new Chart(box, {
+    type: 'line',
+    data: {labels: labels, datasets: sets},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: {mode: 'index', intersect: false},
+      plugins: {
+        legend: {display: false},
+        tooltip: {callbacks: {
+          title: function(items){ return T.weeks[items[0].dataIndex].date + ' 那一周'; },
+          label: function(c){
+            if (c.dataset.yAxisID === 'y1') return '沪深300 ' + money(c.parsed.y);
+            return c.dataset.label + ' ' + c.parsed.y.toFixed(2) + '%';
+          },
+          afterBody: function(items){
+            const i = items[0].dataIndex;
+            const w = T.weeks[i];
+            const chg = w.pct_chg === null ? '—' : (w.pct_chg > 0 ? '+' : '') + w.pct_chg.toFixed(2) + '%';
+            if (i === partIdx) {
+              return ['周涨跌 ' + chg,
+                      '本周至今（未走完）：换手 ' + w.turnover.toFixed(2) + '%',
+                      '只累计了几个交易日，量能档位不判——等本周收盘'];
+            }
+            const k = kind(w.turnover, i);
+            const lo = low[i], hi = high[i], h = heavy[i];
+            const tag = k === 'hot' ? ('天量（≥ 天量线 ' + h + '%）')
+                       : k === 'warm' ? ('放量（≥ 放量线 ' + hi + '%）')
+                       : k === 'cool' ? ('缩量（< 缩量线 ' + lo + '%）')
+                       : k === 'dry' ? ('地量（≤ ' + T.dry_line + '%）')
+                                     : ('平稳（' + lo + '%~' + hi + '%）');
+            return ['周涨跌 ' + chg, tag,
+                    '水位：近 52 周中位 · 当前线 ' + lo + ' / ' + hi + ' / ' + h + '%',
+                    '参考：近 5 年 ' + rank(w.turnover) + '% 分位'];
+          }
+        }}
+      },
+      scales: {
+        y: {beginAtZero: true, suggestedMax: yMax, grid: {color: '#eef2f7'},
+            ticks: {color: '#6b778c', font: {size: 11},
+                    callback: function(v){ return v + '%'; }}},
+        y1: hasPrice
+            ? {position: 'right', beginAtZero: false, grace: '10%',
+               grid: {drawOnChartArea: false},
+               ticks: {color: '#dc2626', font: {size: 11}, maxTicksLimit: 6,
+                       callback: function(v){ return money(v); }}}
+            : {display: false},
+        x: {grid: {display: false},
+            ticks: {color: '#94a3b8', font: {size: 11}, maxRotation: 0,
+                    autoSkip: false,
+                    callback: function(value, i){
+                      const step = Math.ceil(labels.length / 9);
+                      return (i === labels.length - 1 || i % step === 0) ? labels[i] : '';
+                    }}}
+      }
+    }
+  });
+})();
+</script>
+{% endif %}
 {% endblock %}

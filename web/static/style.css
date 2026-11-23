@@ -166,9 +166,14 @@ table.grid tr.dim td{opacity:.55}
   font-weight:600;border:1px solid;white-space:nowrap;
 }
 .chip.warn{color:var(--warn);background:var(--warn-bg);border-color:#fcd9a4}
+/* hot 是 warn 的下一档：量能五档里「天量」用深橙，「放量」用 warn，拉开一级。 */
+.chip.hot{color:#7c2d12;background:#ffedd5;border-color:#fdba74}
 .chip.good{color:var(--good);background:var(--good-bg);border-color:#a7f3d0}
 .chip.info{color:var(--info);background:var(--info-bg);border-color:#bfdbfe}
 .chip.muted{color:#64748b;background:var(--muted-bg);border-color:#dbe3ed}
+/* 「未走完」：不是结论，是个状态标记——虚线边框，跟灰色的「平稳」区分开。 */
+.chip.partial{color:#94a3b8;background:#fff;border-color:#cbd5e1;border-style:dashed;
+  font-weight:500}
 .chip.ok{color:var(--ok);background:var(--ok-bg);border-color:#99f6e4}
 
 /* 综合评估：四条硬门槛并排的小方块。pass/fail/unknown 三色，
@@ -519,3 +524,22 @@ table.grid td .quote-link{white-space:nowrap;font-size:12px}
 .regime-history td.name{white-space:nowrap}
 .regime-history td.name small{color:#94a3b8;margin-left:4px}
 .regime-history td .chip{font-size:11.5px;padding:1px 7px}
+
+/* 量能曲线：图例写在图上方（Chart.js 自带那个太挤，还会挤掉纵轴宽度）。
+   高度写死 330px——周数变了不重排，跟其它页的 .chart-box.tall 一个手感。 */
+.turn-wrap{position:relative;height:330px;margin-top:4px}
+.turn-legend{display:flex;flex-wrap:wrap;gap:14px;margin:2px 0 10px;
+  font-size:11.5px;color:var(--muted)}
+.turn-legend span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.turn-legend .ln{width:16px;height:2px;background:var(--info);border-radius:1px}
+.turn-legend .ln.price{background:#dc2626}
+.turn-legend .dash{width:16px;height:0;border-top:2px dashed}
+.turn-legend .dash.dry{border-color:var(--good)}
+.turn-legend .dash.cool{border-color:var(--ok-line);border-top-style:dotted}
+.turn-legend .dash.warm{border-color:var(--warn-line);border-top-style:dotted}
+.turn-legend .dash.hot{border-color:var(--warn)}
+.turn-legend .dot{width:8px;height:8px;border-radius:50%}
+.turn-legend .dot.hot{background:#b45309}
+.turn-legend .dot.warm{background:#f59e0b}
+.turn-legend .dot.cool{background:#0d9488}
+.turn-legend .dot.dry{background:var(--good)}

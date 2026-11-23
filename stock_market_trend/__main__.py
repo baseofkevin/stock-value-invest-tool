@@ -9,6 +9,12 @@
 任何一路下载失败 → 退回 `shared.db` 里上一次成功的原件，结果行标 `stale=1`，
 页面横幅照实写"部分数据沿用上次"。**只有三路全都没有时才算失败**（退出码 2），
 不让一个 403 把整份周报拖没。
+
+基准日怎么用
+------------
+`--date` 是基准日，不只是标签：抓到的原件是全历史，`rules.judge(..., as_of=day)`
+按 `date <= day` 截断后再算。所以 `--date 2026-06-22` 得到的是 6 月那周真实的
+判断，而不是把今天的数贴到旧日期上。
 """
 
 from __future__ import annotations
@@ -54,8 +60,8 @@ def main(argv: list[str] | None = None) -> int:
         prog="python -m stock_market_trend",
         description="A股大势粗判：趋势 / 赔率 / 情绪，写 results.db.market_regime")
     ap.add_argument("--date", help="基准日 YYYY-MM-DD（默认今天；run.py 会传周五）。"
-                                   "**只是标签**：三路始终用截至最新的数据算，"
-                                   "拿它回填旧日期会把那一周的记录改成今天的数")
+                                   "三路只用这一天及以前的数据算——给旧日期就是回填"
+                                   "那一周，不会把今天的数贴到旧日期上")
     ap.add_argument("--recompute", action="store_true",
                     help="不联网，直接用 shared.db 里的原件重算（改阈值后用）")
     ap.add_argument("--json", dest="json_path", help="额外把结果写成 JSON")
@@ -93,10 +99,12 @@ def main(argv: list[str] | None = None) -> int:
         conn=raw, recompute=args.recompute)
 
     stale = any((s1, s2, s3, s4))
-    result = rules.judge(weeks=weeks, perf=perf, bonds=bonds, below=below)
+    result = rules.judge(weeks=weeks, perf=perf, bonds=bonds, below=below, as_of=day)
 
     if not any((result["trend"], result["valuation"], result["sentiment"])):
-        _warn("三路都没算出来，不写库")
+        first = min((str(r.get("date")) for series in (weeks, perf, bonds, below)
+                     for r in series if r.get("date")), default=None)
+        _warn(f"三路都没算出来，不写库（基准日 {day}；最早的原件是 {first}）")
         return 2
 
     store.save(result_db, day, result, stale=stale)
@@ -131,11 +139,20 @@ def _report(day: str, result: dict, stale: bool) -> None:
     else:
         print("  估值  —")
     if s:
-        dry = "—" if s["volume_dry"] is None else ("地量" if s["volume_dry"] else "未地量")
+        vol = s["volume_state"] or "—"
+        if s["turnover_pct"] is not None:
+            vol += f"（近5年 {s['turnover_pct']}% 分位，参考）"
+        part = s.get("partial_week")
+        if part:
+            # 本周还没走完：档位是按上一完整周判的，把这句说在前面，免得
+            # "周换手 2.70%" 和今天的盘面对不上。
+            vol += f"［本周未走完（{part['date']} 至今 {part['turnover']}%）；" \
+                   f"按 {part['prev_date']} 的完整周判］"
         turn = "—" if s["turnover"] is None else s["turnover"]
-        q10 = "—" if s["turnover_q10"] is None else s["turnover_q10"]
-        print(f"  情绪  破净 {s['below_na']}%（{s['below_na_pct']}% 分位）· {dry}"
-              f"（周换手 {turn}% vs 3年10%分位 {q10}%）")
+        heavy = "—" if s["heavy_line"] is None else s["heavy_line"]
+        print(f"  情绪  破净 {s['below_na']}%（{s['below_na_pct']}% 分位）· {vol}"
+              f"（周换手 {turn}% · 地量≤{s['dry_line']} 缩量<{s['low_line']} "
+              f"放量≥{s['high_line']} 天量≥{heavy}）")
     else:
         print("  情绪  —")
     print(f"  数据截至 {result['data_asof']} · 已写入 results.db（market_regime {day}）")

@@ -6,7 +6,7 @@
   <div class="eyebrow">HOME</div>
   <h1>首页</h1>
   <a class="hero-flow" href="/dataflow"
-     title="打开 dataflow.html：数据从哪来、落哪张表、被哪条规则筛，一张图画完">
+     title="打开 dataflow.html：数据从哪来、落哪张表、被哪条规则筛，一页写全">
     本项目代码执行流程<span class="arrow" aria-hidden="true">&rarr;</span>
   </a>
   <p>
@@ -76,9 +76,11 @@
       </div>
       <div class="s">全A破净率 · 近10年 {{ r.below_na_pct if r.below_na_pct is not none else '—' }}% 分位</div>
       <div class="s">
-        {% if r.volume_dry is none %}量能 — 
+        {% if r.volume_state %}量能 {{ r.volume_state }}{% if r.partial_week %}（本周未走完，按 {{ r.partial_week.prev_date }} 的完整周判）{% endif %}（周换手 {{ r.turnover or '—' }}%
+        · 缩量 &lt;{{ r.low_line ~ '%' if r.low_line is not none else '—' }} / 放量 ≥{{ r.high_line ~ '%' if r.high_line is not none else '—' }}）
+        {%- elif r.volume_dry is none %}量能 —
         {%- else %}{{ '地量' if r.volume_dry else '未地量' }}
-        （周换手 {{ r.turnover or '—' }}% vs 近3年10%分位 {{ r.turnover_q10 or '—' }}%）{% endif %}
+        （周换手 {{ r.turnover or '—' }}% vs 地量线 1%）{% endif %}
       </div>
       <div class="bar"><i class="info" style="width:{{ r.below_na_pct or 0 }}%"></i></div>
     </div>
@@ -105,7 +107,7 @@
             <td class="tip" title="{{ w.tips.trend }}"><span class="chip {{ 'warn' if w.trend_state in ('空头确认', '偏弱') else ('good' if w.trend_state == '偏强' else 'muted') }}">{{ w.trend_state or '—' }}</span></td>
             <td class="n tip" title="{{ w.tips.erp }}">{{ w.erp_pct if w.erp_pct is not none else '—' }}{% if w.erp_pct is not none %}%{% endif %}</td>
             <td class="n tip" title="{{ w.tips.below }}">{{ w.below_na_pct if w.below_na_pct is not none else '—' }}{% if w.below_na_pct is not none %}%{% endif %}</td>
-            <td class="tip" title="{{ w.tips.volume }}">{% if w.volume_dry is none %}—{% else %}{{ '地量' if w.volume_dry else '未地量' }}{% endif %}</td>
+            <td class="tip" title="{{ w.tips.volume }}">{% if w.volume_state %}<span class="chip {{ w.volume_state|tone }}">{{ w.volume_state }}</span>{% if w.partial_week %} <span class="chip partial">未走完</span>{% endif %}{% elif w.volume_dry is none %}—{% else %}{{ '地量' if w.volume_dry else '未地量' }}{% endif %}</td>
           </tr>
           {% endfor %}
         </tbody>
