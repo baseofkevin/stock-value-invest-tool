@@ -62,9 +62,15 @@ python3 cycle_report.py --csv examples/示例-股票清单.csv --workers 4
 `/stock/<代码>/report/cycle` 原样吐出来。
 
 ```sql
-symbol name is_cycle gm_std_pp gm_cv elasticity elastic_label
-position_pct position_label payload        -- payload 是完整 JSON，含三判断的原始数值
+-- cycle_result，12 列，primary key(run_id, symbol)
+run_id symbol name is_cycle gm_std_pp gm_cv_pct gm_median_pct
+elasticity elastic_label position_pct position_label payload
+-- payload 是完整 JSON，含三判断的原始数值与徽章
 ```
+
+> ⚠️ 三个名字容易混：`decide()` 输出 dict 里叫 **`gm_cv`**（`{"cv","median","samples"}` 里取 `cv`），
+> 落库时改名 **`gm_cv_pct`**，同时把 `median` 落成 **`gm_median_pct`**。
+> 写 SQL 查库要用后者，读 `payload` 里的 decide 结果要用前者。
 
 同一基准日重跑时，库里已有的票直接复用（`--force` 才重算），所以"跑一半断了"
 再跑一遍不会重复取数。
@@ -91,9 +97,14 @@ python3 cycle_report.py --refresh-names
 | `--force` | 忽略库里已有结论全部重算（默认复用当天已有的） |
 | `--quiet` | 只输出错误 |
 | `--name NAME` | 覆盖报告里的公司名（单只模式） |
-| `--bundle JSON` | 离线重放快照（测试 / 无网时用） |
+| `--bundle JSON` | 离线重放快照（测试 / 无网时用，**只支持单只模式**） |
 | `--refresh-names` | 刷新本地股票名称表 `data/stock_names.csv` |
-| `--stats --sample 500` | 随机抽样只出统计，不产报告（校准阈值用） |
+| `--stats` | 抽样跑一遍只出统计（校准判断①），不产出报告 |
+| `--sample N` | 配合 `--stats`，随机抽样只数（默认 500） |
+| `--seed N` | 配合 `--stats`，随机种子（默认随机，**跑完会把用到的 seed 打印出来**，好复现） |
+
+`--stock` / `--csv` / `--from-select` 三选一（`add_mutually_exclusive_group(required=True)`）。
+`--stats` 与 `--sample` / `--seed` 是一组：只出统计、不落库，用来校准 `GM_STD_CYCLE`。
 
 ### 取数调优参数已删除
 
@@ -140,9 +151,19 @@ python3 cycle_report.py --refresh-names
 | 通道 | 条件 | 通过即判 |
 |---|---|---|
 | A（绝对） | `σ ≥ 5.0 pp` | 是 |
-| B（相对） | `CV = σ / |毛利率中位| ≥ 20%`，且 `毛利率中位 ≥ 5%`，且 `σ ≥ 2.0pp` | 是 |
+| B（相对） | `CV = σ / |毛利率中位| × 100 ≥ 20%`，且 `|毛利率中位| ≥ 5%`，且 `σ ≥ 2.0pp` | 是 |
 
-两条都不过 → 否。
+两条都不过 → 否。**边界是闭区间**：`σ` 恰好 5.0pp、`CV` 恰好 20% 都算周期股。
+
+两个 `na` 分支（`decide._decide_cycle`）：
+
+| 情形 | 标签 | 为什么 |
+|---|---|---|
+| `σ` 算不出来（有效季 < `GM_MIN_SAMPLES = 8`） | **`na`（—）** | 两条通道**都没有可靠输入**——注意 `gm_cv` 单独过线救不了它，因为 CV 的分母就是同一批毛利率 |
+| `CV` 为 `None`（中位太小 / 绝对波动太小 / 样本不足） | 不算 `na`，**只看通道 A** | 通道 B 只是"低毛利公司的补充尺子"，给不出结论时退回绝对口径是设计 |
+
+`channel` 记录是哪条通道过的（`"std"` / `"cv"`），两条都过记 `"std"`（绝对口径更权威）。
+它**不是第四个判断**，只是同一判断的归因，看板据此挂「相对波动」小标记。
 
 #### 两档到底是什么意思
 
@@ -156,15 +177,31 @@ python3 cycle_report.py --refresh-names
 最近 **8 季**，逐季算「营业利润**环比**增速 ÷ 营业收入**环比**增速」，取中位数。
 这就是经营杠杆 DOL 的经验估计。
 
-用**环比**不用同比：8 季里能凑出 7 个环比样本，同比只有 4 个，中位数更抗单季异常
-（`cycle/metrics.py` 的 `elasticity()` 里是 `quarters[i] / quarters[i-1]`）。
-而"营收长期不动时这个比值没意义"那一条另用**同比**中位数判断，见下表第三行。
+用**环比**不用同比：环比给的是"这一季相对上一季"，反映的是**边际**变化，而 DOL 的
+定义就是边际量之比。8 季窗口能凑出 **8 个**环比样本（`start = max(1, n − 8)`，
+`for i in range(start, n)` 共 8 轮，第一轮借 `quarters[start−1]` 当分母）——
+`cycle/metrics.py` 的 `elasticity_ratio()` 里是 `quarters[i] / quarters[i-1]`。
+同比同样能给 8 个样本（`_recent_revenue_growth()`：`quarters[i] / quarters[i-4]`），
+但那是"长期趋势"，会把季节性磨平，看不出边际杠杆。
+
+而"营收长期不动时这个比值没意义"那一条另用**同比**中位数判断，见下表第三、四行——
+问的是"这家公司一年里到底有没有在长"，用同比更贴题。
 
 | 结果 | 条件 |
 |---|---|
-| 弹性强 | 比值中位数 `≥ 2.0` 且比值可靠 |
+| 弹性强 | 比值中位数 `≥ 2.0`（`ELASTIC_RATIO_MIN`）且比值可靠 |
 | 弹性弱 | 比值中位数 `< 2.0` 且比值可靠 |
-| 比值不稳定 | 营收**同比**增速中位数 `< 3%`（分母趋零，比值无意义），或跨零样本占比 `> 1/3` |
+| 比值不稳定 | 跨零季度占**已入样**季度 `> 1/3`（`ELASTIC_ZERO_CROSS_MAX = 0.3333`，`reason="near_breakeven"`）；**或** 营收同比增速**中位数的绝对值** `< 3%`（`REV_MEDIAN_STABLE_MIN`，`reason="flat_revenue"`） |
+| `na`（—） | 比值算不出来（有效样本 < `RATIO_MIN_SAMPLES = 4`，`reason="insufficient"`）；**或** 拿不到营收增速（`reliable is None`，`reason="unknown"`） |
+
+**判定顺序不能换**：先看 `ratio is None` → 再判跨零占比（`near_breakeven`）→ 再判
+`reliable is False`（`flat_revenue`）→ 再判 `reliable is None`（`unknown`）→ 最后才比 2.0。
+把"跨零"放在 `reliable` 之前，是因为它的证据更直接（就是算不出来），
+而且它跟"营收够不够动"无关——一家营收波动剧烈的公司照样可能长期在盈亏平衡点附近。
+
+注意"跨零占比"的分母是**已进入样本的比值个数**，不是季度总数：被
+`|营收增速| < 0.5%` 或 `|比值| > 50` 过滤掉的季度本来就不参与中位数，
+算进分母会把比例稀释得失去意义。
 
 #### 三档到底是什么意思
 
@@ -177,22 +214,42 @@ python3 cycle_report.py --refresh-names
 
 ### 判断③ 在周期哪个位置 → 产能周转率的 10 年分位
 
-产能周转率 = **最近 4 季营收之和 ÷ 当季（固定资产 + 在建工程）**。
+产能周转率 = **最近 4 季营收之和（TTM） ÷ 当季（固定资产 + 在建工程）**。
 取最近 **40 季**（10 年）的**中位秩分位**。
+
+> 分子是 **TTM**（最近四季之和），不是"单季 × 4"——×4 会把淡旺季等比例放大，
+> 让分位系统性偏移。实现落在 `build._fill_capacity_turnover()`。
+> 分母是**固定资产 + 在建工程**，不是总资产：在建工程是"即将形成的产能"，
+> 不并进来就会把"刚投完还没转固"的公司判成产能没变。
 
 | 结果 | 条件 |
 |---|---|
-| 低位 | 分位 `< 40%` |
-| 中性 | 分位落在 40%–60%，**不出徽章** |
-| 高位 | 分位 `> 60%` |
-| 不适用 | 行业命中 `银行/保险/证券/多元金融` |
+| 低位 | 分位 `< 40%`（`POSITION_LOW_PCT`） |
+| 中性 | 分位落在 **40%–60%（含两端）**，**不出徽章** |
+| 高位 | 分位 `> 60%`（`POSITION_HIGH_PCT`） |
+| 不适用 | 行业命中 `银行/保险/证券/多元金融`（`FINANCIAL_INDUSTRY_KEYWORDS`） |
+| 不适用 | 分位算不出来：有效季 < `POSITION_MIN_SAMPLES = 8`，**或最新一季本身是 `None`** |
 
-同时给一个**方向标记**（不参与判断，只帮助解释）：
+> **两个边界都是开区间**：`pct = 40.0` 算中性、`pct = 60.0` 也算中性。
+> 中间地带不给标签是刻意的——40~60 这个区间里本来就没有信息。
+>
+> "最新一季是 `None`" 必须单独判：不能拿倒数第二季的值冒充当前，
+> 否则"最新数据缺失"会被静默显示成"还是上季的位置"。
+
+同时给一个**方向标记**（不参与判断，只帮助解释；`metrics.capacity_direction()`）：
 
 | 标记 | 条件 |
 |---|---|
-| 扩产中 | 近 8 季（2 年）总资产增长 `≥ 15%` 且营收不降 |
-| 产能在退 | 近 8 季总资产缩水 `≥ 5%` |
+| 扩产中（`expand`） | 近 `CAPACITY_TREND_QUARTERS = 8` 季「**固定资产 + 在建工程**」增长 `≥ 15%`，**且同期营收增长 ≥ 0** |
+| 产能在退（`shrink`） | 近 8 季同一口径的资产**缩水 ≥ 5%** |
+| 无标记（`flat` / `None`） | 其余；或季度数不足 8 季（返回 `None`，什么标记都不给） |
+
+> 注意是**「固定资产 + 在建工程」**，不是总资产——总资产里含应收、存货、货币资金，
+> 那些涨跌跟产能无关。窗口是"当前季 vs 8 季前那一季"，**实际跨 7 个季度**（约 1.75 年），
+> 文档里说"2 年"是取整。
+>
+> `expand` 额外要求营收不降：「营收跌 + 资产涨」更像"需求下滑时还在硬着头皮投"，
+> 这时说"扩产中"会误导人。
 
 #### 三档到底是什么意思
 
@@ -246,17 +303,23 @@ python3 cycle_report.py --refresh-names
 
 ## 参数全表
 
-全部阈值集中在 `config.py`。**一共 11 个判定阈值 + 5 个窗口**。
+全部阈值集中在 `config.py`。**一共 11 个判定阈值 + 5 个窗口 + 1 个跨期常量**。
 
-### 数据窗口
+### 数据窗口（5 个）
 
 | 名称 | 值 | 说明 |
 |---|---|---|
 | `HISTORY_QUARTERS` | 44 | 一次取的季度数：40 季（10 年）+ 4 季冗余（算同比） |
 | `WAVE_WINDOW_QUARTERS` | 20 | 判断① 毛利率标准差的窗口 = 5 年 |
-| `ELASTIC_WINDOW_QUARTERS` | 8 | 判断② 比值中位数的窗口 |
+| `ELASTIC_WINDOW_QUARTERS` | 8 | 判断② 环比比值 + 同比稳定性的窗口 |
 | `POSITION_WINDOW_QUARTERS` | 40 | 判断③ 分位的窗口 = 10 年 |
-| `YOY_PERIODS` | 4 | 同比 = 4 个季度前（只用于判断②的「不稳定」判定，比值本身是环比） |
+| `CAPACITY_TREND_QUARTERS` | 8 | 产能方向标记的窗口（当前季 vs 8 季前那季 = 跨 7 个季度） |
+
+### 一个跨期常量
+
+| 名称 | 值 | 说明 |
+|---|---|---|
+| `YOY_PERIODS` | 4 | 同比 = 4 个季度前。用于判断② 的"营收够不够动"以及判断③ 的合同负债同比；**比值本身是环比**，不受它影响 |
 
 ### 判定阈值（只有 11 个）
 
@@ -295,8 +358,8 @@ python3 cycle_report.py --refresh-names
 > 东北证券的 5pp 是「5 年窗口、**年度或滚动**口径」，本工具用**季度单季**毛利率，
 > 同一家公司的季度值通常更抖（季节性、收入确认节奏），直接照搬大概率偏高。
 >
-> - 做法：`--stats --sample 500`（固定 seed，可复现，约 13 分钟）看分布，
->   把命中率校准到 **20–40%**。
+> - 做法：`--stats --sample 500`（**默认随机 seed，但跑完会把 seed 打印出来**；要复现就加
+>   `--seed <那个数>`，约 13 分钟）看分布，把命中率校准到 **20–40%**。
 > - 高于 50% → 门槛太松，几乎人人都是周期股，失去区分力；
 >   低于 10% → 门槛太紧，真周期股被漏掉。
 > - **一次校准即可，不要反复调。** 调来调去的结果是「只有作者知道为什么命中」，
@@ -339,7 +402,7 @@ python3 cycle_report.py --refresh-names
 
 | 层级 | 内容 |
 |---|---|
-| 结果库 | 一只票一行：`is_cycle` / `gm_std_pp` / `gm_cv` / `elasticity` / `elastic_label` / `position_pct` / `position_label`，外加完整 `payload` |
+| 结果库 | 一只票一行：`is_cycle` / `gm_std_pp` / `gm_cv_pct` / `gm_median_pct` / `elasticity` / `elastic_label` / `position_pct` / `position_label`，外加完整 `payload` |
 | 看板「周期」页 | 毛利率 σ × 弹性散点（每点一只）、产能分位分布、逐只表 |
 | 看板单只页 | 三个判断 + 周期/弹性/位置三组档位含义（含 σ 算法） |
 | CLI 摘要 | 每只一行进度 + 结尾一行计数 |
@@ -530,21 +593,23 @@ fetch  →  build  →  metrics  →  decide  →  results.db
 python3 -m unittest discover -s tests -t .
 ```
 
-**全程离线**：共享库被 mock 成 `fake_hub()`，fixture 快照落盘。
+**全程离线**：共享库被 mock 成 `fake_hub()`，fixture 快照落盘（`tests/fixtures/`）。
 
-| 文件 | 覆盖 |
-|---|---|
-| `test_config_contract.py` | 参数契约、防漂移、输出目录、无直连上游 |
-| `test_codes.py` | 代码归一化、东方财富 URL |
-| `test_util.py` | stdev / median / 中位秩分位 |
-| `test_build.py` | 两表对齐、Q4 回推、日期校验 |
-| `test_metrics_cycle.py` | 判断① |
-| `test_metrics_elastic.py` | 判断②、分母保护、极值裁剪 |
-| `test_metrics_position.py` | 判断③、中位秩边界 |
-| `test_decide.py` | 阈值组合、金融企业、历史不足 |
-| `test_fetch.py` | 共享库契约（`EndDate`、`min_points=1`、空表重试）、bundle 重放、无直连上游 |
-| `test_fmt.py` | 数值格式化、边界保护（`nan`/`inf` → `—`）、展示不翻转标签 |
-| `test_cli.py` | 参数、退出码、批量编排、`--from-select` 与续跑 |
+**11 个文件，合计 419 项**（2026-11-23 实跑 `Ran 419 tests ... OK`）：
+
+| 文件 | 用例 | 覆盖 |
+|---|---:|------|
+| `test_decide.py` | 74 | 阈值组合、金融企业、历史不足、`na` 分支、枚举完备性 |
+| `test_cli.py` | 72 | 参数、退出码、批量编排、`--from-select` 与续跑 |
+| `test_util.py` | 46 | stdev / median / 中位秩分位 |
+| `test_metrics_position.py` | 37 | 判断③、中位秩边界 |
+| `test_metrics_elastic.py` | 36 | 判断②、分母保护、极值裁剪、跨零占比 |
+| `test_build.py` | 34 | 两表对齐、Q4 回推、日期校验 |
+| `test_fetch.py` | 29 | 共享库契约（`EndDate`、`min_points=1`、空表重试）、bundle 重放、无直连上游 |
+| `test_metrics_cycle.py` | 28 | 判断①（双通道 + 两个守卫） |
+| `test_codes.py` | 26 | 代码归一化、东方财富 URL |
+| `test_config_contract.py` | 26 | 参数契约、防漂移、无输出目录、无直连上游 |
+| `test_fmt.py` | 11 | 数值格式化、边界保护（`nan`/`inf` → `—`）、展示不翻转标签 |
 
 > 原版 `test_fetch.py` 里有 44 个用例测的是节流、退避分档、解析重试
 > —— 这些机制已迁到 `stock_data_fetch`，由共享库自己的测试覆盖。

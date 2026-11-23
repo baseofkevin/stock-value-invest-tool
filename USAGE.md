@@ -19,8 +19,9 @@
 | 补那一天的周期/质量/顶部 | `./run.py cycle --date X` 等三条 | `X`（那天必须有选股记录） |
 | 单只票看质量 | `./run.py quality --stock 600519` | 今天 / 上一交易日（**不能指定**） |
 | 单只票看顶部 | `./run.py top 600519 --date X` | `X` |
-| 拿自己的名单跑周期/质量 | `./run.py quality --csv 名单.csv` | **今天**（`--date` 会被忽略） |
+| 拿自己的名单跑周期/质量 | `./run.py quality --csv 名单.csv` | **运行当天**（不是交易日也算；`--date` 不会传给工具） |
 | 拿自己的名单跑顶部 | `./run.py top --csv 名单.csv --date X` | `X` |
+| 拿库里某天的名单跑顶部 | `./run.py top --from-select --date X` | `X`（`--from-select` 是**开关**，不接日期值） |
 | 忽略库里的结论重算 | 批量加 `--force`（top 用 `--refresh`） | 同上 |
 | 看结果 | `./run.py web` | — |
 | 拿全市场价格 + PE/PB/PS | `./run.py extreme --date 2026-11-17` | `2026-11-17`（**收盘后**才有） |
@@ -63,13 +64,20 @@
 | 工具 | `--date` 到底管什么 | 能不能回溯历史 |
 |---|---|---|
 | 选股 | **真数据日**：K 线截止、20 日换手分位、启动日全按它算 | ✅ 能，往前多少天都行 |
-| 周期弹性（批量） | **只是标签 + 续跑键**，数据一律取「最新交易日」 | ❌ 不能，回算是假的 |
-| 质量初筛（批量） | 同上（估值口径会自己印真实的 `price_date`） | ❌ 不能 |
+| 周期弹性（`--from-select` 批量） | **只是标签 + 续跑键**，数据一律取「最新交易日」 | ❌ 不能，回算是假的 |
+| 周期弹性（`--csv` 批量） | **连标签都不是**：`--date` 根本不传给工具，落库日期 = 运行当天自然日 | ❌ 不能 |
+| 质量初筛（`--from-select` 批量） | 同上（估值口径会自己印真实的 `price_date`） | ❌ 不能 |
+| 质量初筛（`--csv` 批量） | 同 `--csv` 那行：落库日期 = 运行当天自然日 | ❌ 不能 |
 | 顶部判断 | **真数据日**：`end = --date`，K 线窗口按它切 | ✅ 能 |
 
 意思是：你今天补跑 `./run.py quality --date 2026-11-06`，**标的是 11-06，算的是今天的数据**（现在 = 11-13 收盘）。
 弹性/质量主要吃季报，差别不大；但带价格的东西（周期位置分位、PE/PB 分位）会跟 11-06 当时不一致。
 **只有顶部判断补历史是真的。**
+
+> 这两行「`--csv` 连标签都不是」的差别很容易漏：`./run.py quality --csv 名单.csv --date 2026-11-06`
+> 在 `run.py` 里就**不把 `--date` 传给工具**（`run.py` 只在 `--from-select` 路径传日期），
+> 工具于是按 `datetime.now()` 落库。周日晚跑一批就成了「周日批」——见 §2 D。
+> 而 `--date` 本身仍会先过一遍交易日历校验，给个周末日期照样退 4。
 
 ### 1.3 看板上的一个格子 = `run` 表里的一行
 
@@ -108,7 +116,8 @@ cd /home/kevin/MyData/stock-value-invest-tool
 
 - **必须在 15:05 之后**。之前跑会退到上一个交易日，并打一行黄字提醒。
 - 工作日发现日历过期会**自动**跑一次 `build_calendar`（周末不自动，省一次无用请求）。
-- 屏幕只有五条进度条，其余全进 `logs/run-<时间戳>.log`。
+- 屏幕上是**五条进度条**（①–⑤），日历那一步只有触发时才多一行，其余全进 `logs/run-<时间戳>.log`。
+- 加了 `--web` 时流程跑完还有第 ⑥ 步：起看板（长驻，Ctrl-C 结束）。
 
 常用变体：
 
@@ -162,14 +171,18 @@ cd /home/kevin/MyData/stock-value-invest-tool
 
 1. `cycle_report.py` / `stock_report.py` 在 **CSV 模式下，基准日直接取运行当天的自然日**，
    不是交易日。周日晚跑一批，就成了「2026-11-15 批」。它压根不是"选股 → 下游"这条链上的一批。
-2. 那条链要求基准日是交易日。`./run.py select --date 2026-11-15`（周日）会直接报：
+2. 那条链要求基准日是交易日，而 `--date` 不给它机会去猜。`./run.py select --date 2026-11-15`（周日）会直接报：
 
 ```
-错误：基准日 2026-11-15 不是交易日；最近交易日为 2026-11-13
+错误：2026-11-15 不在交易日历里（日历 2014-11-07 .. 2026-11-23）。
+     周五 15:10 之后先跑：python3 -m stock_data_fetch.build_calendar
 ```
 
-3. 顶部判断也不行：`./run.py top --from-select --date 2026-11-15` 退 2（库里没有 11-15 的选股名单）；
-   喂 CSV 也不行——`--date 2026-11-15` 会被拿去真取 K 线，周末取不到 bar，整批报「当前无 K 线（可能停牌）」。
+并退 **4**（不是 2）。这类错改参数就能解决，所以单独一个退出码——见 §4。
+
+3. 顶部判断也不行：`./run.py top --from-select --date 2026-11-15` 同样是**退 4**，
+   日期在 `pick_date()` 就被拦下，根本走不到「查选股名单」那一步（那一步才退 2）。
+   喂 CSV 也一样：`--date 2026-11-15` 过不了日历校验，子进程根本不会启动。
 
 **结论：这种批次的「选股」和「顶部判断」补不上，别花时间。** 能做的是两件事：
 
@@ -195,9 +208,11 @@ cd /home/kevin/MyData/stock-value-invest-tool
 
 - 代码写法随便：`600519` / `sh600519` / `600519.SH` 都认。
 - **单只模式的基准日由程序自己定**（今天过了 15:05 用今天，否则上一交易日）。
-  `cycle` / `quality` 的 `--stock` **没有日期参数**：`run.py` 会把 `--date` 吃掉、只打一行
-  「ℹ️ 单只模式按 … 出报告（程序内部取今天或上一个交易日）」，也就是说
-  **`--date` 在这里不生效**，别拿它当回溯。只有 `top` 单只真的用 `--date`。
+  `cycle` / `quality` 的 `--stock` **没有日期参数**，所以 `run.py` 会在启动前先做一次一致性检查：
+  你给的 `--date` 跟程序会用的那一天**不一致就直接退 2**，并说清「本次为 X，不接受 --date Y」；
+  一致（或没给）才放行，并在日志里打一行「ℹ️ 单只模式按 X 出报告」。
+  也就是说 **`--date` 在这里不是"静默忽略"，而是"对不上就报错"**；`--date today|latest` 永远放行。
+  只有 `top` 单只真的用 `--date`。
   想按历史某天出报告：走批量（`--csv` / `--from-select`）。
 - 单只模式的输出是**整份报告直接打在屏幕上**（这是唯一不画进度条、不打进日志的路径）。
 - 单只结果 `kind='single'`，不进批次统计。个股页只摆**最近一次**那一份（批量或单只都算，
@@ -205,7 +220,13 @@ cd /home/kevin/MyData/stock-value-invest-tool
 
 ### F. 我自己有一份名单（持仓、自选、别人给的）
 
-CSV 只要有一列能认出代码就行（`代码` / `股票代码` / `证券代码` / `code`）。
+CSV 只要有一列能认出代码就行，三个工具认的列名略有差别（都**不区分大小写**，允许前后空格）：
+
+| 工具 | 认哪些列名 |
+|---|---|
+| `quality` | `代码` `股票代码` `证券代码` `股票` `code` `stock_code` `stockcode` `symbol` `ts_code` `sec_code` |
+| `cycle` | `代码` `股票代码` `证券代码` `code` `symbol` `secuCode` |
+| `top` | `代码` `股票代码` `证券代码` `code` `symbol` `股票编码` `证券编码`（名称列：`名称` `股票名称` `证券名称` `name` `简称`） |
 
 ```bash
 ./run.py quality --csv ~/MyData/持仓.csv --workers 8
@@ -214,9 +235,11 @@ CSV 只要有一列能认出代码就行（`代码` / `股票代码` / `证券�
 ./run.py quality --csv ~/MyData/持仓.csv --workers 2 --retries 0   # 上游不稳时快速跳过
 ```
 
-- `--csv` 与 `--stock` 二选一；`top` 的 `--csv` 与 `--from-select` 二选一。
-- **`cycle`/`quality` 走 CSV 时 `--date` 无效**，落库日期 = 今天（1.2 说的那个机制）。
+- `--csv` 与 `--stock` 二选一。`top` 的 `--csv` 与 `--from-select` 之间**没有互斥校验**：
+  两个都给时 `--from-select` 优先，CSV 被静默忽略——别同时给。
+- **`cycle`/`quality` 走 CSV 时 `--date` 不会传给工具**，落库日期 = 运行当天自然日（1.2 说的那个机制）。
   `top --csv` 不同，`--date` 是真基准日。
+- 重复代码只算第一次，其余标「重复」，**不算失败**、不影响退出码。
 - 大名单提并发：`--workers 8`（默认 4；`all` 里默认只用 2，为了不把上游打爆）。
 
 ### G. 跑挂了 / 中途 Ctrl-C / 想重算
@@ -289,19 +312,22 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 | 参数 | 作用 |
 |---|---|
 | `--date X` / `--no-calendar` | 指定基准日 / 不自动更新日历 |
-| `--skip-cycle` `--skip-quality` `--skip-top` | 跳过某一步 |
+| `--skip-cycle` `--skip-quality` `--skip-top` `--skip-trend` | 跳过某一步 |
 | `--strict` | 任何失败都停（默认：该步一只都没成功才停） |
 | `--keep-going` | 某步失败也继续 |
-| `--select-args` `--cycle-args` `--quality-args` `--top-args` | 字符串透传给对应工具 |
+| `--select-args` `--cycle-args` `--quality-args` `--top-args` `--trend-args` | 字符串透传给对应工具 |
 | `--top-workers` | 顶部并发，默认 4 |
 | `--web` `--host` `--port` | 看板相关（默认不起；`--no-web` 旧参数仍兼容） |
-| `-v` | 全量输出 |
+| `-v` / `--verbose` | 全量输出 |
 
-注意：`all` **不接受**未知参数（`parse_known_args` 之后会报错），要透传必须用上面四个 `--xxx-args`。
+注意两点：
+
+- `all` **不接受**未知参数（`parse_known_args` 之后会报错退 2），要透传必须用上面那几个 `--xxx-args`。
+- 透传值**按空格切分**（`text.split()`），所以带空格的路径要自己引在 `--csv` 那侧，或者别用透传。
 
 ### `select`
 
-`--date` `--no-calendar` `-v`，其余未知参数原样透传给 `stock_kline_screen`：
+`--date` `--no-calendar` `-v`，其余参数靠 `parse_known_args` 收集后原样透传给 `stock_kline_screen`：
 
 | 参数 | 默认 | 含义 |
 |---|---|---|
@@ -311,14 +337,22 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 | `--chg-lo` `--chg-hi` `--k-vol` `--ma60-gap` | 见 `params.py` | 涨幅区间、量能、偏离 MA60 的阈值 |
 | `--quiet` | — | 只报「粗筛池 → 入选」，名单去看板看（`all` 会自动加） |
 
-例：`./run.py select --date 2026-11-13 --n 2`（改成 3 日周期时）。
+> **⚠️ 透传有个坑，务必用 `=` 写**：`select` 子命令只声明了 `--date` / `--no-calendar`，
+> 于是 `--n 2` 里的 `--n` 会被 argparse 当成 `--no-calendar` 的**前缀缩写**吞掉
+> （`no_calendar=True`），剩下孤零零的 `2` 被当位置参数拼到 argv 里，工具直接报参数错。
+> 所以要么写 `--n=2`、`--turn-pct=0.4` 这种等号形式，要么走 `all --select-args "--n 2"`。
+
+```bash
+./run.py select --date 2026-11-13 --n=2            # 改成 3 日周期（等号形式）
+./run.py all --select-args "--n 2"                 # 或者在 all 里透传
+```
 
 ### `cycle` / `quality`
 
 | 参数 | 说明 |
 |---|---|
-| `--stock 代码` | 单只；不需要名单；`--date` 会被吃掉且**不生效** |
-| `--csv 文件` | 名单来自 CSV；`--date` 仅作标签且实际无效 |
+| `--stock 代码` | 单只；不需要名单；`--date` 与自动基准日不一致时**直接退 2**（见 §2 E） |
+| `--csv 文件` | 名单来自 CSV；`--date` 不传给工具，落库 = 运行当天 |
 | `--workers N` | 并发，默认 4（`all` 里默认 2） |
 | `--force` | 批量忽略库里已有结论重算 |
 | `--retries` `--retry-wait` `--timeout` | 仅 `quality`：取数重试次数（默认 2）、间隔（60s）、超时（90s） |
@@ -329,7 +363,7 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 | 参数 | 说明 |
 |---|---|
 | `代码...` | 单只或多只，可混写 |
-| `--from-select` | 批量：用库里当天的选股名单（**没有日期值**，日期由 `--date` 决定） |
+| `--from-select` | 批量：用库里当天的选股名单。**这是开关，不接日期值**，日期由 `--date` 决定（`./run.py top --from-select --date 2026-11-13`） |
 | `--csv 文件` | 批量：名单来自 CSV |
 | `--date X` | 真基准日（单只、批量都生效） |
 | `--workers N` `--refresh` | 并发 / 重取并重算 |
@@ -339,8 +373,12 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 ```bash
 ./run.py trend                       # 按最近交易日算
 ./run.py trend --date 2026-11-20     # 给指定基准日算
-./run.py trend --recompute           # 不联网，用 shared.db 的原件重算
+./run.py trend --recompute           # 只读 shared.db 原件重算，不取数
 ```
+
+> `--recompute` 的含义是「**不取四路数据**」，不是「完全离线」：日历过期时
+> `run.py` 仍会先跑一次 `build_calendar`（工作日），没有日历则直接退 4。
+> 真正会联网的是那一步，不是大势本身。
 
 三路信号**各算各的、不合成总分**：
 
@@ -389,7 +427,14 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 没有周线），每周跑一次价、量各往右长一根，不需要手工补点；它是**固定背景**，
 不随日期筛选变化。
 
-两个边界：三条线都要**完整的 52 周窗口**才算；档位本身还要攒满 60 周才给结论。
+三道闸的**周数门槛互不相同**，回填历史时最容易撞：
+
+| 要什么 | 至少几周 | 代码 |
+|---|---|---|
+| 趋势结论（MA20/MA60 + MA60 斜率） | **64 周**（MA60 + 4 周斜率） | `rules.trend()`，`MA_SLOW + SLOW_SLOPE_WEEKS` |
+| 量能五档（含四条线） | **60 周**：档位本身要 60 周才出，其中 `volume_lines()` 只要 **26 周**就能算出线（`TURNOVER_HEAVY_WIN // 2`） | `rules.sentiment()` / `rules.volume_lines()` |
+| 换手分位（`turnover_pct`，只作参考） | 60 周门槛内、窗口取近 5 年 260 周 | `TURNOVER_WIN` |
+
 所以回填到 2016 年上半年以前的行，`volume_state` 是 `null`，页面和 CLI 都显示 `—`，
 不硬造一根线。`turnover_pct` 也一样，都是相对**可得窗口**算的。
 
@@ -447,8 +492,12 @@ python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次�
 
 ### `/dataflow`：代码执行流程那页（由脚本生成）
 
-看板除导航那九页外还有两页只读的「说明书」：`/book`（原书全文）和 `/dataflow`
-（数据从哪来、落哪张表、被哪条阈值筛）。首页 hero 右上角那个入口就是后者。
+看板一共有 **13 条路由**，其中 **9 项在导航里**（首页 / 选股 / 周期 / 质量 / 顶部 /
+综合评估 / 冷热极点 / A股大势 / **`/book` 原书学习**），`/dataflow` 和
+`/stock/<代码>`（从表格里点名称进去）**不在导航里**。
+
+`/dataflow` 是那份「数据从哪来、落哪张表、被哪条阈值筛」的说明书，首页 hero
+右上角那个入口就是它。
 
 `/dataflow` 读的是**仓库根**的 `dataflow.html`，而那一页是**生成**的，别手改：
 
@@ -457,8 +506,12 @@ python3 scripts/gen_dataflow.py            # 重新生成仓库根的 dataflow.h
 python3 scripts/gen_dataflow.py --check    # 只比对：磁盘那份是不是最新的（不一致退出码 1）
 ```
 
-页面里写的几乎全是当前代码里的常量（18 张表、K=5、量能五档的水位线、ERP 95/80/20……），
+页面里写的几乎全是当前代码里的常量（**18 张表**、K=5、量能五档的水位线、ERP 95/80/20……），
 改完判定口径记得重跑一次——`--check` 就是给「改了代码忘了重画」用的。
+
+> 「18 张」指 `shared.db` 的**规范表**：13 张由数据层建、5 张由两个旁路包写
+> （`price` / `index_price` / `market_index_week` / `market_index_perf` / `market_macro`）。
+> 库里如果多出 `annotation_bak_*` 这类手工备份表，不计在内。
 
 2026-11-23 起不再产出 `dataflow.svg`：整页已是**自包含 HTML**（字号与画布宽度脱钩，
 放大、Ctrl+F、窄屏折行、打印分页都交给浏览器），纯 SVG 副本和对应的 `/dataflow.svg`
@@ -472,7 +525,7 @@ python3 scripts/gen_dataflow.py --check    # 只比对：磁盘那份是不是�
 |---|---|---|
 | 0 | 成功 | 继续下一步 |
 | 1 | 有票失败或数据层取数失败 | 有产出则继续；一只都没成功则停，汇总标 ⚠️ |
-| 2 | 用法错误：没有那天的选股名单、参数冲突、裸跑没给子命令 | 停 |
+| 2 | 用法错误：没有那天的选股名单、参数冲突、裸跑没给子命令、单只 `--date` 对不上 | 停 |
 | 3 | 选股 0 只（交接处拦下） | 停 |
 | 4 | 日期定不下来：`--date` 不在交易日历 / 没有日历 / 日历早于今天 | 第 0 步就停，任何取数都没发生 |
 | 130 | 用户 Ctrl-C | 停，已算完的已落库 |
@@ -485,6 +538,10 @@ python3 scripts/gen_dataflow.py --check    # 只比对：磁盘那份是不是�
 > 现在不用翻日志判断：`rc=4` 就是日期问题。
 >
 > 屏幕上的表现不变，仍然在任何取数之前打印「错误：X 不在交易日历里」。
+>
+> **3 有个历史遗留的歧义**：`stock_judge_top` 在 `preflight` 失败（数据层闸门没过）时
+> 也返回 3，这个码会原样冒泡成 `run.py` 的退出码，而 `run.py` 把 3 解释成「选股 0 只」。
+> `all` 里看不出来（两种都停），但脚本里判 `rc=3` 时要想到这两种可能。
 
 ---
 
@@ -494,14 +551,16 @@ python3 scripts/gen_dataflow.py --check    # 只比对：磁盘那份是不是�
 |---|---|---|
 | 首页某格一直 `未跑` | 那一批没有该工具的 `run` 记录 | 见 §2 C/D，按情景补 |
 | 补出来的周期/质量跟"当时"不一样 | `--date` 只是标签，数据取最新交易日 | 只把顶部判断当历史结论用；要严格复原得等工具支持 as-of |
-| 非交易日跑出一批"周日批" | CSV 模式基准日 = 运行当天自然日 | 复盘统一钉在周五（真实交易日） |
-| `select --date` 报"不是交易日" | 给了周末/节假日 | 换成最近交易日，或先 `build_calendar` |
+| 非交易日跑出一批"周日批" | CSV 模式落库日期 = 运行当天自然日 | 复盘统一钉在周五（真实交易日） |
+| `select --date` 报"不在交易日历里" | 给了周末/节假日 | 换成最近交易日，或先 `build_calendar`（退 4） |
+| `select --n 2` 报参数错 | `--n` 被 argparse 当成 `--no-calendar` 的缩写 | 写 `--n=2`，或 `all --select-args "--n 2"` |
+| `top --from-select 2026-11-06` 算的是今天 | `--from-select` 是开关，日期被当成股票代码后静默忽略 | 写成 `--from-select --date 2026-11-06` |
 | 产出了上一周的旧报告 | 日历没更新，`hub.target` 回落到上周边 | `python3 -m stock_data_fetch.build_calendar` |
 | 盘中跑，结论不对 | 15:05 前用的是半日数据 | 等收盘后再跑；补历史可用 `--date 上一交易日`，当日数据仍要等收盘 |
 | `extreme` 盘中报"上游没有这一天的数据" | 它取的是**收盘快照**，上游收盘后才发布 | 收盘后再跑；或显式 `--date 上一个交易日` |
 | `extreme` 跑完了但看板「冷热极点」没更新 | 只写了原件，复制品没同步 | `./run.py extreme --sync`（不联网），或 `--restat` 重算摘要 |
 | 下游报"没有 X 的选股名单" | 那天选股没跑，或 --date 与选股日不一致 | `./run.py select --date X` 先跑选股 |
-| 单只带 `--date`，报告却是今天的 | `run.py` 吃掉 `--date`，工具内部自己取最新交易日 | 要历史就走批量（`--csv` / `--from-select`） |
+| 单只带 `--date` 直接退 2 | `run.py` 先做一致性检查，对不上就拒绝启动 | 去掉 `--date`，或走批量（`--csv` / `--from-select`） |
 | `ModuleNotFoundError: config` | 直接 `python -m stock_cycle_elastic.cycle_report` 了 | 永远走 `./run.py`，它切好了 cwd |
 | 屏幕上什么都没有 | 明细只在日志里（设计如此） | 看 `logs/run-*.log`，或加 `-v` |
 | 改了一个数想让全批重算 | 默认会复用库里已有结论 | `--force`（top 用 `--refresh`） |
@@ -520,6 +579,7 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ./run.py menu                              # 菜单
 
 ./run.py select  --date 2026-11-13         # 选股（= 名单的源头）
+./run.py select  --date 2026-11-13 --n=2   # 同上，3 日周期（透传参数要用等号）
 ./run.py cycle   --date 2026-11-13         # 周期弹性批量（读 11-13 名单）
 ./run.py quality --date 2026-11-13         # 质量初筛批量（读 11-13 名单）
 ./run.py top --from-select --date 2026-11-13   # 顶部判断批量（读 11-13 名单）
@@ -531,8 +591,10 @@ cd /home/kevin/MyData/stock-value-invest-tool
 ./run.py quality --csv 名单.csv --workers 8    # 自备名单
 ./run.py top     --csv 名单.csv --date 2026-11-13
 
+./run.py trend                             # A股大势（写 results.db，不参与选股）
 ./run.py extreme                         # 全市场收盘快照（价 / PE / PB / PS），收盘后跑
 ./run.py extreme --restat                # 只重算冷热摘要，不联网
+./run.py extreme --sync                  # 原件 → 结果库补复制，不联网
 
 ./run.py web                               # 看板 http://127.0.0.1:5000
 ./run.py backup                            # 备份两个库

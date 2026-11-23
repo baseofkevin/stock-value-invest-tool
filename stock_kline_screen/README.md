@@ -7,7 +7,7 @@
 > - 版本：v2.0（`__version__ = "2.0.0"`，`RESULT_VERSION = "v2.0"`）
 > - 代码：本目录（`stock_kline_screen/`）
 > - 依赖：`../stock_data_fetch/`（共享数据层）+ 它建好的 `shared.db`
-> - 状态：4 个测试文件 **83 项全绿**；真实全链路（566 只候选池）尚未在源稳定窗口内跑完，见 §9.6
+> - 状态：5 个测试文件 **103 项全绿**（2026-11-23 实跑）；真实全链路（566 只候选池）尚未在源稳定窗口内跑完，见 §9.6
 
 数据层本身的设计、源矩阵、六道闸、节流参数都在 **`../stock_data_fetch/README.md`**，
 本文只讲这个工具：怎么跑、规则怎么落地、与原版差在哪、什么东西还没做对。
@@ -34,9 +34,9 @@ v2.0 改的只是「数据从哪来」，不是「怎么选」。
 | 横截面 | 逐日 `screen condition`，**服务端按规则筛** | `hub.scan_many(need)`，**全市场**，涨幅过滤在本地 |
 | ST | 服务端 `risk_st` 标签 | `scan` 行里的 `name` 含 `ST` |
 | 次新 | 服务端四桶标签（5 天/3 月/1 年/3 年）并集 | `stock.list_date`（`profile` 域，**惰性**：只查裁决后的幸存者） |
-| 日 K | 自管缓存 + 批内二分 + 5 轮退避 + 收尾核对 | `hub.ensure_many("kline", ...)`（配额/退避/覆盖全归 hub） |
-| 行情/市值 | `quote --date` + `screen NegotiableMV` | `hub.ensure_many("quote", ...)`（当期一份） |
-| 财务 | `data_finance` 三表 | `hub.ensure_many("finance", ...)`（20 期，单季列现成） |
+| 日 K | 自管缓存 + 批内二分 + 5 轮退避 + 收尾核对 | `hub.ensure_bulk("kline", …)` 整批补 + `ensure_many` 兜底（配额/退避/覆盖全归 hub） |
+| 行情/市值 | `quote --date` + `screen NegotiableMV` | `hub.ensure_bulk("quote", pool, …)`（40 只/请求，当期一份） |
+| 财务 | `data_finance` 三表 | `hub.ensure_many("finance", …)`（**44 期**，`min_points=20`；单季列现成） |
 | 行业 | `data_sector` 申万一级 + 二级 | `stock.industry`（**只有一级**，上游口径） |
 | 净流入 / 市值比 | `MainNetFlow@d*` 展示列 | **砍掉**（见 §1.3） |
 
@@ -138,23 +138,45 @@ MA20。但如果只看这个，名单里会混进「纯资金推动、基本面�
 
 ---
 
-## 2. 一次运行走九步
+## 2. 一次运行走十个子步骤
 
-`pipeline.run()` 的调用顺序（终端里的 `[n/6]` 是**沿用原版的六阶段编号**，
-实际有九个子步骤；`[1/6]` 前缀没打，基准日信息直接以缩进打印）：
+`pipeline.run()` 的实际调用顺序（终端里的 `[n/6]` 是**沿用原版的六阶段编号**，
+与真实步数无关；`[1/6]` 前缀没打，基准日信息直接以缩进打印）：
 
 | # | 函数 | 干什么 | 终端标记 |
 |---|---|---|---|
 | 1 | `_prepare` | 校验参数、定基准日 S、算覆盖窗口 `need`（K = n+1 个交易日） | （无前缀） |
 | 2 | `_load_cross` | `scan_many(need)` 取全市场，本地按涨幅区间粗筛，得 `pool` | `[2/6]` |
 | 3 | `_load_labels` | 按日查 `scan_cached`，名称含 `ST` 的进排除集（**零额外请求**） | `[3/6]` |
-| 4 | `_load_kline` | `ensure_many("kline", pool, 300 根/≥71 根)`，失败分两类处置 | `[4/6]` |
+| 4 | `_load_kline` | 先 `ensure_bulk("kline", pool, 300 根/≥71 根)` 整批补，剩下的再 `ensure_many` 兜底；失败分两类处置 | `[4/6]` |
 | 5 | `_select` | 逐只 `find_start` → `judge`，写下逐股去向 | `[5/6]` |
 | 5b | `_check_new` | 只对幸存者取 `profile`，用 `list_date` 剔次新 | （无前缀） |
-| 6 | `_enrich_market` | 取 `quote` → 算 20 日换手与池内分位 → 三条计数断言 | `[6/6]` |
+| 6 | `_enrich_market` | `ensure_bulk("quote", pool, ...)` 取**整个粗筛池**的行情 → 算 20 日换手与池内分位 → 三条计数断言 | `[6/6]` |
 | 7 | `_annotate_turnaround` | 取 `finance`，标注「毛利率改善」（只标注） | （无前缀） |
 | 8 | `_annotate_industry` | 用 `profile.industry` 填一级行业，缺的记「未分类」 | （无前缀） |
-| 9 | `_write` | 排序、写 `results.db`、终端摘要，收尾 `hub.prune_scan()` | （无前缀） |
+| 9 | `_write` | 排序、写 `results.db`、终端摘要 | （无前缀） |
+| 收尾 a | `hub.prune_scan()` | 清过期的横截面（`scan` 只留最近若干天），**失败不抛** | 无输出 |
+| 收尾 b | `hub.prune_kline()` | K 线只留最近 N 根，**失败不抛** | 无输出 |
+
+**第 4 步为什么要 `ensure_bulk` + `ensure_many` 两层**：`ensure_many` 是"逐只 `ensure`"的循环，
+逐只打上游会被压在 ~1 只/秒（单码请求 + 东财断连/腾讯 WAF 冷却），4304 只就是 1 小时以上；
+`ensure_bulk` 把整批交给适配器按缺段并批，一次能补一大片。剩下的散只再走 `ensure_many` 兜底。
+
+**第 6 步也必须 `ensure_bulk`**（2026-11-15 修）：`quote` 适配器本身支持 40 只/请求，
+走 `ensure_many` 会退化成 4304 次单码请求；`ensure_bulk` 降到 `⌈4304/40⌉ ≈ 83` 次。
+补完之后**再从库里统一读一遍**——`ensure_bulk` 返回的 `Batch.ok` 只含"本次真去抓的那些"，
+不含库里本来就有的，直接拿它算分位会漏掉大半池子。
+
+**`--quiet` 改的是第 9 步的尾巴**：不加时走 `print_summary(st)` 打完整报表；
+加了只打一条 `粗筛池 N 只 → 入选 M 只`（全流程 `run.py all` 末尾会起看板，名单在「选股」页看得更清楚）。
+单跑 `select` 时别加，否则终端上看不到明细。
+
+**第 7 步为什么要 44 期**（本工具自己只要 8 期）：`periods=44, min_points=20` 不是为了
+「毛利率改善」，是为了**别把下游饿死**。覆盖率只记 `n`，而 `hit()` 只比
+`n >= min_points`；这里是整条流水线里第一个碰 `finance` 域的，若只要 20 期，
+之后 `stock_cycle_elastic` 的判断③（产能周转率 10 年分位，要 40 个「最近 4 季之和」
+样本 = 43 期）就会**安静地**退化成 4~5 年分位——报告照出，只是标签悄悄变了。
+`min_points` 仍是 20：次新股本来就凑不满，不该因此判死。
 
 **为什么次新要挪到 5b 惰性做**：判次新要 `list_date`，对全池（可能 4000 只）逐只取
 太贵；而裁决走到 ⑤ 之前，池子已被 ①②③④ 砍到几十只。原版用服务端四桶标签
@@ -198,23 +220,39 @@ if 收盘[d*-1] > MA20(d*-1): 剔除          # "非真上穿（连续站上 MA2
 
 ### 3.2 逐条裁决（`rules.judge`）
 
-检查顺序即剔除原因的输出顺序，**先便宜后贵**：
+检查顺序即剔除原因的输出顺序，**先便宜后贵**。下表「不通过时」一列是**代码里的原文**
+（`rules.py:74-135`），可以拿它直接 grep 终端输出或历史日志：
 
-| # | 条件 | 口径 | 不通过时 |
+| # | 条件 | 口径 | 不通过时的原文 |
 |:--:|---|---|---|
-| ⑦ | 新鲜度 | `age = i − ci ≤ N`（默认 N=4） | `⑦ 距启动X日 > N=4` |
+| ⑦ | 新鲜度 | `age = i − ci ≤ N`（默认 N=4） | `⑦ 距启动{age}日 > N={N}` |
 | ② | 放量 | `vcross ≥ K_VOL(1.5)` | `② 启动日放量不足(x.xx<1.5)` |
-| ③ | 日频 | d\* 在覆盖窗口内、且当日涨幅 ∈ `[0.5, 20.5]` | `③ 启动日未通过日频条件` / `③ 启动日涨幅X%不在[..]` |
-| ④ | 均线结构 | `MA20(d*) ≥ MA60(d*)×0.95`；`MA20(d*) > MA20(d*−3)×0.99` | `④ 启动日 MA20 < MA60×0.95` 等 |
-| ⑤ | 风控 | d\* 与 S **各查一次**：非 ST、非次新 | `⑤ ST` / `⑤ 次新（未满3年）` |
-| ⑥ | 未破坏 | d\*+1 到 S 每根收盘都 > MA20 | 恒不触发，见下 |
+| ③a | 启动日在窗口内 | `d* ∈ cross_by_day` | `③ 启动日({d0})不在本次覆盖窗口（该股存在停牌）` |
+| ③b | 当日有横截面行 | `d*` 那天该股在 `scan` 里 | `③ 启动日({d0})未通过日频条件` |
+| ③c | 涨幅字段存在 | `pct_chg is not None` | `③ 启动日涨幅字段缺失` |
+| ③d | 涨幅落在区间 | `chg ∈ [0.5, 20.5]`（含 1e-9 容差） | `③ 启动日涨幅{chg}%不在[{lo},{hi}]` |
+| ④a | 均线可得 | `m20s` / `m60s` 都不为 `None` | `④ 启动日无均线数据` |
+| ④b | 多头结构 | `MA20(d*) ≥ MA60(d*)×0.95` | `④ 启动日 MA20 < MA60×0.95` |
+| ④c | 3 日斜率 | 需 `_ci ≥ 22`；`MA20(d*) > MA20(d*−3)×0.99` | `④ 启动日 MA20 3日斜率数据不足` / `④ 启动日 MA20 近3日跌逾1.0%` |
+| ④d | 距 MA60 上限 | 仅 `--ma60-gap > 0` 时生效：`close/MA60 < gap` | `④ 启动日 距MA60 ≥ {gap}` |
+| ⑤a | d\* 非 ST | `c ∉ st_by_day[d*]` | `⑤ ST` |
+| ⑤b | d\* 非次新 | `c ∉ new_by_day[d*]` | `⑤ 次新（未满3年）` |
+| ⑤c | S 日非 ST | `c ∉ st_by_day[S]` | `⑤ S日 ST` |
+| ⑤d | S 日非次新 | `c ∉ new_by_day[S]` | `⑤ S日 次新（未满3年）` |
+| ⑥ | 未破坏 | d\*+1 到 S 每根收盘都 > MA20 | `⑥ 启动后跌破 MA20`（恒不触发） |
 
-三条容易误读的地方：
+四件容易误读的地方：
 
-- **③ 有两条分支机构**。`d0 not in cross_by_day` 专指「启动日不在本次覆盖窗口」——
-  `age` 是该股自己的 K 线索引差，不是市场交易日差；窗口内停牌时 d\* 的实际日期会早于
-  `need[0]`，若不单列原因就会误记成「日频条件不通过」，污染追溯信息。
-- **⑤ 要查两次**。d\* 当天不是 ST，不代表 S 日也不是；两个集合已经在手，复检成本为零。
+- **③ 有四条分支，不是两条**。前两条专指"启动日不在覆盖范围"这一类（`d0 not in cross_by_day`
+  与 `row0 is None`）——`age` 是该股自己的 K 线索引差，不是市场交易日差；窗口内停牌时
+  d\* 的实际日期会早于 `need[0]`，若不单列原因就会误记成"日频条件不通过"，污染追溯信息。
+  第三条（涨幅字段缺失）更隐蔽：`fnum()` 返回 `None` 时不判、直接放过，会把一只
+  没有涨幅数据的股票放进来。
+- **④ 有四条分支，其中 ④d 默认关闭**。`MA60_GAP = 0.0` 就是关闭开关，所以常规运行里
+  只看 ④a/④b/④c 三支。④c 还要先确认 `_ci ≥ 22`（`MA20(d*−3)` 需要索引 19 以上），
+  否则退化成"数据不足"而不是"斜率不合格"——两者含义完全不同。
+- **⑤ 要查四次，不是两次**。d\* 当天不是 ST，不代表 S 日也不是；两个集合已经在手，
+  复检成本为零。注意**原因文案不同**（`⑤ ST` vs `⑤ S日 ST`），统计时要分开看。
 - **⑥ 是定义性条件，不是独立过滤关**。`find_start` 从 S 往回走、跌破 MA20 即停，
   所以 [ci, i] 区间按定义每天在 MA20 上方，循环恒不触发、剔除数恒为 0。
   保留它只作防御性断言。
@@ -223,18 +261,23 @@ if 收盘[d*-1] > MA20(d*-1): 剔除          # "非真上穿（连续站上 MA2
 
 | 常量 | 值 | 用途 |
 |---|---|---|
-| `K_VOL` | 1.5 | 启动日放量倍数 |
-| `CHG_LO` / `CHG_HI` | 0.5 / 20.5 | 启动日涨幅区间 %（北交所 30% 不覆盖，见 §9.5） |
-| `C3_RATIO` | 0.95 | `MA20 ≥ MA60 × 该值`（v1.4 由 0.98 放宽） |
-| `C2_TOL` | 0.01 | MA20 近 3 日跌幅容忍度 |
-| `MA60_GAP` | 0.0 | `close/MA60` 上限，0 = 关闭 |
+| `K_VOL` | 1.5 | ② 启动日放量倍数 |
+| `CHG_LO` / `CHG_HI` | 0.5 / 20.5 | ③ 启动日涨幅区间 %（北交所 30% 不覆盖，见 §9.5） |
+| `C3_RATIO` | 0.95 | **对应现在的 ④b**：`MA20 ≥ MA60 × 该值`（v1.4 由 0.98 放宽） |
+| `C2_TOL` | 0.01 | **对应现在的 ④c**：MA20 近 3 日跌幅容忍度 |
+| `MA60_GAP` | 0.0 | **对应 ④d**：`close/MA60` 上限，0 = 关闭 |
 | `MIN_HISTORY` | 70 | `find_start` 的索引下界（含当日 ≥ 71 根） |
 | `KLINE_BARS` | 300 | 向 hub 要的根数（= hub 的滚动深度） |
 | `KLINE_MIN_BARS` | 71 | 门槛 = `MIN_HISTORY + 1` |
 | `TURN_WINDOW` / `TURN_MIN_COVER` | 20 / 15 | 换手窗口 / 有效天数下限 |
-| `TURN_PCT` / `TURN_MIN_N` / `TURN_MAX_N` | 0.0 / 5 / 30 | 硬过滤比例（0 = 只排序）/ 自动放宽 / 自动收紧 |
+| `TURN_PCT` / `TURN_MIN_N` / `TURN_MAX_N` | 0.0 / 5 / 30 | 硬过滤比例（0 = 只排序）/ 自动放宽到 60% / 自动收紧到 20% |
 | `TURN_GM_REQUIRE_YOY` | True | ①「高于上年同季」护栏开关 |
 | `NEW_STOCK_YEARS` | 3.0 | 次新 = 上市未满 3 年 |
+
+> ⚠️ **`C2_` / `C3_` 这两个前缀是原版遗留编号，与本文档的 ①②③④⑤⑥⑦ 不是一套。**
+> 原版有 9 个条件、编号到 C9，`C2_TOL` / `C3_RATIO` 保留原名是为了「与原版逐条对齐」时能查回去；
+> 但它们**现在都属于第 ④ 条**（均线结构）。读代码时别按名字去对 ②③——
+> 真正的对应关系是：`C3_RATIO` → ④b、`C2_TOL` → ④c、`MA60_GAP` → ④d。
 
 ### 3.4 逐股去向只有三种（`REJ_STAGE`）
 
@@ -272,10 +315,18 @@ python3 -m stock_kline_screen --turn-pct 0.4       # 只留池内换手最低 40
 | `--turn-max` | `30` | 名单多于该数时自动收紧一档 |
 | `--ma60-gap` | `0.0` | `close/MA60` 上限，0 = 关闭 |
 | `--db` | `$STOCKHUB_DB` 或 `~/MyData/stock-value-invest-tool/shared.db` | 透传给 `preflight` |
+| `--quiet` | 关 | 只打一行 `粗筛池 N 只 → 入选 M 只`，不打完整报表（`run.py all` 会加，单跑别加） |
 
 参数校验（`_prepare`，不合法直接 `CliError`）：`--n ≥ 0`、`--chg-lo ≤ --chg-hi`、
 `--turn-pct ∈ [0,1)`、`--turn-min ≥ 0` 且 `--turn-max ≥ --turn-min`、
 `S` 必须是交易日、`S ≤ hub.target`、基准日之前交易日数 ≥ `n+1`。
+
+> ⚠️ **`./run.py select --n 2` 会被吞掉**（代码问题，尚未修）：`run.py` 里 `--n` 与
+> `--no-calendar` 共存，argparse 默认允许前缀缩写，于是 `--n` 被解析成 `--no-calendar`，
+> `2` 就落成了位置参数被忽略——看上去"设置成功"，实际用的还是默认 K=5。
+> 规避：写 `--n=2`（带等号），或走 `./run.py all --select-args "--n 2"`（透传按空格切分，
+> 不经过那层 argparse）。直接 `python3 -m stock_kline_screen --n 2` 也没有这个问题——
+> 这个包的 CLI 里没有 `--no-calendar`。
 
 **退出码**：
 
@@ -293,14 +344,19 @@ python3 -m stock_kline_screen --turn-pct 0.4       # 只留池内换手最低 40
 产物是 `results.db` 里的一批行（表 `select_result`），**没有文件**。
 `_write` 里排序后 `_save_results` 落库，失败只 warn 一行、不影响名单本身。
 
+表结构一共 **18 列**（`primary key(run_id, symbol)`，`run_id` 外键级联到 `run` 表）：
+
 | 列 | 内容 |
 |---|---|
+| `run_id` | 指回 `run` 表，同一基准日重跑会生成新 `run_id` |
 | `symbol` / `name` | 如 `sh600000` / 浦发银行 |
+| `industry` | 一级行业，缺的记「未分类」 |
 | `pool_turnover_rank` | 池内换手分位，0 = 最冷、100 = 最热；空 = 数据不足（分母见 §9.1） |
+| `pool_size` | 算这个分位时池子里有多少只——**不存它，历史分位就没法复核** |
 | `launch_date` / `days_since_launch` / `vol_multiple` / `launch_gain_pct` | 启动日与启动日量能/涨幅 |
 | `ma20_gap_pct` / `ma60_gap_pct` | 距 MA20 / MA60 |
 | `gross_margin_up` | 毛利率改善（`是 / 否 / 无数据 / 不适用` + 证据） |
-| `turnover20` / `stars` / `close` / `market_cap_yi` / `industry` | 20 日换手、星级、收盘、总市值、一级行业 |
+| `turnover20` / `stars` / `close` / `market_cap_yi` | 20 日换手、星级、收盘、总市值 |
 | `payload` | 完整 JSON（含逐股去向与参数） |
 
 原先还有 `选股_<S>.csv` 和 `result_<S>.json` 两份文件，**2026-11-15 都删掉了**：
@@ -338,6 +394,15 @@ cd stock_cycle_elastic && python3 cycle_report.py --from-select 2026-11-13
 第 10、11–13、15 项**只展示，不参与筛选、排序或裁决**（换手项在
 `--turn-pct > 0` 时才参与过滤）。
 
+表头直接来自 `params.RESULT_FIELDS`（就是这 15 个字符串，顺序也一致）。
+相对原版的 16 列**只少了「二级行业」**——共享库的 `stock.industry` 只有上游一级口径，
+拿一级凑二级等于编数据。
+
+> **第 10 项有三种"没有值"的形态**，别混：
+> `无数据`（取到了 finance 但这只票缺）、`不适用`（金融股，口径本身不成立）、
+> **空字符串**（整批 finance 都失败了，`turn=None`）。第三种既不是"否"也不是"无数据"，
+> 按值筛选时容易漏。
+
 ---
 
 ## 6. 失败语义（这一节比参数重要）
@@ -365,9 +430,15 @@ hard      = {其余：PartialData / ThrottleTimeout / 源不可达}
 |---|---|
 | `quote` 取数失败 | `RuntimeError` 中止——换手率的分母（流通市值）算不出来 |
 | `circ_mv` 缺失（取到了但字段空） | `RuntimeError` 中止，同上 |
-| `finance` 取数失败 | **降级**：毛利率列留空，`数据是否可用=false`，选股结果不受影响 |
-| `profile` 取数失败 | 次新/行业/金融判定按「未知」处理，stderr 告警，不中止 |
-| `prune_scan()` 失败 | 只跳过，不抛（收尾清理不该毁掉一份已经入库的名单） |
+| `finance` 取数失败（整批都失败） | **降级**：`turn=None` → 每只的 `turn_p1` / `turn_gm` 落**空字符串**（不是"无数据"），同时往 **stderr** 打一行 `⚠️ 财务数据获取失败：「毛利率改善」列留空`。选股结果不受影响 |
+| `finance` 部分失败 | 失败的股票标 `turn_p1="无数据"`，stderr 打一行带代码的告警（最多列 8 只） |
+| `profile` 取数失败 | 次新/行业/金融判定按「未知」处理，**往 stdout**（不是 stderr）打 `⚠️ N 只 profile 取数失败…`，不中止 |
+| `prune_scan()` / `prune_kline()` 失败 | 只跳过，不抛（收尾清理不该毁掉一份已经入库的名单） |
+
+> 早先这行写的是「`finance` 失败 → `数据是否可用=false`」。**这个字段不存在**：
+> `select_result` 的 18 列里没有它，`payload` 里也没有。真实语义是"列留空"——
+> 而且"整批失败"与"部分失败"的落值还不一样（空串 vs `无数据`），
+> 下游若靠 `gross_margin_up == "无数据"` 判缺失，会把整批失败那种情况漏掉。
 
 原则：**凡是会让名单「少股」或「错股」的失败，一律中止**；凡是只影响标注列的，
 一律降级 + 告警。宁可不出名单，也不出一份看起来正常、实际缺了几十只的名单。
@@ -389,21 +460,29 @@ hard      = {其余：PartialData / ThrottleTimeout / 源不可达}
 
 ```bash
 cd ~/MyData/stock-value-invest-tool
-python3 -m stock_kline_screen.tests          # 4 个文件 83 项
+python3 -m stock_kline_screen.tests          # 5 个文件 103 项（2026-11-23 实跑）
 ```
 
 单个文件也能跑：`python3 -m stock_kline_screen.tests.test_rules`（依此类推）。
 `tests/__main__.py` 存在的原因和 `stock_data_fetch.tests` 一样：重建四个工具时
-「全面测试」会反复做，手敲四条命令早晚漏一条，而漏掉的正好是挂掉的那条。
+「全面测试」会反复做，手敲五条命令早晚漏一条，而漏掉的正好是挂掉的那条。
 
 | 文件 | 项数 | 覆盖 |
 |---|:--:|---|
-| `test_rules.py` | 27 | `find_start` 各分支（无 bar / 无 S / 历史不足 / 未站上 / 非真上穿）、`judge` 七条逐条触发、⑤ 双查、`reason_cat` 归一（`MA20` 放行） |
+| `test_rules.py` | 35 | `find_start` 各分支（无 bar / 无 S / 历史不足 / 未站上 / 非真上穿）、`judge` 七条逐条触发、⑤ 双查、`reason_cat` 归一（`MA20` 放行） |
+| `test_pipeline.py` | 30 | 用 `FakeHub` 顶替共享库做端到端：正常链路入库与计数自洽、\*ST 剔除、**历史不足不中止**、**硬失败中止**、参数边界、池内换手分位与 `--turn-pct` 硬过滤 |
 | `test_turnover.py` | 18 | 20 日换手计算、`amount` 缺失退回 `close×volume`、覆盖 <15 天判不足、分位是「严格小于比例」、硬过滤自适应放宽/收紧、样本 <20 跳过硬过滤 |
 | `test_turnaround.py` | 18 | `prev_quarter` 脏日期、`_Q` 列优先与累计差分兜底、三重护栏各分支、金融股「不适用」、`是/否/无数据` 取值 |
-| `test_pipeline.py` | 20 | 用 `FakeHub` 顶替共享库做端到端：正常链路入库与计数自洽、\*ST 剔除、**历史不足不中止**、**硬失败中止**、参数边界 |
+| `test_cli.py` | 2 | 退出码分流：`preflight` 的数据层错误 → **1**、`run()` 里抛 `HubError` → **1**（不与被吞成 3） |
+
+合计 35+30+18+18+2 = **103 项**。
 
 测试全部不联网、不读写真实 `shared.db`，结果库由 `tests/__init__.py` 指到一个临时文件。
+跑之前把 `STOCKHUB_TMP` 指到仓库内的 `.testtmp/`（别用 `/tmp`，本机是 10MB tmpfs）：
+
+```bash
+STOCKHUB_TMP=$PWD/.testtmp python3 -m stock_kline_screen.tests
+```
 
 ---
 
@@ -490,12 +569,12 @@ stock_kline_screen/
 ├── __main__.py       python3 -m stock_kline_screen 入口
 ├── cli.py            参数解析 + preflight + 异常 → 退出码
 ├── params.py         规则参数、结果字段、RESULT_VERSION
-├── pipeline.py       九步主流程 + 三条计数断言
+├── pipeline.py       十步主流程（+2 个收尾清理）+ 三条计数断言
 ├── rules.py          find_start / judge / reason_cat
 ├── turnover.py       20 日换手、池内分位、硬过滤
 ├── turnaround.py     ①毛利率环比改善（只标注）
 ├── output.py         终端摘要（结果行由 pipeline 直接写 results.db）
-├── tests/            test_rules / test_turnover / test_turnaround / test_pipeline
+├── tests/            test_rules / test_pipeline / test_turnover / test_turnaround / test_cli
 └── README.md         本文件
 ```
 

@@ -15,10 +15,10 @@
 四因子（动量 / 换手 / 业绩 / 量价）各自独立出结果，不打分、不合并总分、
 不判顶——这是原版的设计立场，迁移不改。
 
-2026-11-15 的第二轮改动（见 §6）加了三条**旁证**（估值分位 / 机构目标价 /
-基本面反证）和一张**条件卡片**（周期股才有「周期位置」）。它们都是独立的一句话，
-更不参与任何合计——加旁证的目的是让人自己看"贵不贵、撑不撑得住"，
-不是给四个因子再凑一个第五分。
+2026-11-15 的第二轮改动（见 §6）加了**四条旁证**（估值分位 / 机构目标价 /
+基本面反证 / 周期位置）。前三条总是尝试，周期位置只在判成周期股时出卡片。
+它们都是独立的一句话，更不参与任何合计——加旁证的目的是让人自己看
+"贵不贵、撑不撑得住"，不是给四个因子再凑一个第五分。
 
 `--date` 不给时取**共享库的目标交易日**（今天过了 15:05 才是今天，否则上一个
 交易日）。原来默认 `date.today()`，周末跑会先报「末端不足（库 11-13 / 需 11-15）」
@@ -33,12 +33,46 @@
     python3 -m stock_judge_top --csv 我的持仓.csv --workers 4
 
 - 名单默认取 `results.db` 里那一天的选股结果（`--from-select`，省略日期=最近一次）；
-  `--csv` 读**代码列**（`代码` / `股票代码` / `证券代码` / `code` / `symbol`），
-  没有表头时取第一列。同一只出现多次只跑一次（保序）。
+  `--csv` 读**代码列**，认这 7 个列名（大小写不敏感，`batch.CODE_COLUMNS`）：
+  `代码` / `股票代码` / `证券代码` / `code` / `symbol` / `股票编码` / `证券编码`；
+  一个都没对上时**取第一列**。同一只出现多次只跑一次（保序）。
 - 单只失败不影响其余，最后汇总「成功 N / 失败 M」并列出失败代码。
 - 每只的结论写进 `results.db` 的 `top_result` 表；看板的「顶部」页按
   「距 250 日高点」从近到远排，一眼看出谁在高位。
 - 并发是**每线程一个库连接**（SQLite 连接不能跨线程），`--workers` 默认 4。
+
+> `--from-select` 与 `--csv` 的差别只在名单来源。两者都和位置参数（股票代码）
+> **互斥**，同时给会直接报参数错误退 2（`cli.py:96-101`）。
+
+### CLI 全参数
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `code`（位置参数） | — | `sh600519` / `600519` / `600519.SH`；用 `--csv` 时省略 |
+| `--from-select [日期]` | — | 名单取结果库这一天（`nargs="?"`，省略=最近一次） |
+| `--csv CSV` | — | 从 CSV 代码列逐只出报告 |
+| `--workers N` | `4` | 批量并发线程数（每线程一个库连接） |
+| `--date` | 库的目标交易日 | 基准日；不给就取"今天（过了 15:05）或上一个交易日" |
+| `--refresh` | 关 | 忽略缓存重新拉（透传为 hub 的 `force`：清重试标记后重取） |
+| `--json` | 关 | stdout 只输出 JSON（**不受 `--quiet` 影响**） |
+| `--json-full` | 关 | JSON 里同时带 `quote`（默认剔除） |
+| `--verbose` | 关 | 打印执行过程与完整的命令行报告（默认**只写 results.db**） |
+| `--quiet` | 关 | 不输出日志与命令行报告，只写 results.db |
+| `--progress` | 关 | 只打逐只进度行 `[ 3/38] …`（给 `run.py` 画进度条），不打报告表格 |
+| `--db PATH` | `$STOCKHUB_DB` 或项目内 `shared.db` | 共享库路径 |
+
+**`--verbose` / `--quiet` / `--progress` 是三档输出强度**，默认最弱（只落库）：
+`configure(quiet = a.quiet or not a.verbose)`——不加 `--verbose` 就等于静默，
+这是 2026-11-15 为批量模式定的（38 只每只打一份报告，终端会翻到看不清）。
+
+### 退出码
+
+| 码 | 含义 |
+|:--:|---|
+| 0 | 成功 |
+| 1 | 单只失败（取数/计算异常；冒烟里 `sz300750` 因库里无 K 线 + WAF 封禁就是这个） |
+| 2 | 参数错误（`--csv` 与代码同时给、`--from-select` 与另两种同时给、代码无法识别） |
+| 3 | **preflight 未过**（六道闸任一失败）—— 注意这个码与 `run.py` 的"选股 0 只"重号，见 §5 |
 
 ## 1. 与原版的差异（只有数据层）
 
@@ -107,12 +141,27 @@ CLI 接口不变；`--refresh` 现在透传为 hub 的 `force`（清重试标记
 ## 3. 测试
 
     cd /home/kevin/MyData/stock-value-invest-tool && \
-    python3 -m stock_judge_top.tests
+    STOCKHUB_TMP=$PWD/.testtmp python3 -m stock_judge_top.tests
 
-8 个文件（unittest）：indicators / finance / judgement / views / text（终端报告）/
-evaluate / judge（CLI 与退出码）+ hubdata（§2.1/§2.2 的映射断言）。
-全部离线。原版的 test_mcp / test_westock / test_data 随数据层一起删除，
-test_render 里的 HTML 断言随报告一起删除（终端的那些保留）。
+**9 个文件、合计 134 项**（2026-11-23 实跑）。全部离线。
+
+| 文件 | 用例 | 覆盖 |
+|---|---:|------|
+| `test_indicators.py` | 26 | 四因子的滚动窗口 / `pos250` / `pos60` / 分位 |
+| `test_views.py` | 26 | 四键视图组装与文案 |
+| `test_judgement.py` | 16 | 业绩与环比的二维修正判定 |
+| `test_finance.py` | 15 | `finance_full() → 指标` 的字段映射 |
+| `test_batch.py` | 14 | 批量编排、坏代码跳过（**不致命**）、去重保序 |
+| `test_evaluate.py` | 13 | 端到端评测结构（含 `extras` / `gaps`） |
+| `test_judge.py` | 13 | CLI 参数、参数冲突、退出码映射 |
+| `test_hubdata.py` | 9 | §2.1/§2.2 的映射断言（raw 而非 qfq、换手折算） |
+| `test_render.py` | 2 | HTML 渲染骨架（不再断言落盘路径） |
+
+原版的 `test_mcp` / `test_westock` / `test_data` 随数据层一起删除；
+`test_render` 里绝大部分 HTML 断言随"不落文件"一起删，只留 2 项骨架检查。
+
+> 早先本文写"8 个文件"、名单里漏了 `test_batch`——它是后来补的，
+> 而 `tests/__main__.py` 早就把它接进去了，所以"跑全部"一直是 9 个。
 
 ## 4. 冒烟记录（2026-11-15）
 
@@ -158,18 +207,38 @@ headline 的规则跟着改：只有**高位 + 热**才叫「高位加速」；�
 旧版用 `pos60` 判"高位"——60 日高点在长期下跌里会不断刷新，
 把"下跌中继"误判成"高位盘整"。改用 `pos250`（缺则退 60 日，副标题标明）。
 
-### 6.3 三条旁证（各一句话，不参与结论）
+### 6.3 四条旁证（各一句话，不参与结论）
 
-    extras.valuation   PE/PB/PS 当前值 + 十年周线分位      ← 抄 quality 的算法与阈值
-    extras.consensus   机构目标价 + 距现价空间 + 覆盖年度数  ← snapshot:consensus
-    extras.risk        应收/存货增速 vs 营收、经营现金流/净利润 ← 抄 quality 的反证项
-    extras.cycle       判断①是否周期股 + 弹性 + 产能周转率分位
+代码里就四张（`evaluate.py:87-89` 的注释原话是"这四张都只是旁证"）：
+
+    extras.valuation   PE/PB/PS 当前值 + 十年周线分位          ← 抄 quality 的算法与阈值
+    extras.consensus   机构目标价 + 距现价空间 + 覆盖年度数      ← snapshot:consensus
+    extras.risk        应收/存货增速 vs 营收、经营现金流/净利润  ← 抄 quality 的反证项
+    extras.cycle       判断①是否周期股 + 弹性 + 产能周转率分位   ← 抄 cycle 的阈值（§6.4 的卡片）
+
+前三张**总是尝试**，第四张只有判成周期股才出卡片。任何一张取不到都只往 `gaps`
+里记一条缺口，**绝不拦住四因子**。
+
+其中 `extras.risk` 的判据是三行（`extras.py:140-197`）：
+
+| 项 | 命中 | 提示 | 其余 |
+|---|---|---|---|
+| 应收增速 − 营收增速 | ≥ 30pct | ≥ 15pct | clear |
+| 存货增速 − 营收增速 | ≥ 30pct | ≥ 15pct | clear |
+| 经营现金流 / 净利润 | < 0 | < 0.7 | clear |
 
 阈值与判定口径**从那边抄过来，不 import**：`stock_quality_screen` 和
 `stock_cycle_elastic` 都是能单独拷走的独立包（顶层 `import config`），
 直接 import 会把三个包焊死。抄的是"规则"（阈值常量、分位算法），
 不抄取数编排和渲染。规则若在那边改了，这里要跟着改——每个函数的
 docstring 都写了对应源文件。
+
+`extras.cycle` 的阈值表整份抄在 `extras.CYCLE` 字典里（`gm_window=20`、
+`gm_std_cycle=5.0`、`gm_cv_min=20.0`、`elastic_ratio_min=2.0`、
+`position_window=40`、`position_low=40.0` / `position_high=60.0` …），
+注释就一句"与 `stock_cycle_elastic/config.py` 同值（改那边也要改这里）"。
+`extras.VALUATION_YEARS = 10`、`VALUATION_MIN_WEEKS = **100**`——
+注意 quality 那边是 52 周起算，这里为了"十年周线分位"抬到 100 周。
 
 **商誉查不了**：westock 的 `balance` 没有商誉列（quality 是从东财 `gbalance`
 子域取的）。不为一项反证多打一个上游，改用存货增速做第二项反证——
@@ -184,9 +253,27 @@ docstring 都写了对应源文件。
 
 ### 6.5 两处修正
 
-- `_fatal()` 里「连续 3 年经营现金流为负且净负债/EBIT > 4」在 EBIT ≤ 0 时
-  恒不成立（比值是负数，`> 4` 永远假）——最该命中的一类公司反而绕过了。
-  见 §quality 仓库那边同一条修正。
+- 跨包修正（**本包没有这段代码**）：`stock_quality_screen/score.py` 的 `_fatal()` 里
+  「连续 3 年经营现金流为负且净负债/EBIT > 4」在 EBIT ≤ 0 时恒不成立
+  （比值是负数，`> 4` 永远假）——最该命中的一类公司反而绕过了。
+  `grep _fatal stock_judge_top/` 是零命中：本工具的 `extras.risk` 只有三行阈值，
+  没有致命项概念，所以这条修正在 quality 那边落地，这里只是同源问题。
 - 报告「数据与口径」区新增**取数缺口清单表**（域 / 原因 / 影响面），
   替代原来只有一行行 warning 文字的做法：读者要能分清"缺数据"和"算不出来"，
   也要知道哪一条真会影响结论。
+
+### 6.6 结果表 `top_result`
+
+`results.db` 的 `top_result` 一共 **14 列**（`primary key(run_id, symbol)`）：
+
+```
+run_id symbol name close pos250 days_since_high
+momentum_state turnover_state earnings_state volume_state cycle_state
+pe_pct target_upside payload
+```
+
+`payload` 里带 `kline` / `finance` / `quote` / `warnings` / `extras` / `gaps` /
+`earnings` / `report_html`。`extras` 那四张旁证**原样入库**——看板个股页直接读它，
+不重算。取数缺口走 `gaps`（`{domain, symbol, why}` 三元组），渲染成缺口清单表。
+
+看板「顶部」页按 `pos250`（距 250 日高点）从近到远排；`cycle_state` 只有周期股才有值。

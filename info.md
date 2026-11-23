@@ -8,6 +8,8 @@
 另外两个包是**旁路**，都不 import 数据层（抓取请求少，用不上 hub / 路由 / 覆盖那一整套）：
 `stock_extreme_point` 抓全市场价格快照，`stock_market_trend` 算 A股大势（趋势/赔率/情绪）。
 后者的结论只作背景板，**不参与**四个工具的任何判断。
+第七个包 `stock_review_assess` 是**看板侧的规则模块**：不连库、不抓数、不落库，
+只把四个工具的结论并起来算赔率分，在 `/review` 页面现算。
 
 | 模块 | 干什么 | 入口 |
 |---|---|---|
@@ -19,7 +21,7 @@
 | `stock_extreme_point` | 冷热极点：全市场价格/估值快照，一天一份全市场（独立工具，不走共享数据层） | `run.py extreme` |
 | `stock_market_trend` | A股大势：沪深300 周线趋势 / ERP 赔率 / 破净+量能情绪（背景板，不参与选股结论） | `run.py trend` |
 
-## 每周五收盘后（15:10 之后）
+## 每周五收盘后（15:05 之后）
 
 ```bash
 cd /home/kevin/MyData/stock-value-invest-tool
@@ -185,14 +187,24 @@ python3 -m stock_data_fetch.build_calendar
 菜单里也是同样的：选 3 或 4，股票代码处**直接回车 = 批量跑当天名单**，填代码 = 只跑那一只。
 
 注意单只模式的基准日由程序自己决定（今天过了 15:05 就用今天，否则上一个交易日），
-**不接受 `--date`**——那两个程序没有日期参数。要按历史某天出报告只能走批量模式。
+**不接受 `--date`**——那两个程序没有日期参数。`run.py` 会先做一次一致性检查：
+你给的 `--date` 跟程序会用的那天不一致就**直接退 2**，并说清「本次为 X，不接受 --date Y」，
+不是静默忽略。要按历史某天出报告只能走批量模式。
 
 子进程参数可以透传：`./run.py quality --stock 600519 --force`。
 
-下游（cycle/quality/top）的名单来自 `results.db` 里那一天的选股结果
-（`--from-select <日期>`），所以基准日必须和那天的选股一致；不给 `--date`
-就按「今天（过了 15:05）」算，和 `stock_data_fetch` 内部的 `target_date()`
-同一套规则。名单在库里对不上就直接退 2，不会拿别的日期凑数。
+下游（cycle/quality/top）在批量模式下的名单来自 `results.db` 里那一天的选股结果，
+所以基准日必须和那天的选股一致；不给 `--date` 就按「今天（过了 15:05）」算，
+和 `stock_data_fetch` 内部的 `target_date()` 同一套规则。名单在库里对不上就直接退 2，
+不会拿别的日期凑数。
+
+调用的写法分两层，别混：
+
+| 层 | `--from-select` 长什么样 |
+|---|---|
+| `./run.py top` | **开关**，不接日期：`./run.py top --from-select --date 2026-11-13` |
+| `python3 -m stock_judge_top` | 接可选日期：`--from-select 2026-11-13`，省略 = 最近一次 |
+| `./run.py cycle/quality` | 没有这个参数，`--date` 本身就是「读那天的名单」 |
 
 ## 几个容易踩的坑（脚本已经替你处理）
 
@@ -225,14 +237,23 @@ python3 -m stock_data_fetch.build_calendar
 `price` 在两个库各存一份是刻意的：`shared.db` 那份是"从上游原样抓回的原件"，
 `results.db` 那份是"看板要的复制品"。看板只读结果库，所以上游清理、抓取失败
 都不会让页面上已经存下来的历史时点跟着消失；原件丢了也能用 `--force` 重抓。
-复制这一步不联网（`price --sync` 就是同一段代码），结果库写失败时
+复制这一步不联网（`./run.py extreme --sync` 走的就是同一段代码），结果库写失败时
 原始层照样保留，事后补一次即可。
 
-`results.db` 每工具一张表（`select_result` / `cycle_result` / `quality_result` /
-`top_result`）+ 一张 `run` 台账，再加全市场价格的副本 `price` 与每日摘要
-`price_stat`（由 `stock_extreme_point` 写，见上）；每条结果都带 `payload`（完整 JSON）。
-四个工具**自动写**，写失败只 warn 一行、绝不影响出报告。看板只读它，
-所以"页面上的"和"库里的"永远是同一份东西，不存在导出对不上的问题。
+`results.db` 一共 **9 张表**：四个工具各一张（`select_result` / `cycle_result` /
+`quality_result` / `top_result`）+ 一张 `run` 台账 + A股大势的周记 `market_regime`，
+再加看板要的三份行情副本 `price` / `price_stat` / `index_price`。每条结果都带
+`payload`（完整 JSON，质量与顶部还压着整份报告的 HTML）。四个工具**自动写**，
+写失败只 warn 一行、绝不影响出报告。看板只读它，所以"页面上的"和"库里的"
+永远是同一份东西，不存在导出对不上的问题。
+
+`shared.db` 是 **18 张表**：13 张由数据层建（`stock` / `kline` / `finance` /
+`finance_revision` / `dividend` / `valuation` / `quote` / `snapshot` / `scan` /
+`coverage` / `watermark` / `meta` / `annotation`），5 张由两个旁路包写
+（`price` / `index_price` / `market_index_week` / `market_index_perf` / `market_macro`）。
+
+> 现在这份 `shared.db` 里实际有 19 张：多出来的是手工留的回滚点
+> `annotation_bak_20261116`（一次标注批量改写前的快照），不算进"建表"的账。
 
 ```bash
 python3 -m stock_data_fetch.results                    # 各工具最近一次运行
@@ -259,7 +280,9 @@ Flask + Chart.js，单进程、只读、无登录。默认只监听 `127.0.0.1:5
 05 Knowing when to sell），11px 灰色、跟着每一页走：它解释"这个工具为什么这么设计"，
 但字号压得比正文小，不抢注意力。
 
-导航就八页（顺序 = 取用顺序），**根路径 `/` 直接进第一页「首页」**：
+导航就九项（顺序 = 取用顺序），**根路径 `/` 直接重定向到第一页「首页」`/batches`**。
+除这九页外，`/dataflow`（生成的流程图）和 `/stock/<代码>`（从表格点名称进去）
+不在导航里；一共 13 条路由。
 
 | 页面 | 看什么 |
 |---|---|
@@ -269,9 +292,10 @@ Flask + Chart.js，单进程、只读、无登录。默认只监听 `127.0.0.1:5
 | `/quality` 质量 | Q × V 散点，结论分布；**点圆点**只看这一只，**点结论环**只看那一档结论下所有票 |
 | `/top` 顶部 | 距 250 日高点（最接近的 20 只）、动量状态、四因子矩阵；**点横条**只看这一只，**点动量柱**只看那一档（左侧同档横条一起点亮） |
 | `/review` 综合评估 | **四个工具并起来算赔率分**：只有 Q<45 / 致命风险 两条否决，其余按小市值、估值低位、周期底、弹性、垄断性加减分排序——给出「先研究哪几只」。**点圆点**只看这一只，**点评级环**只看那一档（只筛下面「全表」，「优先研究」不参与） |
-| `/trend` 大势历史 | 每周五的大势判断按**基准日**存一行：同一周重跑覆盖当周，跨周追加。可按起止基准日查询；表里同时给数据截至、趋势、ERP 分位、PE、10Y 国债、破净分位、量能。首页的大势卡片只摆最近 8 周，完整历史进这一页 |
 | `/extreme` 冷热极点 | **定位是"留档"——记录 A 股全市场最热和最冷时的股票情况，便于日后回溯**；内容上是一份**结果库的全市场横截面**：下拉选交易日 → 全市场 5500+ 只的价格/PE/PB/PS（框内滚动，表头固定）；四张全市场卡是那天的涨跌家数、涨跌停、估值中位数，第五张是沪深300 当日收盘/涨跌幅。搜索框输代码或名称，看某只票在 `price` 表里的全部时点：可选起止日期，画**收盘价曲线**（点上标注累计涨跌幅，Tooltip 含当日/累计），表格按时间正序并同时给出当日与累计涨跌；表格里的「打开 ↗」直接跳东方财富行情页 |
-| `/stock/<代码>` | 单只票：一份**原版报告**（顶部 / 质量 / 周期三个标签切换） |
+| `/trend` 大势历史 | 每周五的大势判断按**基准日**存一行：同一周重跑覆盖当周，跨周追加。可按起止基准日查询；表里同时给数据截至、趋势、ERP 分位、PE、10Y 国债、破净分位、量能。首页的大势卡片只摆最近 8 周，完整历史进这一页 |
+| `/book` 原书学习 | 《股市真规则》全文（`five-rules-book-full-learning.html`），导航最后一项 |
+| `/stock/<代码>`（不在导航） | 单只票：一份**原版报告**（顶部 / 质量 / 周期三个标签切换） |
 
 `/extreme` 读 `results.db` 的 `price` + `price_stat` + `index_price`（由
 `stock_extreme_point` 从 `shared.db` 镜像并同事务算好摘要；见 `stock_extreme_point/README.md`）。所以它的下拉是
@@ -311,9 +335,10 @@ PE/PB/PS 排序时**负值（亏损）一律排最后**，与中位数只取正�
 深蓝 hero 和四张摘要卡都收起来——报告自己已经有表头和卡片，再包一层就是
 "卡片里套卡片"。报告下方的「取数缺口」也用同一套白卡片；
 旧行没有报告时才回到看板的 hero + 四张卡 + 明细视图。
-`/` 直接转到 `/review`
+
 （原来的「概览」页删了：它那张合并表就是综合评估下面的全表；「运行记录」页也删了，
-运行台账看首页和各工具页）。
+运行台账看首页和各工具页。`/` 当时指向 `/review`，2026-11-20 起改成指向 `/batches`——
+首页才是"这条链的第一格"，旧书签和 `./run.py web` 打印的地址都还能用。）
 
 ### 个股页那份「原版报告」是怎么来的
 
@@ -338,7 +363,13 @@ PE/PB/PS 排序时**负值（亏损）一律排最后**，与中位数只取正�
 「重跑一次就有」（`./run.py quality --date <批次> --force`）。
 
 页面上的每个数字都来自 `results.db`，没有第二份缓存；把库删掉重跑一遍，
-页面自然就更新了。`--db` 可以指向别的库（比如一份备份）用来对比。
+页面自然就更新了。要指向别的库（比如一份备份）做对比，得绕开 `run.py` 起：
+
+```bash
+python3 -m web --db backup/results.db.20261123-195154.bak   # 或设 STOCK_RESULTS_DB
+```
+
+`./run.py web` 只有 `--port` / `--host` / `--debug`，**不接受 `--db`**（未知参数直接退 2）。
 
 ### 综合评估怎么排的（`/review`）
 
@@ -357,6 +388,11 @@ PE/PB/PS 排序时**负值（亏损）一律排最后**，与中位数只取正�
   ——**降档但不排除**，理由写在「提示」列。
 * **档内排序**：赔率分从高到低，同分看盈利弹性，然后 Q，最后按代码。
 
+> 一个容易看反的地方：降档只认「回避」和「数据不足」两个前缀。
+> 质量工具给的「**观察，等待数据完整**」不在降档名单里，所以分数够的话它照样进
+> 「优先研究」——那说的是"数据不齐"，不是"票不好"。见
+> `stock_review_assess/README.md` 的分档表。
+
 #### 超级成长股标识（三条，只做标识）
 
 **它们不参与分档、不参与排序、也不把票拿掉**——「优先研究 / 观察 / 排除」的
@@ -364,11 +400,11 @@ PE/PB/PS 排序时**负值（亏损）一律排最后**，与中位数只取正�
 顶部三张卡、以及方块悬停的 tooltip。（2026-11-20 之前页面上叫「3 条硬门槛」，
 代码和 `stock_review_assess/` 里的文档仍沿用 `gates` / 门槛的叫法。）
 
-| # | 标识 | 判定条件 | 数据字段 | 缺数据 |
+| # | 标识 | 判定条件 | 数据字段 | 缺数据怎么办 |
 |---|---|---|---|---|
-| ① | 不亏损 | 扣非 TTM > 0；最新单季扣非 ≥ 0；扣非/归母 ≥ **80%** | `NPDeductNonRecurringPL`、`NPParentCompanyOwners`、`cashflow.NPDeductNonRecurringPL_Q` | 未核实 |
-| ② | 增速 | 单季营收同比 ≥ **25%**，**且**单季扣非同比 > 单季营收同比 | `OperatingRevenueGrowRate_Q`、`NPParentCompanyCutYOY_Q` | 未核实 |
-| ③ | 供需 | **(a)** 毛利率环比连升两季（当季 > 上季 > 上上季）**或** **(b)** 合同负债同比 ≥ **+20%** 且 合同负债 ≥ 年化营收 **5%** | `OperatingRevenue_Q`/`OperatingCost_Q`、`ContractLiability` | 未核实 |
+| ① | 不亏损 | 扣非 TTM **> 0**；最新单季扣非 **> 0**（等于 0 判不过）；扣非/归母 ≥ **80%** | `NPDeductNonRecurringPL`、`NPParentCompanyOwners`、`cashflow.NPDeductNonRecurringPL_Q` | 归母 **≤ 0 → 不过**；归母**缺失** → 跳过 80% 这一条（可能因此判「过」）；单季扣非缺 → 未核实 |
+| ② | 增速 | 单季营收同比 ≥ **25%**，**且**单季扣非同比 > 单季营收同比 | `OperatingRevenueGrowRate_Q`、`NPParentCompanyCutYOY_Q` | 任一同比缺 → 未核实 |
+| ③ | 供需 | **(a)** 毛利率环比连升两季（当季 > 上季 > 上上季）**或** **(b)** 合同负债同比 ≥ **+20%** 且 合同负债 ≥ 年化营收 **5%** | `OperatingRevenue_Q`/`OperatingCost_Q`、`ContractLiability` | 三季成本不齐、或合同负债两期不齐 → 未核实 |
 
 几个数为什么这么定：
 
@@ -407,7 +443,7 @@ PE/PB/PS 排序时**负值（亏损）一律排最后**，与中位数只取正�
 | 项 | 数据来源 | 分 |
 |---|---|---|
 | 市值小 | `select_result.market_cap_yi` | <50亿 +3 / <100亿 +2 / <200亿 +1 |
-| 估值低位 | `quality.detail.v.historical.metrics` 的 PE/PB/PS 分位均值 | ≤25% +3 / ≤50% +2 / ≤70% +1 |
+| 估值低位 | `quality.detail.v.historical.metrics` 的 PE/PB/PS 分位均值 | **<25%** +3 / **<50%** +2 / **<70%** +1 |
 | 周期低位 | `cycle_result.position_label`（产能周转率 <40 分位） | +2（仅周期股） |
 | 盈利弹性 | `cycle_result.elastic_label` | 强 +2 /「不稳定」+1 |
 | 垄断性 | `shared.db` 的 `annotation` 表（人工维护） | +2 |
@@ -415,6 +451,10 @@ PE/PB/PS 排序时**负值（亏损）一律排最后**，与中位数只取正�
 | 目标价空间 | `top_result.target_upside` | ≥+20% +1 |
 | **扣分** 趋势走弱 | `quality.detail.risks` 里毛利率/合同负债判坏 | −2 |
 | **扣分** 估值分偏低 | `quality_result.v` | <55 −1 |
+
+> 边界一律**左闭右开**（`review._steps()` 用的是 `value < limit`）：
+> 分位恰好 25.0% 落到 +2 那一档，不是 +3。市值那三档同理（恰好 50 亿算 +2）。
+> Q 的三档与目标价那条是 `>=`。
 
 几个刻意的取舍：
 
@@ -477,14 +517,20 @@ pip install flask          # 或 python3 -m pip install flask
 ## 测试
 
 ```bash
-python3 -m stock_data_fetch.tests                  # 数据层 13 个文件
-python3 -m stock_kline_screen.tests                # 选股 4 个文件
-python3 -m unittest discover -s stock_quality_screen/tests -t stock_quality_screen
-python3 -m unittest discover -s stock_cycle_elastic/tests -t stock_cycle_elastic
-python3 -m stock_judge_top.tests
-python3 -m stock_extreme_point.tests.test_extreme_point  # 全市场快照（87 项）
-python3 -m unittest discover -s tests -t .         # 入口脚本 + 看板 + 综合评估门槛
+python3 -m stock_data_fetch.tests                        # 数据层 13 个文件 / 911 项
+python3 -m stock_kline_screen.tests                      # 选股 5 个文件 / 103 项
+python3 -m unittest discover -s stock_quality_screen/tests -t stock_quality_screen   # 255 项
+python3 -m unittest discover -s stock_cycle_elastic/tests -t stock_cycle_elastic     # 11 文件 / 419 项
+python3 -m stock_judge_top.tests                         # 顶部 9 个文件 / 134 项
+python3 -m stock_extreme_point.tests.test_extreme_point   # 全市场快照 100 项
+python3 -m unittest discover -s tests -t .                # 入口 60 + 看板 105 + 综合评估 21 + 大势 27 = 213 项
 ```
+
+全部离线；数据层另有 **10 项**真上游用例，要 `STOCKHUB_LIVE=1` 才跑
+（`test_fetch` 6 条 + `test_westock` 4 条）。
+
+`stock_market_trend` 没有独立测试包，它的口径由根 `tests/test_stock_market_trend.py`
+（在 213 项里）钉住。
 
 ## 维护
 

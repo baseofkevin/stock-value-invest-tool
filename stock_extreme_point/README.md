@@ -71,8 +71,11 @@ python3 -m stock_extreme_point --code 002096 --date 2026-11-03  # 只补一只�
 | `total_mv` / `circ_mv` | 总市值 / 流通市值（元） |
 | `src` / `updated_at` | 来源与写入时间 |
 
-主键 `(date, symbol)`，索引 `symbol`。两个库的列**完全一致**，DDL 由
-`schema.PRICE_DDL` 一处生成。
+主键 `(date, symbol)`，索引 `symbol`。**建表是 `WITHOUT ROWID`**（`schema.py:34`）——
+这张表一天 5500 行、读写全是按主键定位，省掉 rowid 那一层间接寻址；
+代价是不能再用 `rowid` 排序/引用，也不适合大范围扫描（好在看板都带 `date` 条件）。
+
+两个库的列**完全一致**，DDL 由 `schema.PRICE_DDL` 一处生成（`{name}` 占位换表名/索引名）。
 
 ### `index_price`
 
@@ -131,14 +134,42 @@ python3 -m stock_extreme_point --code 002096 --date 2026-11-03  # 只补一只�
 | 参数 | 作用 |
 |---|---|
 | `--date YYYY-MM-DD` | 指定交易日；不给就用交易日历定（今天过 15:05 且是交易日才算今天） |
+| `--code CODE` | **只抓这一只**（`002096` / `sz002096` / `002096.SZ`）并 upsert 到 `price`；保留当天其它行，重算 `price_stat`。补单票缺口的唯一入口 |
 | `--force` | 忽略库里已有的那天，重取（整天整份替换） |
 | `--restat` | 只按结果库已有的 `price` 重算 `price_stat`，**不联网**；配 `--date` 只算一天 |
 | `--sync` | 把 `shared.db` 已有的日子（`price` + `index_price`）复制/覆盖到 `results.db`，**不联网** |
-| `--prune-keep N` | 取完后删掉 N 天之前的 `price`；0 = 不清理（默认） |
+| `--prune-keep N` | 取完后删掉 N 天之前的行；**0 = 不清理（默认）** |
 | `--shared-db` / `--results-db` | 换库路径调试 |
 | `--calendar` | 换交易日历 JSON |
 
-退出码：0 成功 / 1 取数或写库失败 / 2 用法错误（含「不是交易日」）。
+**四个动作是优先级不是互斥**（`cli.main()` 的分派顺序）：
+
+```
+--code  >  --restat  >  --sync  >  取一天全市场（默认）
+```
+
+前三个都是"短路返回"，后面的动作**不会执行也不会报错**。所以 `--restat --sync`
+等于只跑 `--restat`。唯一做显式校验的是 `--code` 那一路（两组，命中都退 2）：
+
+| 组合 | 结果 |
+|---|---|
+| `--code` + `--restat` / `--sync` | ❌ `--code 只能单独查询，不能和 --restat / --sync 一起用` |
+| `--code` + `--force` / `--prune-keep` | ❌ `--code 只改这一只，不能用 --force / --prune-keep；整市场更新请去掉 --code` |
+
+**`--prune-keep N` 一次删三张表**（`store.prune()`）：`price` + `price_stat` + `index_price`，
+两个库都删（原始库与结果库各跑一遍）。只删 `price` 会留下"那天还在"的假摘要
+——卡片显示 5579 只、表格却是空的。
+
+> 切点算的是 **`date.today() − N 天`（自然日）**，不是"从库里最新一天往前 N 个交易日"。
+> 所以补跑历史时用 `--prune-keep` 要小心：它删的是"相对今天"的老数据。
+
+**退出码**：
+
+| 码 | 含义 |
+|:--:|---|
+| 0 | 成功 |
+| 1 | 取数或写库失败；**库文件不存在**；上游返回空表（`_empty_hints` 会提示最近一份是哪天）；`--code` 指定那只当天没数据 |
+| 2 | 用法错误：不是交易日、`--date` 格式不对、没有日历又没给 `--date`、参数互斥冲突 |
 
 ## 看板
 
@@ -158,12 +189,16 @@ PE/PB/PS 排序时负值（亏损）一律排最后，与中位数只取正值�
 
 ```bash
 cd /home/kevin/MyData/stock-value-invest-tool
-python3 -m stock_extreme_point.tests.test_extreme_point
+STOCKHUB_TMP=$PWD/.testtmp python3 -m stock_extreme_point.tests.test_extreme_point
+# 通过 100 项（2026-11-23 实跑）
 ```
 
-离线、不联网：假 reader 注入 `source.fetch_day(get=...)`，覆盖解析 / 分页 /
-B 股剔除 / 混日期拦截 / 摘要口径 / 两库落库 / CLI / 建表脚本。临时库放在仓库内
-`.testtmp/`（这台机器 `/tmp` 只有 10MB tmpfs）。
+离线、不联网：假 reader 注入 `source.fetch_day(get=...)`，覆盖解析 / 分页（含
+`MAX_PAGES = 30` 上限）/ B 股剔除 / 混日期拦截 / 摘要口径 / 两库落库 / CLI /
+建表脚本。临时库放在仓库内 `.testtmp/`（这台机器 `/tmp` 只有 10MB tmpfs）。
+
+**`MAX_PAGES = 30` 是防御性上限**：全市场一天 6 页就够，真翻到 30 页说明
+返回的已经不是"一天的全市场"了（多半是 `filter` 没生效），宁可报错也不闷头取。
 
 真上游冒烟（会联网、写临时库）：
 
