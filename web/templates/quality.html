@@ -16,19 +16,26 @@
 <div class="charts">
   <div class="chart-box tall">
     <h3>质量 × 估值</h3>
-    <p class="sub">左上角是"好公司但贵"，右下角是"便宜但质地差"。竖线 Q=45 是硬地板，横线 V=60 是常见门槛。</p>
+    <p class="sub">左上角是"好公司但贵"，右下角是"便宜但质地差"。竖线 Q=45 是硬地板，横线 V=60 是常见门槛。
+      点任意圆点，下面明细只看这一只。</p>
     <div class="canvas-wrap"><canvas id="qv"></canvas></div>
   </div>
   <div class="chart-box tall">
     <h3>结论分布</h3>
-    <p class="sub">这一批里有多少只被直接排除、多少只要看第二节的风险信号。</p>
+    <p class="sub">这一批里有多少只被直接排除、多少只要看第二节的风险信号。
+      点任意一段环，只看这个结论下的票。</p>
     <div class="canvas-wrap"><canvas id="concl"></canvas></div>
   </div>
 </div>
 
 <section class="panel">
-  <h2>明细（{{ rows|length }} 只）</h2>
+  <h2>明细（<span id="quality-count">{{ rows|length }} 只</span>）</h2>
   <p class="sub">风险检查列是"命中 / 提示 / 已知项"，已知项越少说明数据越不完整。</p>
+  {# 点图筛出来的那只（或那一档结论）：和周期页同一套提示条。 #}
+  <div class="select-filter" id="quality-filter" hidden>
+    <span id="quality-filter-text"></span>
+    <button type="button" id="quality-filter-clear">显示全部</button>
+  </div>
   {{ stock_jump(rows, "quality-table") }}
   <div class="scroll stock-scroll" id="quality-table">
     <table class="grid">
@@ -42,7 +49,8 @@
       </tr></thead>
       <tbody>
         {% for r in rows %}
-        <tr data-symbol="{{ r.symbol }}">
+        <tr class="stock-row" data-symbol="{{ r.symbol }}" data-name="{{ r.name or r.symbol }}"
+            data-concl="{{ r.conclusion or '—' }}">
           <td class="code">{{ r.symbol }}</td>
           <td class="name"><a href="/stock/{{ r.symbol }}?focus=quality">{{ r.name or '—' }}</a></td>
           <td>{% if r.symbol|quoteurl %}<a class="quote-link" href="{{ r.symbol|quoteurl }}" target="_blank" rel="noopener noreferrer" title="在东方财富打开 {{ r.name or r.symbol }} 的行情页">打开 ↗</a>{% else %}—{% endif %}</td>
@@ -55,6 +63,9 @@
           <td style="max-width:420px">{{ r.reason or '—' }}</td>
         </tr>
         {% endfor %}
+        <tr id="quality-empty" hidden><td colspan="10" class="select-empty">
+          没有匹配的股票，点提示条上的「显示全部」恢复。
+        </td></tr>
       </tbody>
     </table>
   </div>
@@ -91,13 +102,40 @@ const COLORS = {
 };
 const colorOf = c => COLORS[c] || 'rgba(148,163,184,.55)';
 
-new Chart(document.getElementById('qv'), {
+/* ---------------- 点图筛明细 ----------------
+ * 左边圆点 = 一只票，右边环 = 一段结论（那一档下所有票）。两种选择共用一套
+ * 提示条和计数；再点同一处、或按「显示全部」还原。
+ * 选中的一只票：圆点放大、其余压成灰；选中的一段结论：这段环被拉出来，其他
+ * 结论的圆点压灰。图的数据和顺序都不动——排布本身就是信息。 */
+const filter = createChartFilter({
+  table: 'quality-table', count: 'quality-count',
+  bar: 'quality-filter', text: 'quality-filter-text',
+  clear: 'quality-filter-clear', empty: 'quality-empty',
+  onReset: () => { pick = null; paintQv(); paintConcl(); },
+});
+const DIM = 'rgba(203,213,225,.45)';
+const PICK = 'rgba(194,65,12,.95)';
+const labelOf = {};
+filter.rows.forEach(tr => { labelOf[tr.dataset.symbol] = tr.dataset.name; });
+
+let pick = null;      // {kind: 'code' | 'concl', value}
+
+const qvChart = new Chart(document.getElementById('qv'), {
   type: 'scatter',
   data: {datasets: Object.keys(byConcl).map(k => ({
     label: k, data: byConcl[k].filter(p => p.x != null && p.y != null),
     pointRadius: 5, backgroundColor: colorOf(k)}))},
   options: {
     maintainAspectRatio: false,
+    onClick: (evt, elements) => {
+      if (!elements.length) return;
+      const el = elements[0];
+      toggle('code', qvChart.data.datasets[el.datasetIndex].data[el.index].code);
+    },
+    onHover: (evt, elements) => {
+      const t = evt.native && evt.native.target;
+      if (t) t.style.cursor = elements.length ? 'pointer' : 'default';
+    },
     plugins: { tooltip: {callbacks: {label: c =>
       `${c.raw.name} ${c.raw.code}｜Q ${c.raw.x} V ${c.raw.y}`}} },
     scales: {
@@ -106,17 +144,69 @@ new Chart(document.getElementById('qv'), {
     }
   }
 });
+// 全局 `#scatter{cursor:crosshair}` 是选股页拖框用的，这一页是点击。
+document.getElementById('qv').style.cursor = 'default';
 
 const tally = {};
 concl.forEach(c => { const k = c || '—'; tally[k] = (tally[k] || 0) + 1; });
 const labels = Object.keys(tally).sort((a, b) => tally[b] - tally[a]);
-new Chart(document.getElementById('concl'), {
+const conclChart = new Chart(document.getElementById('concl'), {
   type: 'doughnut',
   data: {labels, datasets: [{data: labels.map(l => tally[l]),
     backgroundColor: labels.map(colorOf), borderColor: '#fff', borderWidth: 2}]},
   options: {maintainAspectRatio: false, cutout: '58%',
+    onClick: (evt, elements) => {
+      if (!elements.length) return;
+      toggle('concl', labels[elements[0].index]);
+    },
+    onHover: (evt, elements) => {
+      const t = evt.native && evt.native.target;
+      if (t) t.style.cursor = elements.length ? 'pointer' : 'default';
+    },
     plugins: {legend: {position: 'bottom', labels: {boxWidth: 10, font: {size: 11}}}}}
 });
+
+function paintQv() {
+  qvChart.data.datasets.forEach(d => {
+    if (!pick) {
+      d.pointRadius = 5;
+      d.pointBackgroundColor = colorOf(d.label);
+      return;
+    }
+    if (pick.kind === 'concl') {
+      // 选的是"一段结论"：这一结论的圆点保持原色，别的结论压灰。
+      const on = d.label === pick.value;
+      d.pointRadius = 5;
+      d.pointBackgroundColor = on ? colorOf(d.label) : DIM;
+      return;
+    }
+    d.pointRadius = d.data.map(p => p.code === pick.value ? 9 : 4);
+    d.pointBackgroundColor = d.data.map(p => p.code === pick.value ? PICK : DIM);
+  });
+  qvChart.update('none');
+}
+
+function paintConcl() {
+  /* 只把选中那段「抽出来」，不去改扇区颜色：环的颜色是靠图例认的，
+   * 一改色图例跟着变灰，反而看不出选的是哪档。 */
+  conclChart.data.datasets[0].offset =
+    labels.map(l => pick && pick.kind === 'concl' && l === pick.value ? 12 : 0);
+  conclChart.update('none');
+}
+
+function toggle(kind, value) {
+  if (!value) return;
+  pick = pick && pick.kind === kind && pick.value === value ? null : {kind, value};
+  if (!pick) { filter.reset(); paintQv(); paintConcl(); return; }
+  if (kind === 'code') {
+    filter.apply(tr => tr.dataset.symbol === value,
+      '散点：' + (labelOf[value] || value) + '（' + value + '）');
+  } else {
+    filter.apply(tr => tr.dataset.concl === value, '结论：' + value);
+  }
+  paintQv();
+  paintConcl();
+}
 </script>
 {% endif %}
 {% endblock %}

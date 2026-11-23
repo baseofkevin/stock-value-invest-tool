@@ -241,6 +241,26 @@ class TestPages(WebCase):
         self.assertNotIn("合同负债</th>", html)
         self.assertIn("需求端", html)
 
+    def test_cycle_charts_filter_the_detail_table(self):
+        """点散点圆点 / 产能横条，明细只留这一只（2026-11-23 加）。
+
+        两张图画的是同一批票，点一处就该只留一只；取消入口（提示条 + 显示全部）
+        得在同一屏里，否则图表看着像"不可点"。这里钉住接线，免得以后改模板
+        把联动悄悄拆掉。
+        """
+        html = self.client().get("/cycle").get_data(as_text=True)
+        self.assertIn('id="cycle-count"', html)          # 计数跟着筛选变
+        self.assertIn('id="cycle-filter"', html)         # 筛选提示条
+        self.assertIn('id="cycle-filter-clear"', html)   # 显示全部
+        self.assertIn('id="cycle-empty"', html)          # 命不中时的空态
+        self.assertIn('class="stock-row" data-symbol="sh600019"', html)
+        self.assertIn('data-name="宝钢股份"', html)       # 提示条写名称，不只写代码
+        # 两张图都能点：散点 + 横条各一个 onClick
+        self.assertEqual(html.count("onClick:"), 2)
+        for fn in ("function applyFilter", "function toggleFilter",
+                   "function paintBar", "function paintScatter"):
+            self.assertIn(fn, html)
+
     def test_root_goes_to_batches(self):
         """/ 是旧书签和 ./run.py web 打印的地址：转到批次页，不是 404。
 
@@ -940,6 +960,30 @@ class TestNavAndLinks(WebCase):
         self.assertIn("pointerdown", html)
         # 与周期/质量/顶部页一致：代码旁给东财行情页。
         self.assertIn('href="https://quote.eastmoney.com/sh600019.html#fullScreenChart"', html)
+
+    def test_tool_pages_filter_detail_tables_from_charts(self):
+        """点图筛明细：质量 / 顶部 / 综合评估（2026-11-23 加，与周期页同一套）。
+
+        图上点一处（圆点 / 横条 / 柱 / 环）→ 下面的表只留那只票或那一档；
+        「显示全部」和空态行都在模板里接好，筛选层是共用的 chart-filter.js。
+        """
+        cases = {
+            "/quality": ("quality-table", "quality", "data-concl="),
+            "/top": ("top-table", "top", "data-mom="),
+            "/review": ("review-all-table", "review", "data-tier="),
+        }
+        for url, (table, prefix, group_attr) in cases.items():
+            with self.subTest(url=url):
+                html = self.client().get(url).get_data(as_text=True)
+                self.assertIn("chart-filter.js", html)          # 共用筛选层加载了
+                for suffix in ("count", "filter", "filter-text",
+                               "filter-clear", "empty"):
+                    self.assertIn(f'id="{prefix}-{suffix}"', html)
+                self.assertIn(f'id="{table}"', html)
+                self.assertIn('class="stock-row', html)         # 行要被认出来
+                self.assertIn(group_attr, html)                 # 分组筛的键
+                self.assertEqual(html.count("onClick:"), 2)     # 两张图都能点
+                self.assertIn("createChartFilter", html)
 
     def test_tool_pages_link_into_their_own_section(self):
         """周期/质量/顶部点名称都要带 focus，否则落地页永远先显示四因子。"""

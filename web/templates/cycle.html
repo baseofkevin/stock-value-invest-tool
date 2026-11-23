@@ -16,18 +16,20 @@
 <div class="charts">
   <div class="chart-box tall">
     <h3>毛利率波动 × 弹性比值</h3>
-    <p class="sub">右上角才是"又波动又敏感"的强周期股。横轴 σ&lt;5pp 且靠左的，多属稳定生意。</p>
+    <p class="sub">右上角才是"又波动又敏感"的强周期股。横轴 σ&lt;5pp 且靠左的，多属稳定生意。
+      点任意圆点，下面明细只看这一只。</p>
     <div class="canvas-wrap"><canvas id="scatter"></canvas></div>
   </div>
   <div class="chart-box tall">
     <h3>产能周转率分位</h3>
-    <p class="sub">判断③：产能利用率处在自身十年分位。&lt;40 低位、&gt;60 高位（虚线）。</p>
+    <p class="sub">判断③：产能利用率处在自身十年分位。&lt;40 低位、&gt;60 高位（虚线）。
+      点任意横条，同样可只看这一只。</p>
     <div class="canvas-wrap scroll-y"><div class="canvas-inner"><canvas id="position"></canvas></div></div>
   </div>
 </div>
 
 <section class="panel">
-  <h2>明细（{{ rows|length }} 只）</h2>
+  <h2>明细（<span id="cycle-count">{{ rows|length }} 只</span>）</h2>
   <p class="sub">
     周期股 {{ rows|selectattr('is_cycle')|list|length }} 只；
     弹性：强 {{ rows|selectattr('elastic_label','equalto','strong')|list|length }}
@@ -38,6 +40,11 @@
     它<b>不改变分位、也不改变标签</b>——和工具里那个「扩产中 / 产能在退」是一个性质。
     悬停看金额和占比。
   </p>
+  {# 点图筛出来的那一只：和选股页同一个提示条样式，取消入口就在手边。 #}
+  <div class="select-filter" id="cycle-filter" hidden>
+    <span id="cycle-filter-text"></span>
+    <button type="button" id="cycle-filter-clear">显示全部</button>
+  </div>
   {{ stock_jump(rows, "cycle-table") }}
   <div class="scroll stock-scroll" id="cycle-table">
     <table class="grid">
@@ -50,7 +57,7 @@
       </tr></thead>
       <tbody>
         {% for r in rows %}
-        <tr data-symbol="{{ r.symbol }}">
+        <tr class="stock-row" data-symbol="{{ r.symbol }}" data-name="{{ r.name or r.symbol }}">
           <td class="code">{{ r.symbol }}</td>
           <td class="name"><a href="/stock/{{ r.symbol }}?focus=cycle">{{ r.name or '—' }}</a></td>
           <td>{% if r.symbol|quoteurl %}<a class="quote-link" href="{{ r.symbol|quoteurl }}" target="_blank" rel="noopener noreferrer" title="在东方财富打开 {{ r.name or r.symbol }} 的行情页">打开 ↗</a>{% else %}—{% endif %}</td>
@@ -67,6 +74,9 @@
           </td>
         </tr>
         {% endfor %}
+        <tr id="cycle-empty" hidden><td colspan="11" class="select-empty">
+          没有匹配的股票，点提示条上的「显示全部」恢复。
+        </td></tr>
       </tbody>
     </table>
   </div>
@@ -90,19 +100,47 @@ const posL = {{ rows|map(attribute='position_label')|list|tojson }};
 const code = {{ rows|map(attribute='symbol')|list|tojson }};
 
 const COLORS = {warn: 'rgba(180,83,9,.7)', info: 'rgba(29,78,216,.6)', muted: 'rgba(148,163,184,.7)'};
+const DIM = 'rgba(203,213,225,.5)';      // 没选中的：淡到只剩位置，不抢视线
+const PICK = 'rgba(194,65,12,.95)';      // 选中的那一只：深橙（和选股页同一套色）
+const POS_CN = {high: '高位', low: '低位', neutral: '中位', na: '不适用'};
+
 const groups = [['warn', '周期股'], ['muted', '非周期股']];
 const ds = groups.map(([tone, label]) => ({
-  label, pointRadius: 5,
-  backgroundColor: COLORS[tone],
+  tone, label, pointRadius: 5,
+  pointBackgroundColor: COLORS[tone], pointBorderColor: 'rgba(0,0,0,.08)',
   data: gm.map((x, i) => isCy[i] && tone === 'warn' || !isCy[i] && tone === 'muted'
       ? {x: x, y: ela[i], name: name[i], code: code[i]} : null).filter(Boolean)
 }));
 
-new Chart(document.getElementById('scatter'), {
+/* ---------------- 点图筛明细 ----------------
+ * 两张图画的是同一批票：点一个圆点或一根横条，底部明细只留这一只；再点同一处、
+ * 或按提示条上的「显示全部」就还原。
+ * 两图必须一起点亮——只筛表、图上毫无反应，看着就像"点了没生效"。 */
+const tableRows = Array.from(document.querySelectorAll('#cycle-table tbody tr.stock-row'));
+const countEl = document.getElementById('cycle-count');
+const filterBar = document.getElementById('cycle-filter');
+const filterText = document.getElementById('cycle-filter-text');
+const emptyRow = document.getElementById('cycle-empty');
+const scrollBox = document.getElementById('cycle-table');
+const labelOf = {};
+tableRows.forEach(tr => { labelOf[tr.dataset.symbol] = tr.dataset.name; });
+
+let activeCode = null;
+
+const scatter = new Chart(document.getElementById('scatter'), {
   type: 'scatter',
   data: {datasets: ds},
   options: {
     maintainAspectRatio: false,
+    onClick: (evt, elements) => {
+      if (!elements.length) return;       // 点空白不当作"取消"，免得误触
+      const el = elements[0];
+      toggleFilter(scatter.data.datasets[el.datasetIndex].data[el.index].code);
+    },
+    onHover: (evt, elements) => {
+      const target = evt.native && evt.native.target;
+      if (target) target.style.cursor = elements.length ? 'pointer' : 'default';
+    },
     plugins: { tooltip: { callbacks: { label: c =>
       `${c.raw.name} ${c.raw.code}｜σ ${c.raw.x}pp｜弹性 ${c.raw.y}` } } },
     scales: {
@@ -111,6 +149,8 @@ new Chart(document.getElementById('scatter'), {
     }
   }
 });
+// 全局 `#scatter{cursor:crosshair}` 是选股页框选用的；这一页是点击，指针态自己给。
+document.getElementById('scatter').style.cursor = 'default';
 
 // 横着画、按分位从高到低排：30 多只票的名字竖着写会糊成一条黑带，
 // 而且这张图要回答的是"谁在满负荷"，排序比按代码顺序有用。
@@ -131,21 +171,94 @@ const nBar = posIdx.length;
 posWrap.firstElementChild.style.height =
   Math.max(posWrap.clientHeight, nBar * ROW_H) + 'px';
 
-new Chart(document.getElementById('position'), {
+const positionChart = new Chart(document.getElementById('position'), {
   type: 'bar',
   data: { labels: posIdx.map(i => name[i]),
     datasets: [{data: posIdx.map(i => +pos[i].toFixed(1)),
       backgroundColor: posColor, borderRadius: 5}] },
   options: {
     maintainAspectRatio: false, indexAxis: 'y',
+    onClick: (evt, elements) => {
+      if (!elements.length) return;
+      toggleFilter(code[posIdx[elements[0].index]]);
+    },
+    onHover: (evt, elements) => {
+      const target = evt.native && evt.native.target;
+      if (target) target.style.cursor = elements.length ? 'pointer' : 'default';
+    },
     plugins: {legend: {display: false},
-      tooltip: {callbacks: {label: c => `${c.raw.x} 分位（${posL[posIdx[c.dataIndex]]}）`}}},
+      tooltip: {callbacks: {label: c => `${c.parsed.x} 分位（${POS_CN[posL[posIdx[c.dataIndex]]] || posL[posIdx[c.dataIndex]]}）`}}},
     scales: {x: {min: 0, max: 100, grid: {color: '#eef2f7'},
                  title: {display: true, text: '产能周转率分位'}},
              y: {grid: {display: false},
                  ticks: {font: {size: 10}, padding: 4, autoSkip: false}}}
   }
 });
+
+/* ---------------- 筛选状态 ----------------
+ * 只改「明细表」+ 两张图的高亮，不动图的数据和排序：周期页的排序本身就是
+ * 结论（谁在满负荷），筛完重排等于把结论藏起来。 */
+function paintScatter() {
+  ds.forEach(d => {
+    if (!activeCode) {
+      d.pointRadius = 5;
+      d.pointBackgroundColor = COLORS[d.tone];
+      d.pointBorderColor = 'rgba(0,0,0,.08)';
+      return;
+    }
+    d.pointRadius = d.data.map(p => p.code === activeCode ? 9 : 4);
+    d.pointBackgroundColor = d.data.map(p => p.code === activeCode ? PICK : DIM);
+    d.pointBorderColor = d.data.map(p => p.code === activeCode ? '#7c2d12' : DIM);
+  });
+  scatter.update('none');
+}
+
+function paintBar() {
+  positionChart.data.datasets[0].backgroundColor =
+    posIdx.map((i, k) => !activeCode ? posColor[k]
+      : (code[i] === activeCode ? PICK : DIM));
+  positionChart.update('none');
+}
+
+function applyFilter(symbol) {
+  activeCode = symbol;
+  let n = 0;
+  for (const tr of tableRows) {
+    const hit = !symbol || tr.dataset.symbol === symbol;
+    tr.hidden = !hit;
+    if (hit) n += 1;
+  }
+  emptyRow.hidden = n > 0;
+  countEl.textContent = n + ' 只';
+  scrollBox.scrollTop = 0;
+  filterBar.hidden = !symbol;
+  if (symbol) {
+    filterText.textContent =
+      `已筛选：${labelOf[symbol] || symbol}（${symbol}）；点图上同一处或「显示全部」取消`;
+    // 明细在两张图下面：筛完得让人看见表，不然"点了没反应"。
+    filterBar.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+  }
+  paintScatter();
+  paintBar();
+  return n;
+}
+
+function toggleFilter(symbol) {
+  if (!symbol) return;
+  applyFilter(activeCode === symbol ? null : symbol);
+}
+
+document.getElementById('cycle-filter-clear').addEventListener(
+  'click', () => applyFilter(null));
+
+/* 筛选状态下又用「按名称跳转」下拉找另一只票：得先撤掉筛选，否则目标行还是
+ * 隐藏的，跳过去一片空白。挂在 document 的捕获阶段，保证早于 stock-jump.js
+ * 的滚动计算——同一元素上的监听器按注册顺序跑，谁先谁后靠不住。 */
+document.addEventListener('change', evt => {
+  const sel = evt.target;
+  if (sel && sel.matches && sel.matches('select[data-stock-jump="cycle-table"]')
+      && activeCode) applyFilter(null);
+}, true);
 </script>
 {% endif %}
 {% endblock %}

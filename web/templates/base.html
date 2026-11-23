@@ -6,6 +6,8 @@
 <title>{% block title %}看板{% endblock %} · stock-value-invest</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 <script src="{{ url_for('static', filename='chart.umd.min.js') }}"></script>
+{# 点图筛明细的共用层：各页的 inline 脚本一加载就要用，所以不放 defer。 #}
+<script src="{{ url_for('static', filename='chart-filter.js') }}"></script>
 <script src="{{ url_for('static', filename='stock-jump.js') }}" defer></script>
 </head>
 <body class="{% block bodyclass %}{% endblock %}">

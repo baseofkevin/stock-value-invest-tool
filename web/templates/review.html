@@ -126,23 +126,30 @@
 <div class="charts">
   <div class="chart-box tall">
     <h3>质量 × 估值 × 评级</h3>
-    <p class="sub">竖线是 Q=45 硬地板；颜色是这一页的评级。左上（好公司、便宜）才算候选区。</p>
+    <p class="sub">竖线是 Q=45 硬地板；颜色是这一页的评级。左上（好公司、便宜）才算候选区。
+      点任意圆点，下面全表只看这一只。</p>
     <div class="canvas-wrap"><canvas id="qvTier"></canvas></div>
   </div>
   <div class="chart-box tall">
     <h3>评级分布</h3>
-    <p class="sub">排除占了多数是正常的：Q&lt;45 一律出局，剩下的才谈赔率。</p>
+    <p class="sub">排除占了多数是正常的：Q&lt;45 一律出局，剩下的才谈赔率。
+      点任意一段环，只看这一档的票。</p>
     <div class="canvas-wrap"><canvas id="tierPie"></canvas></div>
   </div>
 </div>
 
 <section class="panel">
-  <h2>全表（{{ review.rows|length }} 只，按赔率分排序）</h2>
+  <h2>全表（<span id="review-count">{{ review.rows|length }} 只</span>，按赔率分排序）</h2>
   <p class="sub">
     「提示」列不是判决，是研究入口：缺 V、缺周期、周期高位、趋势走弱——每一条
     都能在个股页找到原始结论。想更宽松就把 <code>web/review.py</code> 的
     <code>BUY_CUT</code> 调小，更严格就调大。
   </p>
+  {# 点图筛出来的那只（或那一档评级）：和周期页同一套提示条。 #}
+  <div class="select-filter" id="review-filter" hidden>
+    <span id="review-filter-text"></span>
+    <button type="button" id="review-filter-clear">显示全部</button>
+  </div>
   {{ stock_jump(review.rows, "review-all-table") }}
   <div class="scroll stock-scroll" id="review-all-table">
     <table class="grid">
@@ -154,7 +161,9 @@
       </tr></thead>
       <tbody>
         {% for r in review.rows %}
-        <tr class="{{ 'dim' if r.tier in ('out', 'nodata') }}" data-symbol="{{ r.symbol }}">
+        <tr class="stock-row {{ 'dim' if r.tier in ('out', 'nodata') }}"
+            data-symbol="{{ r.symbol }}" data-name="{{ r.name or r.symbol }}"
+            data-tier="{{ r.tier }}">
           <td class="n">{{ r.rank }}</td>
           <td class="code">{{ r.symbol }}</td>
           <td class="name"><a href="/stock/{{ r.symbol }}">{{ r.name or '—' }}</a></td>
@@ -181,6 +190,9 @@
           </td>
         </tr>
         {% endfor %}
+        <tr id="review-empty" hidden><td colspan="15" class="select-empty">
+          没有匹配的股票，点提示条上的「显示全部」恢复。
+        </td></tr>
       </tbody>
     </table>
   </div>
@@ -324,6 +336,7 @@ tiers.forEach((t, i) => {
 });
 const order = ['buy', 'watch', 'out', 'nodata'];
 const datasets = order.filter(t => groups[t]).map(t => ({
+  tierKey: t,           // 高亮时要用回英文档位（图例标签是中文，反查不可靠）
   label: TIER_LABEL[t], data: groups[t], pointRadius: t === 'buy' ? 7 : 5,
   backgroundColor: TIER_COLOR[t], borderColor: t === 'buy' ? '#0f766e' : 'transparent',
   borderWidth: t === 'buy' ? 1.5 : 0,
@@ -334,11 +347,22 @@ datasets.push({label: 'Q=45', data: [{x: 45, y: AXIS_MIN}, {x: 45, y: AXIS_MAX}]
   showLine: true, pointRadius: 0, borderColor: 'rgba(180,83,9,.45)',
   borderDash: [5, 4], borderWidth: 1.5, fill: false});
 
-new Chart(document.getElementById('qvTier'), {
+const qvChart = new Chart(document.getElementById('qvTier'), {
   type: 'scatter',
   data: {datasets},
   options: {
     maintainAspectRatio: false,
+    onClick: (evt, elements) => {
+      if (!elements.length) return;
+      const el = elements[0];
+      const d = qvChart.data.datasets[el.datasetIndex];
+      if (d.showLine) return;           // Q=45 那条虚线不是票
+      toggle('code', d.data[el.index].code);
+    },
+    onHover: (evt, elements) => {
+      const t = evt.native && evt.native.target;
+      if (t) t.style.cursor = elements.length ? 'pointer' : 'default';
+    },
     plugins: {tooltip: {callbacks: {label: c => c.dataset.showLine ? 'Q=45 硬地板'
       : `${c.raw.name} ${c.raw.code}｜Q ${c.raw.x} V ${c.raw.y}｜赔率 ${c.raw.score}`}}},
     scales: {
@@ -353,7 +377,7 @@ new Chart(document.getElementById('qvTier'), {
 const tally = {};
 tiers.forEach(t => { tally[t] = (tally[t] || 0) + 1; });
 const pieKeys = order.filter(t => tally[t]);
-new Chart(document.getElementById('tierPie'), {
+const pieChart = new Chart(document.getElementById('tierPie'), {
   type: 'doughnut',
   data: {
     labels: pieKeys.map(t => TIER_LABEL[t]),
@@ -362,8 +386,79 @@ new Chart(document.getElementById('tierPie'), {
       borderColor: '#fff', borderWidth: 2}]
   },
   options: {maintainAspectRatio: false, cutout: '58%',
+    onClick: (evt, elements) => {
+      if (!elements.length) return;
+      toggle('tier', pieKeys[elements[0].index]);
+    },
+    onHover: (evt, elements) => {
+      const t = evt.native && evt.native.target;
+      if (t) t.style.cursor = elements.length ? 'pointer' : 'default';
+    },
     plugins: {legend: {position: 'bottom', labels: {boxWidth: 10, font: {size: 11}}}}}
 });
+
+/* ---------------- 点图筛明细 ----------------
+ * 左边圆点 = 一只票，右边环 = 一档评级（那一档下所有票）。两种选择共用一套
+ * 提示条和计数；再点同一处、或按「显示全部」还原。
+ * 只筛下面那张「全表」：上面的「优先研究」在图表之前，反过来筛它没有道理。
+ * 图和排序都不动——赔率分排出来的名次本身就是这一页的结论。 */
+const filter = createChartFilter({
+  table: 'review-all-table', count: 'review-count',
+  bar: 'review-filter', text: 'review-filter-text',
+  clear: 'review-filter-clear', empty: 'review-empty',
+  onReset: () => { pick = null; paintQv(); paintPie(); },
+});
+const DIM = 'rgba(203,213,225,.45)';
+const labelOf = {};
+filter.rows.forEach(tr => { labelOf[tr.dataset.symbol] = tr.dataset.name; });
+
+let pick = null;      // {kind: 'code' | 'tier', value}
+
+function paintQv() {
+  qvChart.data.datasets.forEach(d => {
+    if (d.showLine) return;
+    if (!pick) {
+      d.pointRadius = d.tierKey === 'buy' ? 7 : 5;
+      d.pointBackgroundColor = TIER_COLOR[d.tierKey];
+      return;
+    }
+    if (pick.kind === 'tier') {
+      const on = d.tierKey === pick.value;
+      d.pointRadius = on ? (d.tierKey === 'buy' ? 8 : 6) : 4;
+      d.pointBackgroundColor = on ? TIER_COLOR[d.tierKey] : DIM;
+      return;
+    }
+    d.pointRadius = d.data.map(p => p.code === pick.value ? 9 : 4);
+    d.pointBackgroundColor = d.data.map(p => p.code === pick.value
+      ? TIER_COLOR[d.tierKey] : DIM);
+  });
+  qvChart.update('none');
+}
+
+function paintPie() {
+  /* 只把选中那段「抽出来」，不改扇区颜色：环的颜色靠图例认，一改色图例
+   * 也跟着变灰，反而看不出选的是哪档。 */
+  const ds = pieChart.data.datasets[0];
+  const onKey = !pick ? null
+    : pick.kind === 'tier' ? pick.value
+    : tiers[rows.indexOf(pick.value)];
+  ds.offset = pieKeys.map(t => t === onKey ? 12 : 0);
+  pieChart.update('none');
+}
+
+function toggle(kind, value) {
+  if (!value) return;
+  pick = pick && pick.kind === kind && pick.value === value ? null : {kind, value};
+  if (!pick) { filter.reset(); paintQv(); paintPie(); return; }
+  if (kind === 'code') {
+    filter.apply(tr => tr.dataset.symbol === value,
+      '散点：' + (labelOf[value] || value) + '（' + value + '）');
+  } else {
+    filter.apply(tr => tr.dataset.tier === value, '评级：' + TIER_LABEL[value]);
+  }
+  paintQv();
+  paintPie();
+}
 </script>
 {% endif %}
 {% endblock %}

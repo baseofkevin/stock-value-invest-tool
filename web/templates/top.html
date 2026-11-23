@@ -16,19 +16,26 @@
 <div class="charts">
   <div class="chart-box tall">
     <h3>距 250 日高点</h3>
-    <p class="sub">0% = 一年最高点，色越暖越高位；只作位置背景，不是顶部结论。</p>
+    <p class="sub">0% = 一年最高点，色越暖越高位；只作位置背景，不是顶部结论。
+      点任意横条，下面矩阵只看这一只。</p>
     <div class="canvas-wrap scroll-y"><div class="canvas-inner"><canvas id="pos"></canvas></div></div>
   </div>
   <div class="chart-box tall">
     <h3>动量状态分布</h3>
-    <p class="sub">"位置·速度"二维：位置看距 250 日高点，速度看 20 日涨幅。</p>
+    <p class="sub">"位置·速度"二维：位置看距 250 日高点，速度看 20 日涨幅。
+      点任意柱子，只看这一档动量的票。</p>
     <div class="canvas-wrap"><canvas id="mom"></canvas></div>
   </div>
 </div>
 
 <section class="panel">
-  <h2>四因子状态矩阵（{{ rows|length }} 只）</h2>
+  <h2>四因子状态矩阵（<span id="top-count">{{ rows|length }} 只</span>）</h2>
   <p class="sub">每一格都是该维度的独立结论；横向看不出"总分"，这正是它的设计。</p>
+  {# 点图筛出来的那只（或那一档动量）：和周期页同一套提示条。 #}
+  <div class="select-filter" id="top-filter" hidden>
+    <span id="top-filter-text"></span>
+    <button type="button" id="top-filter-clear">显示全部</button>
+  </div>
   {{ stock_jump(rows, "top-table") }}
   <div class="scroll stock-scroll" id="top-table">
     <table class="grid">
@@ -40,7 +47,8 @@
       </tr></thead>
       <tbody>
         {% for r in rows %}
-        <tr data-symbol="{{ r.symbol }}">
+        <tr class="stock-row" data-symbol="{{ r.symbol }}" data-name="{{ r.name or r.symbol }}"
+            data-mom="{{ r.momentum_state or '—' }}">
           <td class="code">{{ r.symbol }}</td>
           <td class="name"><a href="/stock/{{ r.symbol }}?focus=top">{{ r.name or '—' }}</a></td>
           <td>{% if r.symbol|quoteurl %}<a class="quote-link" href="{{ r.symbol|quoteurl }}" target="_blank" rel="noopener noreferrer" title="在东方财富打开 {{ r.name or r.symbol }} 的行情页">打开 ↗</a>{% else %}—{% endif %}</td>
@@ -55,6 +63,9 @@
           <td class="n">{{ r.target_upside|pct }}</td>
         </tr>
         {% endfor %}
+        <tr id="top-empty" hidden><td colspan="12" class="select-empty">
+          没有匹配的股票，点提示条上的「显示全部」恢复。
+        </td></tr>
       </tbody>
     </table>
   </div>
@@ -90,13 +101,21 @@ const posWrap = document.getElementById('pos').closest('.canvas-wrap');
 posWrap.firstElementChild.style.height =
   Math.max(posWrap.clientHeight, order.length * ROW_H) + 'px';
 
-new Chart(document.getElementById('pos'), {
+const posChart = new Chart(document.getElementById('pos'), {
   type: 'bar',
   data: {labels: order.map(i => name[i]),
     datasets: [{data: order.map(i => pos[i] == null ? null : +(pos[i] * 100).toFixed(2)),
       backgroundColor: order.map(i => posColor(pos[i])), borderRadius: 5}]},
   options: {
     maintainAspectRatio: false, indexAxis: 'y',
+    onClick: (evt, elements) => {
+      if (!elements.length) return;
+      toggle('code', code[order[elements[0].index]]);
+    },
+    onHover: (evt, elements) => {
+      const t = evt.native && evt.native.target;
+      if (t) t.style.cursor = elements.length ? 'pointer' : 'default';
+    },
     plugins: {legend: {display: false},
       tooltip: {callbacks: {label: c => `${c.raw.y}%　${mom[order[c.dataIndex]] || ''}`}}},
     scales: {x: {title: {display: true, text: '距 250 日高点 %'},
@@ -111,15 +130,73 @@ mom.forEach(m => { const k = m || '—'; tally[k] = (tally[k] || 0) + 1; });
 const labels = Object.keys(tally).sort((a, b) => tally[b] - tally[a]);
 const toneColor = l => l.includes('高位') ? 'rgba(180,83,9,.75)'
   : l.includes('中位') ? 'rgba(29,78,216,.6)' : 'rgba(148,163,184,.7)';
-new Chart(document.getElementById('mom'), {
+const momChart = new Chart(document.getElementById('mom'), {
   type: 'bar',
   data: {labels, datasets: [{data: labels.map(l => tally[l]),
     backgroundColor: labels.map(toneColor), borderRadius: 6}]},
   options: {maintainAspectRatio: false,
+    onClick: (evt, elements) => {
+      if (!elements.length) return;
+      toggle('mom', labels[elements[0].index]);
+    },
+    onHover: (evt, elements) => {
+      const t = evt.native && evt.native.target;
+      if (t) t.style.cursor = elements.length ? 'pointer' : 'default';
+    },
     plugins: {legend: {display: false}},
     scales: {y: {ticks: {precision: 0}, grid: {color: '#eef2f7'}},
              x: {grid: {display: false}, ticks: {font: {size: 11}}}}}
 });
+
+/* ---------------- 点图筛明细 ----------------
+ * 左边横条 = 一只票，右边柱子 = 一档动量（那一档下所有票）。两种选择共用一套
+ * 提示条和计数；再点同一处、或按「显示全部」还原。
+ * 选一只票：那根横条加粗上色，其余压灰；选一档动量：那根柱子加粗，同时把左边
+ * 属于这一档的横条点亮——两张图说的是同一批票，只亮一边就成了"点了没反应"。 */
+const filter = createChartFilter({
+  table: 'top-table', count: 'top-count',
+  bar: 'top-filter', text: 'top-filter-text',
+  clear: 'top-filter-clear', empty: 'top-empty',
+  onReset: () => { pick = null; paintPos(); paintMom(); },
+});
+const DIM = 'rgba(203,213,225,.45)';
+const PICK = 'rgba(194,65,12,.95)';
+const labelOf = {};
+filter.rows.forEach(tr => { labelOf[tr.dataset.symbol] = tr.dataset.name; });
+
+let pick = null;      // {kind: 'code' | 'mom', value}
+
+function paintPos() {
+  posChart.data.datasets[0].backgroundColor = order.map(i => {
+    if (!pick) return posColor(pos[i]);
+    if (pick.kind === 'code') return code[i] === pick.value ? PICK : DIM;
+    return (mom[i] || '—') === pick.value ? posColor(pos[i]) : DIM;
+  });
+  posChart.update('none');
+}
+
+function paintMom() {
+  momChart.data.datasets[0].backgroundColor = labels.map(l => {
+    if (!pick) return toneColor(l);
+    if (pick.kind === 'mom') return l === pick.value ? PICK : DIM;
+    return l === (mom[code.indexOf(pick.value)] || '—') ? PICK : DIM;
+  });
+  momChart.update('none');
+}
+
+function toggle(kind, value) {
+  if (!value) return;
+  pick = pick && pick.kind === kind && pick.value === value ? null : {kind, value};
+  if (!pick) { filter.reset(); paintPos(); paintMom(); return; }
+  if (kind === 'code') {
+    filter.apply(tr => tr.dataset.symbol === value,
+      '横条：' + (labelOf[value] || value) + '（' + value + '）');
+  } else {
+    filter.apply(tr => tr.dataset.mom === value, '动量：' + value);
+  }
+  paintPos();
+  paintMom();
+}
 </script>
 {% endif %}
 {% endblock %}
