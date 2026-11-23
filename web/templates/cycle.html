@@ -115,17 +115,18 @@ const ds = groups.map(([tone, label]) => ({
 /* ---------------- 点图筛明细 ----------------
  * 两张图画的是同一批票：点一个圆点或一根横条，底部明细只留这一只；再点同一处、
  * 或按提示条上的「显示全部」就还原。
- * 两图必须一起点亮——只筛表、图上毫无反应，看着就像"点了没生效"。 */
-const tableRows = Array.from(document.querySelectorAll('#cycle-table tbody tr.stock-row'));
-const countEl = document.getElementById('cycle-count');
-const filterBar = document.getElementById('cycle-filter');
-const filterText = document.getElementById('cycle-filter-text');
-const emptyRow = document.getElementById('cycle-empty');
-const scrollBox = document.getElementById('cycle-table');
-const labelOf = {};
-tableRows.forEach(tr => { labelOf[tr.dataset.symbol] = tr.dataset.name; });
-
+ * 两图必须一起点亮——只筛表、图上毫无反应，看着就像"点了没生效"。
+ * 藏行、改计数、提示条、跳转前先撤筛选那一层走共用的 chart-filter.js，
+ * 这一页只负责"点哪个元素、怎么高亮"。 */
 let activeCode = null;
+const filter = createChartFilter({
+  table: 'cycle-table', count: 'cycle-count',
+  bar: 'cycle-filter', text: 'cycle-filter-text',
+  clear: 'cycle-filter-clear', empty: 'cycle-empty',
+  onReset: () => { activeCode = null; paintScatter(); paintBar(); },
+});
+const labelOf = {};
+filter.rows.forEach(tr => { labelOf[tr.dataset.symbol] = tr.dataset.name; });
 
 const scatter = new Chart(document.getElementById('scatter'), {
   type: 'scatter',
@@ -195,9 +196,9 @@ const positionChart = new Chart(document.getElementById('position'), {
   }
 });
 
-/* ---------------- 筛选状态 ----------------
- * 只改「明细表」+ 两张图的高亮，不动图的数据和排序：周期页的排序本身就是
- * 结论（谁在满负荷），筛完重排等于把结论藏起来。 */
+/* ---------------- 高亮 ----------------
+ * 只改两张图的选中态，不动图的数据和排序：周期页的排序本身就是结论
+ * （谁在满负荷），筛完重排等于把结论藏起来。 */
 function paintScatter() {
   ds.forEach(d => {
     if (!activeCode) {
@@ -220,45 +221,18 @@ function paintBar() {
   positionChart.update('none');
 }
 
-function applyFilter(symbol) {
-  activeCode = symbol;
-  let n = 0;
-  for (const tr of tableRows) {
-    const hit = !symbol || tr.dataset.symbol === symbol;
-    tr.hidden = !hit;
-    if (hit) n += 1;
-  }
-  emptyRow.hidden = n > 0;
-  countEl.textContent = n + ' 只';
-  scrollBox.scrollTop = 0;
-  filterBar.hidden = !symbol;
-  if (symbol) {
-    filterText.textContent =
-      `已筛选：${labelOf[symbol] || symbol}（${symbol}）；点图上同一处或「显示全部」取消`;
-    // 明细在两张图下面：筛完得让人看见表，不然"点了没反应"。
-    filterBar.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+function toggleFilter(symbol) {
+  if (!symbol) return;
+  activeCode = activeCode === symbol ? null : symbol;
+  if (!activeCode) {
+    filter.reset();
+  } else {
+    filter.apply(tr => tr.dataset.symbol === activeCode,
+      '已筛选：' + (labelOf[activeCode] || activeCode) + '（' + activeCode + '）');
   }
   paintScatter();
   paintBar();
-  return n;
 }
-
-function toggleFilter(symbol) {
-  if (!symbol) return;
-  applyFilter(activeCode === symbol ? null : symbol);
-}
-
-document.getElementById('cycle-filter-clear').addEventListener(
-  'click', () => applyFilter(null));
-
-/* 筛选状态下又用「按名称跳转」下拉找另一只票：得先撤掉筛选，否则目标行还是
- * 隐藏的，跳过去一片空白。挂在 document 的捕获阶段，保证早于 stock-jump.js
- * 的滚动计算——同一元素上的监听器按注册顺序跑，谁先谁后靠不住。 */
-document.addEventListener('change', evt => {
-  const sel = evt.target;
-  if (sel && sel.matches && sel.matches('select[data-stock-jump="cycle-table"]')
-      && activeCode) applyFilter(null);
-}, true);
 </script>
 {% endif %}
 {% endblock %}

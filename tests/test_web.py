@@ -257,8 +257,11 @@ class TestPages(WebCase):
         self.assertIn('data-name="宝钢股份"', html)       # 提示条写名称，不只写代码
         # 两张图都能点：散点 + 横条各一个 onClick
         self.assertEqual(html.count("onClick:"), 2)
-        for fn in ("function applyFilter", "function toggleFilter",
-                   "function paintBar", "function paintScatter"):
+        # 筛表那层走共用脚本，和 /quality /top /review 是同一份，别再本地重写一套
+        self.assertIn("createChartFilter({", html)
+        self.assertIn("filter.apply(", html)
+        for fn in ("function toggleFilter", "function paintBar",
+                   "function paintScatter"):
             self.assertIn(fn, html)
 
     def test_root_goes_to_batches(self):
