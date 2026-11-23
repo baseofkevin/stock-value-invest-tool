@@ -13,7 +13,12 @@
 <body class="{% block bodyclass %}{% endblock %}">
 <div class="topbar">
   <div class="topbar-inner">
-    <div class="brand">《股市真规则》的实践运用<small>RESULTS.DB · 只读</small></div>
+    {# 字标只留 FRSI（Five Rules of Stock Investing）——下面那排红字就是这五个缩写。
+       全称放 title，不再占一行小字；「RESULTS.DB · 只读」已删，
+       库名是脚注要讲的事，摆在顶栏只会天天误读成"这页数据是快照"。 #}
+    <div class="brand">
+      <span class="brand-mark" title="FRSI · Five Rules of Stock Investing —《股市真规则》的实践运用">FRSI</span>
+    </div>
     <nav class="nav">
       {% for href, label in nav %}
       <a href="{{ href }}" class="{{ 'on' if request.path == href or (href != '/' and request.path.startswith(href)) else '' }}">{{ label }}</a>

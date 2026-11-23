@@ -28,8 +28,23 @@ a:hover{text-decoration:underline}
   border-bottom:1px solid var(--line);
 }
 .topbar-inner{max-width:1200px;margin:0 auto;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
-.brand{font-weight:700;font-size:15px;letter-spacing:.01em}
-.brand small{display:block;font-weight:400;font-size:11px;color:var(--muted);letter-spacing:.06em}
+/* 顶栏字标：只剩 FRSI 四个字母，所以它得够重、够大，才能压住整条顶栏。
+   渐变从墨蓝走到青绿，与 hero 同一套色，右边那排导航不会跟它抢。
+   先给实色，再在支持 background-clip 的浏览器上换渐变——否则一旦不支持，
+   color:transparent 会让字标整块消失。 */
+.brand{display:flex;align-items:center}
+.brand-mark{
+  font-size:23px;font-weight:800;line-height:1;letter-spacing:.14em;
+  margin-right:-.14em;              /* 抵消最后一个字母的字距，右侧不留空 */
+  color:var(--navy);font-family:var(--font-display,inherit);
+}
+@supports (background-clip:text) or (-webkit-background-clip:text){
+  .brand-mark{
+    background:linear-gradient(96deg,#0b1b30 4%,#12596b 54%,#10a391 98%);
+    -webkit-background-clip:text;background-clip:text;
+    -webkit-text-fill-color:transparent;color:transparent;
+  }
+}
 .nav{display:flex;gap:4px;flex-wrap:wrap;margin-left:auto}
 .nav a{
   padding:6px 12px;border-radius:999px;font-size:13px;color:#3b4a63;
@@ -248,6 +263,17 @@ table.grid tr.dim td{opacity:.55}
 
 /* 批次表：一格一次运行，"未跑"要一眼看出来 */
 table.grid.batch td{vertical-align:top}
+
+/* 批次表默认只铺开最近 10 个批次，第 11 个起在框内滚。
+   660px ≈ 表头 40 + 10 行 × 62（td 上下各 8px + 日期行 + 时间那行小字）。
+   行高不是常数：带「未跑」说明的格子会多一两行，所以这个上限是"大约 10 行"——
+   想精确框住 10 行就得固定行高，那会砍掉补跑提示，不值得。
+   再套 min(…,78vh) 管小屏：一行 62px 的 10 行在手机上比视口还高。
+   表头 sticky 是必须的，否则滚到第 30 个批次就不知道列是什么意思了。 */
+.batch-scroll{max-height:min(660px,78vh);overflow-y:auto;overflow-x:auto;
+  scrollbar-width:thin;-webkit-overflow-scrolling:touch;
+  border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.batch-scroll table.grid thead th{position:sticky;top:0;z-index:2;background:#f8fafc}
 table.grid .cellrun{display:block;text-decoration:none;color:inherit}
 table.grid .cellrun small{display:block;color:var(--muted);font-size:11px;font-weight:400}
 table.grid .cellrun:hover{color:#0f766e}

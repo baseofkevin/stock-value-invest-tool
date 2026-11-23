@@ -316,7 +316,7 @@ BACK_HOME = """
 .back-home:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
 @media print { .back-home { display: none; } }
 </style>
-<a class="back-home" href="/batches" title="返回《股市真规则》的实践运用看板">&larr; 返回看板</a>
+<a class="back-home" href="/batches" title="返回 FRSI 看板">&larr; 返回看板</a>
 """
 
 
@@ -350,7 +350,7 @@ FLOW_BACK = """
 .flow-back:focus-visible { outline: 2px solid #2f6152; outline-offset: 3px; }
 @media print { .flow-back { display: none; } }
 </style>
-<a class="flow-back" href="/batches" title="返回《股市真规则》的实践运用看板">&larr; 返回看板</a>
+<a class="flow-back" href="/batches" title="返回 FRSI 看板">&larr; 返回看板</a>
 """
 
 

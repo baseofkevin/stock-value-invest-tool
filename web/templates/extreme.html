@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}冷热极点{% endblock %}
+{% block title %}冷热极点 · 时点快照与单票回溯{% endblock %}
 {% block body %}
 
 {# 这一页读的是 **results.db**（`price` 一天一份、`price_stat` 一天一行），
@@ -12,8 +12,8 @@
    形态由 `db.extreme_page()` 决定（`shape`），模板只管按 shape 摆块。 #}
 
 <section class="hero">
-  <div class="eyebrow">results.db · price</div>
-  <h1>冷热极点</h1>
+  <div class="eyebrow">stock_extreme_point</div>
+  <h1>冷热极点 · 时点快照与单票回溯</h1>
   <p>这个页面主要用来记录 A 股全市场<b style="color:#fff">最热和最冷</b>的时候的股票情况，便于以后的回溯和查看，所以不会周定期跑数据，而是根据市场的冷热极点，记录当时的全市场情况。</p>
 </section>
 
