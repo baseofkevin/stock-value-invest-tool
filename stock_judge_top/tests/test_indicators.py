@@ -90,8 +90,10 @@ class KlineMetricsTest(unittest.TestCase):
         self.assertIsNone(km["av250"])
         self.assertIsNone(km["ratio"])
         self.assertIsNone(km["ret60"])
-        # 250 日窗口按「现有根数」算，所以 30 根也能给出 pos250（README 有提示）
-        self.assertIsNotNone(km["pos250"])
+        # 250 日窗口同样 require=True：不足 250 根时 pos250 为 None，
+        # 下游退回 60 日口径，不再拿「现有 30 根」冒充 250 日高点。
+        self.assertIsNone(km["pos250"])
+        self.assertIsNone(km["high250"])
 
     def test_below_ma20_flag(self):
         nodes = fx.kline(120)

@@ -70,6 +70,26 @@ class NodesTest(unittest.TestCase):
         self.assertEqual([n["date"] for n in out],
                          ["2026-11-01", "2026-11-02", "2026-11-03"])
 
+    def test_exchange_above_sane_max_is_nulled(self):
+        """换手率超上限（市值/成交额单位 bug）时置空，退回成交额分位。
+
+        复现 2026-11-17 起的单位事故：circ_mv 被当元存（实际是亿元），
+        分母小 1e8 倍，换手率放大到几千万%。护栏把它拦在源头。
+        """
+        raw = raw_row("2026-11-16", 10.0, 10.5, 1_000_000, 30_000_000_0)
+        n = data_mod._nodes([raw], 3642)[0]             # 3642 元 = 被写错的亿元值
+        self.assertIsNone(n["exchange"])                 # 不落脏值
+        self.assertEqual(n["amount"], 30_000_000_0)      # amount 原样保留
+
+    def test_exchange_at_boundary_kept(self):
+        """恰好 100% 不触发（用严格大于判断），正常数据不受误伤。"""
+        raw = raw_row("2026-11-16", 10.0, 10.5, 1, 100.0)
+        n = data_mod._nodes([raw], 100.0)[0]             # 100/100×100 = 100%
+        self.assertEqual(n["exchange"], 100.0)
+
+    def test_sane_max_constant(self):
+        self.assertEqual(data_mod.TURNOVER_SANE_MAX, 100.0)
+
 
 class ConstantsTest(unittest.TestCase):
     def test_kline_depth_matches_original(self):

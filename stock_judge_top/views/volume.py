@@ -22,7 +22,7 @@ def volume_view(r):
         ("量比计算", (f"5日均量 {_fmt_vol(km.get('pav5'))} ÷ 20日均量 "
                     f"{_fmt_vol(km.get('pav20'))}")),
         ("5日收盘区间", f"{_fmt_px(lo5)} ~ {_fmt_px(hi5)}"),
-        ("5日振幅", fmt_pct(range5)),
+        ("5日振幅", fmt_pct(range5, signed=False)),
         ("5日涨跌", fmt_pct(ret5)),
         (f"距{pos_basis}高点", fmt_pct(pos)),
     ]
@@ -33,15 +33,15 @@ def volume_view(r):
     else:
         if pos >= -0.05 and vr >= 1.5 and range5 <= 0.03:
             state, tone = "放量盘整", "warn"
-            note = (f"距 250 日高点 {fmt_pct(pos)}、量比 {vr:.2f}、5 日振幅 "
-                    f"{fmt_pct(range5)}：高位放量而价格窄幅盘整。"
+            note = (f"距 {pos_basis} 高点 {fmt_pct(pos)}、量比 {vr:.2f}、5 日振幅 "
+                    f"{fmt_pct(range5, signed=False)}：高位放量而价格窄幅盘整。"
                     "历史样本显示它的增量有限，只能作为观察项，不能单独触发。")
         elif pos >= -0.05 and vr >= 1.5 and ret5 >= 0.02:
             state, tone = "放量上涨", "warn"
             note = "高位放量且价格继续上涨，更像加速赶顶，但同样不能单独确认顶部。"
         elif vr >= 1.5:
             state, tone = "放量（非高位）", "info"
-            note = "成交量放大，但价格不在 60 日高位附近；不作为高位量价信号。"
+            note = f"成交量放大，但价格不在 {pos_basis} 高位附近；不作为高位量价信号。"
         else:
             state, tone = "未触发", "ok"
             note = "没有出现明显的放量盘整或放量上涨，量价项不构成观察信号。"
@@ -49,10 +49,11 @@ def volume_view(r):
             "key": "volume", "title": "量价",
             "subtitle": f"放量但价格盘整（高位=距{pos_basis}高点 5% 内）",
             "state": state, "tone": tone,
-            "headline": f"量比 {vr:.2f}，5日振幅 {fmt_pct(range5)}，5日涨跌 {fmt_pct(ret5)}",
+            "headline": f"量比 {vr:.2f}，5日振幅 {fmt_pct(range5, signed=False)}，"
+                       f"5日涨跌 {fmt_pct(ret5)}",
             "metrics": [
                 ("5日/20日量比", f"{vr:.2f}"),
-                ("5日振幅", fmt_pct(range5)),
+                ("5日振幅", fmt_pct(range5, signed=False)),
                 ("5日涨跌", fmt_pct(ret5)),
                 (f"距{pos_basis}高点", fmt_pct(pos)),
             ],

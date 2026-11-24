@@ -119,6 +119,26 @@ class VolumeViewTest(unittest.TestCase):
     def test_insufficient(self):
         self.assertEqual(self.view(bars=30)["state"], "数据不足")
 
+    def test_note_uses_pos_basis_not_hardcoded(self):
+        """note 里的「高位」口径必须跟 pos_basis 走，不能写死 60 日/250 日。"""
+        # 正常票：pos250 有值 → note 说「250 日」，不能说「60 日」
+        v = self.view(pos250=-0.30, pos60=-0.30, pvol_ratio5=2.0)
+        self.assertIn("250日", v["note"])
+        self.assertNotIn("60日", v["note"])
+        # 次新股：pos250 缺失退 60 日 → note 说「60 日」
+        v2 = self.view(pos250=None, pos60=-0.30, pvol_ratio5=2.0)
+        self.assertIn("60日", v2["note"])
+        self.assertNotIn("250日", v2["note"])
+
+    def test_amplitude_has_no_sign(self):
+        """振幅恒正，不应带 + 号（那是涨跌的记号）。"""
+        v = self.view(pos250=-0.02, pos60=-0.02, pvol_ratio5=1.6,
+                      range5_high=1.02, range5_low=1.0, ret5=0.005)
+        for label, value in v["metrics"]:
+            if label == "5日振幅":
+                self.assertNotIn("+", value)          # 1.96%，不是 +1.96%
+                self.assertIn("%", value)
+
 
 class TurnoverAmountFallbackTest(unittest.TestCase):
     """流通市值缺失 → 用成交额自身分位，而不是整张卡片"数据不足"。"""

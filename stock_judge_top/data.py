@@ -39,6 +39,14 @@ KLINE_BARS = 750
 KLINE_MIN_BARS = 30
 FIN_PERIODS = 60
 
+# 换手率合理性上限（%）。换手率 = 成交额 ÷ 流通市值 × 100，超过 100% 意味着
+# 单日成交额超过整个流通盘——A 股除新股上市首日 / 极端事件外几乎不可能。
+# 出现这种值几乎可以断定是 circ_mv 或 amount 的单位 bug（2026-11-17 起
+# westock 的市值字段从"元"悄悄变成"亿元"，被当元写库后分母小 1e8 倍，
+# 换手率放大到几千万%）。折算出超限值时把 exchange 置 None，下游自动退回
+# 成交额分位（口径不同但诚实），绝不让脏值流进指标层和 results.db。
+TURNOVER_SANE_MAX = 100.0
+
 
 def _nodes(rows, circ_mv):
     """hub kline 行 → judge 指标层的 node（last/high/exchange/volume）。
@@ -47,6 +55,9 @@ def _nodes(rows, circ_mv):
     `amount ÷ 流通市值 × 100`，市值只有"当期一份"，所以历史换手率是近似——
     与 stock_kline_screen 的 turnover20 同一个近似。流通市值缺失时
     `exchange` 为 None，指标层会退回用成交额自身的分位（见 indicators）。
+
+    换手率还过一道 `TURNOVER_SANE_MAX` 合理性闸：超限说明市值/成交额单位
+    出错，同样置 None（退回成交额分位），避免脏值静默固化（见常量注释）。
     """
     out = []
     for row in rows:
@@ -55,6 +66,11 @@ def _nodes(rows, circ_mv):
             c, v = fnum(row.get("close")), fnum(row.get("volume"))
             amt = c * v if (c is not None and v is not None) else None
         exch = amt / circ_mv * 100 if (amt and circ_mv) else None
+        if exch is not None and exch > TURNOVER_SANE_MAX:
+            log(f"[数据] {row.get('date')} 换手率 {exch:.2f}% 超过上限 "
+                f"{TURNOVER_SANE_MAX:.0f}%，判定为市值/成交额单位异常，"
+                f"该日换手置空（退回成交额分位）")
+            exch = None
         out.append({
             "date": str(row["date"]),
             "open": row.get("open"), "high": row.get("high"),

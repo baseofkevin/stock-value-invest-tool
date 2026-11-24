@@ -83,8 +83,16 @@ def kline_metrics(nodes):
     high20, high20_date, days_since_high20, pos20 = high_stats(20)
     high60, high60_date, days_since_high60, pos60 = high_stats(60)
     high120, high120_date, days_since_high120, pos120 = high_stats(120)
-    high250, high250_date, days_since_high, pos250 = high_stats(250, require=False)
+    # 250 日用 `require=True`：不足 250 根时 pos250/high250 一律 None，
+    # 下游（momentum/volume 的 `pos250 is not None` 分支、market_phase）会退回
+    # 60 日口径。旧版 `require=False` 会让不足 250 根的次新股拿「现有几十根」
+    # 算出一个假的「250 日高点」，却照常标"250日"——口径名不符实。
+    high250, high250_date, days_since_high, pos250 = high_stats(250, require=True)
 
+    # 换手率口径的 5 日均换手 / 量比（av5、vol_ratio5）：**没有视图消费**。
+    # 量价卡片用的是下面的成交量口径（pvol_ratio5）。保留 av5 是因为
+    # `av20`/`av250` 同属换手率均线一族、保持返回结构对称；vol_ratio5 是
+    # 历史遗留（旧版量价曾用换手量比），已无人读，保留仅为不破坏返回形状。
     av5 = avg_tv(5)
     vol_ratio5 = (av5 / av20) if (av5 is not None and av20) else None
 
