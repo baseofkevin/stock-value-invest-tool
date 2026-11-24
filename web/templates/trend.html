@@ -6,9 +6,12 @@
   <div class="eyebrow">stock_market_trend</div>
   <h1>A股大势· 历史周记</h1>
   <p>
-    每周五 <code>run.py all</code> 会把大势判断按<b style="color:#fff">基准日</b>存一行；
-    同一周重跑覆盖当周，跨周追加。筛选也按基准日，不是“数据截至”那一天——
-    中证和乐咕晚一天，不代表那一周的判断要改日期。
+    <code>run.py all</code> 会把大势判断按<b style="color:#fff">基准日</b>存一行——
+    基准日就是你跑的那一天。同一天重跑覆盖那行，换一天就追加一行，所以这个表是
+    <b style="color:#fff">采样</b>：一周跑三次有三行，隔三周跑一次中间那两周就空着。
+    这不影响上面那张图——图读的是原件（周K / 日K 一次给全历史），你多久跑一次它都连续。
+    筛选也按基准日，不是“数据截至”那一天：中证和乐咕晚一天，
+    不代表那一周的判断要改日期。
   </p>
 </section>
 
@@ -16,40 +19,73 @@
 <section class="panel">
   <div class="regime-head">
     <div>
-      <h2>量能背景 · 沪深300 周换手率 & 周线</h2>
+      <h2>量能背景 · 沪深300 换手率 &amp; 指数</h2>
       <p class="sub">
-        近 {{ turnover.n }} 周（约 {{ turnover.n // 52 }} 年），取自 <code>shared.db</code> 的周K原件
-        （表里只有结论，没有 {{ turnover.n }} 根周线）。<b>左轴</b>是周换手率，<b>右轴</b>是同期的周收盘点位——
-        两条腿共用一根时间轴，放量到底是涨着放还是跌着放，一眼能看出来。
+        取自 <code>shared.db</code> 的原件，不是从结论表拼的。<b>左轴</b>是换手率，
+        <b>右轴</b>是同期的收盘点位——两条腿共用一根时间轴，放量到底是涨着放还是跌着放，
+        一眼能看出来。
         四条线全部由一个水位派生：<b>近 52 周换手中位数</b>（当前
         {{ turnover.median52 }}%）。地量线固定在 {{ turnover.dry_line }}%（换手率缩不下去，
         十年 10% 分位一直在这个数附近，不用动）；往上三条都<b>逐周现算</b>——
         缩量线 ×0.9（当前 {{ turnover.low_line }}%）、放量线 ×1.1
         （{{ turnover.high_line }}%）、天量线 ×1.5（{{ turnover.heavy_line }}%）。
         所以市场整体抬到 3%，三条线一起上移；回落到 1.5%，一起下移，不需要人校准。
-        表格里每一行的「量能」都按<b>各自基准日</b>的线算，图例上的数字是本周的。
+        表格里每一行的「量能」都按<b>各自基准日</b>的线算，图例上的数字是最近一周的。
         分位（近 5 年排第几）仍在悬停里给出来当参考。
         周中打开这张图时，最右那根是<b>空心点</b>——它只累计了几个交易日的量
         （价格是真的，量能不是），所以量能档位不判它、按上一完整周算。
-        每周跑一次 <code>run.py all</code>，右端价、量各长一根，不用手工补点。
         这张图是<b>固定背景</b>，不随下面的日期筛选变化。
       </p>
     </div>
     <div class="regime-when">
       最新 <b>{{ turnover.latest }}</b>
       {% if turnover.partial_index is not none %}<span class="chip partial">本周未走完</span>{% endif %}
-      · 换手 <b>{{ turnover.latest_value }}%</b>
+      · 周换手 <b>{{ turnover.latest_value }}%</b>
       {% if turnover.latest_close %}· 收 <b>{{ '%.2f'|format(turnover.latest_close) }}</b>{% endif %}
     </div>
   </div>
 
+  <div class="turn-bar">
+    <div class="seg" role="group" aria-label="图线粒度">
+      <button type="button" class="seg-btn on" data-mode="week" aria-pressed="true">周线</button>
+      <button type="button" class="seg-btn" data-mode="day" aria-pressed="false"
+              {% if not turnover_day.available %}disabled{% endif %}>日线</button>
+    </div>
+    <span class="turn-note" id="turnNote"></span>
+    {% if not turnover_day.available %}
+    <span class="turn-note dim">
+      日线还没有原件：跑一次 <code>./run.py trend</code> 会把 11 年日K 一起补齐
+    </span>
+    {% endif %}
+  </div>
+
+  {#- 日视图的区间浏览器。只在「日线」下出现：周图是 260 周的固定背景，
+      不该跟着这段区间动，所以切回周线时整行隐藏（见 syncRange）。
+      三条路都只换"看哪一段"，不换口径——四条线永远按各点往前 252 个交易日算。 #}
+  <div class="turn-range" id="turnRange" hidden>
+    <button type="button" class="rng-btn" id="rngPrev">‹ 前一段</button>
+    <span class="rng-span"><b id="rngFirst">—</b> ~ <b id="rngLast">—</b><i id="rngCount"></i></span>
+    <button type="button" class="rng-btn" id="rngNext">后一段 ›</button>
+    <span class="rng-sep"></span>
+    <span class="rng-label">跨度</span>
+    <span role="group" aria-label="日线跨度" style="display:inline-flex;gap:2px">
+      <button type="button" class="span-btn on" data-span="250" aria-pressed="true">1 年</button>
+      <button type="button" class="span-btn" data-span="750" aria-pressed="false">3 年</button>
+      <button type="button" class="span-btn" data-span="1250" aria-pressed="false">5 年</button>
+    </span>
+    <span class="rng-sep"></span>
+    <span class="rng-label">看这天以前</span>
+    <input type="date" class="rng-date" id="rngEnd" aria-label="日线窗口的截止日">
+    <button type="button" class="rng-btn" id="rngGo">跳</button>
+  </div>
+
   <div class="turn-legend">
-    <span><i class="ln"></i>周换手率（左轴）</span>
-    <span><i class="ln price"></i>沪深300 周收盘（右轴）</span>
-    <span><i class="dash dry"></i>地量线 {{ turnover.dry_line }}%（固定，≤ 即地量）</span>
-    <span><i class="dash cool"></i>缩量线（中位 ×0.9，当前 {{ turnover.low_line }}%）</span>
-    <span><i class="dash warm"></i>放量线（中位 ×1.1，当前 {{ turnover.high_line }}%）</span>
-    <span><i class="dash hot"></i>天量线（中位 ×1.5，当前 {{ turnover.heavy_line }}%）</span>
+    <span><i class="ln"></i><b id="lgTurn">周换手率</b>（左轴）</span>
+    <span><i class="ln price"></i><b id="lgPrice">沪深300 周收盘</b>（右轴）</span>
+    <span><i class="dash dry"></i>地量线 <b id="lgDry">{{ turnover.dry_line }}</b>%（固定，≤ 即地量）</span>
+    <span><i class="dash cool"></i>缩量线（中位 ×0.9，当前 <b id="lgLow">{{ turnover.low_line }}</b>%）</span>
+    <span><i class="dash warm"></i>放量线（中位 ×1.1，当前 <b id="lgHigh">{{ turnover.high_line }}</b>%）</span>
+    <span><i class="dash hot"></i>天量线（中位 ×1.5，当前 <b id="lgHeavy">{{ turnover.heavy_line }}</b>%）</span>
     <span><i class="dot hot"></i>天量</span>
     <span><i class="dot warm"></i>放量</span>
     <span><i class="dot cool"></i>缩量</span>
@@ -65,13 +101,14 @@
       <h2>全部记录</h2>
       <p class="sub">
         趋势、估值、情绪三路分开看；<b>数据截至</b>取三路里最旧的一天，
-        每格悬停可看明细。
+        每格悬停可看明细。<b>一行 = 你跑过一次的那一天</b>，不是每周都有一行——
+        隔几周没跑，这里就直接跳过去，中间那几周看图，不看表。
       </p>
     </div>
     <div class="regime-when">
-      共 <b>{{ regime.total }}</b> 周
+      共 <b>{{ regime.total }}</b> 次记录
       {% if regime.matched != regime.total %}
-      · 当前筛选 <b>{{ regime.matched }}</b> 周
+      · 当前筛选 <b>{{ regime.matched }}</b> 次
       {% endif %}
     </div>
   </div>
@@ -96,8 +133,8 @@
           <th>数据截至</th>
           <th class="tip" title="{{ regime.head_tips.trend }}">趋势</th>
           <th class="n tip" title="{{ regime.head_tips.erp }}">ERP 分位</th>
-          <th class="n">PE(TTM)</th>
-          <th class="n">10Y 国债</th>
+          <th class="n tip" title="{{ regime.head_tips.pe }}">PE(TTM)</th>
+          <th class="n tip" title="{{ regime.head_tips.bond }}">10Y 国债</th>
           <th class="n tip" title="{{ regime.head_tips.below }}">破净分位</th>
           <th class="tip" title="{{ regime.head_tips.volume }}">量能</th>
           <th>计算于</th>
@@ -108,6 +145,12 @@
         <tr>
           <td class="name">
             {{ w.date }}<small>{{ w.date|weekday }}</small>
+            {#- 「周内跑」是**这一行**的属性，不是某一格的：周K 本周只走到这里，
+                趋势拿这个收盘判、量能跳过它退回上一完整周——两格都受影响，
+                所以标在基准日上，别塞进量能格（会读成「平稳·未走完」）。 #}
+            {%- if w.partial_week -%}
+            <span class="chip partial" title="本周周K 只走到 {{ w.partial_week.date }}{% if w.partial_week.turnover is not none %}（至今累计换手 {{ w.partial_week.turnover }}%）{% endif %}：趋势按当日收盘判，量能退回上一完整周（{{ w.partial_week.prev_date or '上一周' }}）判">周内跑</span>
+            {%- endif %}
           </td>
           <td>
             {{ w.data_asof or '—' }}
@@ -119,14 +162,13 @@
           <td class="n tip" title="{{ w.tips.erp }}">
             {{ w.erp_pct if w.erp_pct is not none else '—' }}{% if w.erp_pct is not none %}%{% endif %}
           </td>
-          <td class="n">{{ w.pe_ttm if w.pe_ttm is not none else '—' }}</td>
-          <td class="n">{{ w.bond10y if w.bond10y is not none else '—' }}{% if w.bond10y is not none %}%{% endif %}</td>
+          <td class="n tip" title="{{ w.tips.pe }}">{{ w.pe_ttm if w.pe_ttm is not none else '—' }}</td>
+          <td class="n tip" title="{{ w.tips.bond }}">{{ w.bond10y if w.bond10y is not none else '—' }}{% if w.bond10y is not none %}%{% endif %}</td>
           <td class="n tip" title="{{ w.tips.below }}">
             {{ w.below_na_pct if w.below_na_pct is not none else '—' }}{% if w.below_na_pct is not none %}%{% endif %}
           </td>
           <td class="tip" title="{{ w.tips.volume }}">
             {% if w.volume_state %}<span class="chip {{ w.volume_state|tone }}">{{ w.volume_state }}</span>
-            {%- if w.partial_week %} <span class="chip partial">未走完</span>{% endif %}
             {%- elif w.volume_dry is none %}—{% else %}{{ '地量' if w.volume_dry else '未地量' }}{% endif %}
           </td>
           <td>{{ w.computed_at|clock }}</td>
@@ -153,144 +195,312 @@
 {% if turnover.weeks %}
 <script>
 (function(){
-  const T = {{ turnover|tojson }};
+  const W = {{ turnover|tojson }};
+  let dayT = {{ turnover_day|tojson }};
   const box = document.getElementById('turnChart');
   if (!box) return;
-  const labels = T.weeks.map(function(w){ return w.date.slice(2); });
-  const vals = T.weeks.map(function(w){ return w.turnover; });
-  const price = T.weeks.map(function(w){ return w.close; });
-  const hasPrice = price.some(function(v){ return v !== null; });
-  const lastIdx = vals.length - 1;
-  // 「本周还没走完」的那根：价格是真的，成交量/换手只累计了几天 → 档位不判。
-  const partIdx = (T.partial_index === null || T.partial_index === undefined) ? -1 : T.partial_index;
-  // 三条线都是逐周的（近一年中位 ×0.9 / ×1.1 / ×1.5），地量线是一个固定数——
-  // 判定必须用当周那根线，不能拿"当前线"去 judge 五年历史。
-  const series = function(arr, now){
-    return arr && arr.length === vals.length ? arr : labels.map(function(){ return now; });
-  };
-  const low = series(T.low_series, T.low_line);
-  const high = series(T.high_series, T.high_line);
-  const heavy = series(T.heavy_series, T.heavy_line);
+
   const COLOR = {hot: '#b45309', warm: '#f59e0b', calm: '#1d4ed8',
                  cool: '#0d9488', dry: '#047857'};
-  const kind = function(v, i){
-    if (i === partIdx) return 'partial';
-    if (v <= T.dry_line) return 'dry';
-    const h = heavy[i];
-    if (h !== null && v >= h) return 'hot';
-    const lo = low[i], hi = high[i];
-    if (lo !== null && v < lo) return 'cool';
-    if (hi !== null && v >= hi) return 'warm';
-    return 'calm';
-  };
-  const dot = function(v, i){
-    const k = kind(v, i);
-    return (k === 'calm' || k === 'partial') ? 'transparent' : COLOR[k];
-  };
-  const flat = function(v){ return labels.map(function(){ return v; }); };
   const money = function(v){
     return v.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0});
   };
-  // 分位只当参考值：档位由四条线决定，不看排第几。
-  const sortedVals = vals.slice().sort(function(a, b){ return a - b; });
-  const rank = function(v){
-    let n = 0;
-    for (let i = 0; i < sortedVals.length; i++) { if (sortedVals[i] < v) n++; }
-    return Math.round(n / sortedVals.length * 100);
+
+  // 周视图是固定的 260 周背景，做成常量；日视图的"画面"取决于 dayT 是哪一段，
+  // 所以每次现拼一份（形状完全一致，绘图代码不用分叉）。
+  const VIEWS = {
+    week: {T: W, pts: W.weeks || [], unit: '周', winLabel: '近 52 周',
+           rankLabel: '近 5 年', digits: 1, xstep: 9,
+           note: '判定口径 · 近 ' + (W.n || 0) + ' 周（约 ' + Math.round((W.n || 0) / 52)
+                 + ' 年），表格里的档位就按这条线判'}
   };
-  const nn = function(arr){ return arr.filter(function(v){ return v !== null; }); };
-  const yMax = Math.max(Math.max.apply(null, vals),
-                        Math.max.apply(null, nn(heavy).concat([0])),
-                        T.q90 || 0) * 1.12;
 
-  const sets = [];
-  if (hasPrice) {
-    sets.push(
-      {label: '沪深300 周收盘', data: price, yAxisID: 'y1',
-       borderColor: '#dc2626', borderWidth: 1.8, fill: false, tension: 0.2,
-       spanGaps: true,
-       pointRadius: function(c){ return c.dataIndex === lastIdx ? 4 : 0; },
-       pointBackgroundColor: '#dc2626', pointBorderColor: '#fff', pointBorderWidth: 1});
+  function dayView(){
+    const T = dayT;
+    const range = (T.first && T.latest)
+      ? (' · ' + T.first + ' ~ ' + T.latest + '，') : ' · ';
+    return {
+      T: T, pts: T.points || [], unit: '日', winLabel: '近 252 交易日',
+      rankLabel: '近 1 年', digits: 2, xstep: 12,
+      note: '细节视图' + range + (T.n || 0) + ' 个交易日，'
+            + '口径是 252 日中位数、地量 ' + T.dry_line + '%；'
+            + '<b>不参与</b>表格里的档位判定'
+    };
   }
-  sets.push(
-      {label: '周换手率', data: vals, yAxisID: 'y',
-       borderColor: '#1d4ed8', borderWidth: 1.6,
-       backgroundColor: 'rgba(29,78,216,.06)', fill: true, tension: 0.25,
-       pointRadius: function(c){
-         const i = c.dataIndex;
-         return i === partIdx ? 4 : (i === lastIdx ? 4 : (kind(vals[i], i) === 'calm' ? 0 : 3));
-       },
-       pointBackgroundColor: function(c){
-         const i = c.dataIndex;
-         return i === partIdx ? '#ffffff' : (i === lastIdx ? '#1d4ed8' : dot(vals[i], i));
-       },
-       pointBorderColor: function(c){ return c.dataIndex === partIdx ? '#94a3b8' : '#fff'; },
-       pointBorderWidth: function(c){ return c.dataIndex === partIdx ? 2 : 1; }},
-      {label: '地量线', data: flat(T.dry_line), yAxisID: 'y', borderColor: '#047857', borderWidth: 1,
-       borderDash: [5, 4], pointRadius: 0, fill: false},
-      {label: '缩量线', data: low, yAxisID: 'y', borderColor: '#0d9488', borderWidth: 1,
-       borderDash: [2, 3], pointRadius: 0, fill: false, spanGaps: true},
-      {label: '放量线', data: high, yAxisID: 'y', borderColor: '#f59e0b', borderWidth: 1,
-       borderDash: [2, 3], pointRadius: 0, fill: false, spanGaps: true},
-      {label: '天量线', data: heavy, yAxisID: 'y', borderColor: '#b45309', borderWidth: 1,
-       borderDash: [5, 4], pointRadius: 0, fill: false, spanGaps: true});
 
-  new Chart(box, {
-    type: 'line',
-    data: {labels: labels, datasets: sets},
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      interaction: {mode: 'index', intersect: false},
-      plugins: {
-        legend: {display: false},
-        tooltip: {callbacks: {
-          title: function(items){ return T.weeks[items[0].dataIndex].date + ' 那一周'; },
-          label: function(c){
-            if (c.dataset.yAxisID === 'y1') return '沪深300 ' + money(c.parsed.y);
-            return c.dataset.label + ' ' + c.parsed.y.toFixed(2) + '%';
-          },
-          afterBody: function(items){
-            const i = items[0].dataIndex;
-            const w = T.weeks[i];
-            const chg = w.pct_chg === null ? '—' : (w.pct_chg > 0 ? '+' : '') + w.pct_chg.toFixed(2) + '%';
-            if (i === partIdx) {
-              return ['周涨跌 ' + chg,
-                      '本周至今（未走完）：换手 ' + w.turnover.toFixed(2) + '%',
-                      '只累计了几个交易日，量能档位不判——等本周收盘'];
-            }
-            const k = kind(w.turnover, i);
-            const lo = low[i], hi = high[i], h = heavy[i];
-            const tag = k === 'hot' ? ('天量（≥ 天量线 ' + h + '%）')
-                       : k === 'warm' ? ('放量（≥ 放量线 ' + hi + '%）')
-                       : k === 'cool' ? ('缩量（< 缩量线 ' + lo + '%）')
-                       : k === 'dry' ? ('地量（≤ ' + T.dry_line + '%）')
-                                     : ('平稳（' + lo + '%~' + hi + '%）');
-            return ['周涨跌 ' + chg, tag,
-                    '水位：近 52 周中位 · 当前线 ' + lo + ' / ' + hi + ' / ' + h + '%',
-                    '参考：近 5 年 ' + rank(w.turnover) + '% 分位'];
-          }
-        }}
-      },
-      scales: {
-        y: {beginAtZero: true, suggestedMax: yMax, grid: {color: '#eef2f7'},
-            ticks: {color: '#6b778c', font: {size: 11},
-                    callback: function(v){ return v + '%'; }}},
-        y1: hasPrice
-            ? {position: 'right', beginAtZero: false, grace: '10%',
-               grid: {drawOnChartArea: false},
-               ticks: {color: '#dc2626', font: {size: 11}, maxTicksLimit: 6,
-                       callback: function(v){ return money(v); }}}
-            : {display: false},
-        x: {grid: {display: false},
-            ticks: {color: '#94a3b8', font: {size: 11}, maxRotation: 0,
-                    autoSkip: false,
-                    callback: function(value, i){
-                      const step = Math.ceil(labels.length / 9);
-                      return (i === labels.length - 1 || i % step === 0) ? labels[i] : '';
-                    }}}
-      }
+  // —— 区间浏览器：翻页 / 换跨度 / 跳日期都只改 dayT，改完重画。
+  // 分位（每点 rank）由后端按"该点往前 252 个交易日"算好，切窗口不漂。
+  const rangeEl = document.getElementById('turnRange');
+  const rngFirst = document.getElementById('rngFirst');
+  const rngLast = document.getElementById('rngLast');
+  const rngCount = document.getElementById('rngCount');
+  const rngEnd = document.getElementById('rngEnd');
+  const rngPrev = document.getElementById('rngPrev');
+  const rngNext = document.getElementById('rngNext');
+  const rngGo = document.getElementById('rngGo');
+  const spanBtns = Array.prototype.slice.call(
+      document.querySelectorAll('.span-btn'));
+
+  function fmtDate(d){
+    return d ? d.replace(/-/g, '/') : '—';
+  }
+  function nextDay(d){
+    // 日期加一天（只做字符串运算，够"前一段结尾的次日"用）。
+    const p = d.split('-').map(Number);
+    const dt = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
+    dt.setUTCDate(dt.getUTCDate() + 1);
+    return dt.toISOString().slice(0, 10);
+  }
+  function syncRange(){
+    // 只切"日线"才有这行控件；周图是 260 周固定背景，不该跟着区间动。
+    if (rangeEl) rangeEl.hidden = (mode !== 'day');
+    if (!dayT || !dayT.available) return;
+    if (rngFirst) rngFirst.textContent = fmtDate(dayT.first);
+    if (rngLast) rngLast.textContent = fmtDate(dayT.latest);
+    if (rngCount) rngCount.textContent = ' · ' + (dayT.n || 0) + ' 个交易日';
+    // 翻页按钮的边界：最左/最右没得再翻就置灰。
+    if (rngPrev) rngPrev.disabled = !dayT.db_first || dayT.first <= dayT.db_first;
+    if (rngNext) rngNext.disabled = !dayT.db_last || dayT.latest >= dayT.db_last;
+    if (rngEnd) rngEnd.value = dayT.latest || '';
+    spanBtns.forEach(function(b){
+      b.classList.toggle('on', Number(b.dataset.span) === span);
+      b.setAttribute('aria-pressed', Number(b.dataset.span) === span ? 'true' : 'false');
+    });
+  }
+
+  function applyDay(next){
+    dayT = next;
+    render('day');
+    syncRange();
+  }
+
+  function loadDay(params, cb){
+    if (busy) return;
+    busy = true;
+    const qs = Object.keys(params).map(function(k){
+      return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+    }).join('&');
+    fetch('/trend/day.json?' + qs)
+      .then(function(r){ return r.json(); })
+      .then(function(d){ busy = false; cb(d); })
+      .catch(function(){ busy = false; });
+  }
+
+  if (rangeEl && dayT.available) {
+    rngPrev.addEventListener('click', function(){
+      if (rngPrev.disabled || !dayT.latest) return;
+      loadDay({n: span, end: nextDay(dayT.first)},
+              function(d){ applyDay(d); });
+    });
+    rngNext.addEventListener('click', function(){
+      if (rngNext.disabled || !dayT.first) return;
+      loadDay({n: span, start: nextDay(dayT.latest)},
+              function(d){ applyDay(d); });
+    });
+    rngGo.addEventListener('click', function(){
+      const v = rngEnd.value;
+      if (!v) return;
+      loadDay({n: span, end: v}, function(d){ applyDay(d); });
+    });
+    rngEnd.addEventListener('keydown', function(e){
+      if (e.key === 'Enter') { e.preventDefault(); rngGo.click(); }
+    });
+    spanBtns.forEach(function(b){
+      b.addEventListener('click', function(){
+        span = Number(b.dataset.span);
+        loadDay({n: span, end: dayT.latest || undefined},
+                function(d){ applyDay(d); });
+      });
+    });
+  }
+
+  let chart = null;
+  let mode = 'week';
+  // 日视图的"看哪一段"：span = 当前跨度（交易日根数），翻页/换跨度/跳日期都只改
+  // dayT，不改任何阈值——四条线永远按各点自己往前 252 个交易日算。
+  let span = 250;
+  let busy = false;
+
+  function build(v){
+    const T = v.T;
+    const pts = v.pts;
+    const labels = pts.map(function(p){ return p.date.slice(2); });
+    const vals = pts.map(function(p){ return p.turnover; });
+    const price = pts.map(function(p){ return p.close; });
+    const hasPrice = price.some(function(x){ return x !== null; });
+    const lastIdx = vals.length - 1;
+    // 「本周还没走完」的那根：价格是真的，成交量/换手只累计了几天 → 档位不判。
+    // 日视图没有这个概念（日K 收盘即定稿），T.partial_index 是 undefined。
+    const partIdx = (T.partial_index === null || T.partial_index === undefined)
+                    ? -1 : T.partial_index;
+    const series = function(arr, now){
+      return arr && arr.length === vals.length ? arr : labels.map(function(){ return now; });
+    };
+    const low = series(T.low_series, T.low_line);
+    const high = series(T.high_series, T.high_line);
+    const heavy = series(T.heavy_series, T.heavy_line);
+    const kind = function(x, i){
+      if (i === partIdx) return 'partial';
+      if (x <= T.dry_line) return 'dry';
+      const h = heavy[i];
+      if (h !== null && x >= h) return 'hot';
+      const lo = low[i], hi = high[i];
+      if (lo !== null && x < lo) return 'cool';
+      if (hi !== null && x >= hi) return 'warm';
+      return 'calm';
+    };
+    const dot = function(x, i){
+      const k = kind(x, i);
+      return (k === 'calm' || k === 'partial') ? 'transparent' : COLOR[k];
+    };
+    const flat = function(x){ return labels.map(function(){ return x; }); };
+    const fix = function(x){ return x === null || x === undefined ? '—' : x.toFixed(v.digits); };
+    // 分位只当参考值：档位由四条线决定，不看排第几。
+    const sortedVals = vals.slice().sort(function(a, b){ return a - b; });
+    const rank = function(x){
+      let n = 0;
+      for (let i = 0; i < sortedVals.length; i++) { if (sortedVals[i] < x) n++; }
+      return Math.round(n / sortedVals.length * 100);
+    };
+    const nn = function(arr){ return arr.filter(function(x){ return x !== null; }); };
+    const yMax = Math.max(Math.max.apply(null, vals),
+                          Math.max.apply(null, nn(heavy).concat([0])),
+                          T.q90 || 0) * 1.12;
+
+    const sets = [];
+    if (hasPrice) {
+      sets.push(
+        {label: '沪深300 ' + v.unit + '收盘', data: price, yAxisID: 'y1',
+         borderColor: '#dc2626', borderWidth: 1.8, fill: false, tension: 0.2,
+         spanGaps: true,
+         pointRadius: function(c){ return c.dataIndex === lastIdx ? 4 : 0; },
+         pointBackgroundColor: '#dc2626', pointBorderColor: '#fff', pointBorderWidth: 1});
     }
+    sets.push(
+        {label: v.unit + '换手率', data: vals, yAxisID: 'y',
+         borderColor: '#1d4ed8', borderWidth: 1.6,
+         backgroundColor: 'rgba(29,78,216,.06)', fill: true, tension: 0.25,
+         pointRadius: function(c){
+           const i = c.dataIndex;
+           if (i === partIdx || i === lastIdx) return 4;
+           return kind(vals[i], i) === 'calm' ? 0 : 3;
+         },
+         pointBackgroundColor: function(c){
+           const i = c.dataIndex;
+           if (i === partIdx) return '#ffffff';
+           return i === lastIdx ? '#1d4ed8' : dot(vals[i], i);
+         },
+         pointBorderColor: function(c){ return c.dataIndex === partIdx ? '#94a3b8' : '#fff'; },
+         pointBorderWidth: function(c){ return c.dataIndex === partIdx ? 2 : 1; }},
+        {label: '地量线', data: flat(T.dry_line), yAxisID: 'y', borderColor: '#047857', borderWidth: 1,
+         borderDash: [5, 4], pointRadius: 0, fill: false},
+        {label: '缩量线', data: low, yAxisID: 'y', borderColor: '#0d9488', borderWidth: 1,
+         borderDash: [2, 3], pointRadius: 0, fill: false, spanGaps: true},
+        {label: '放量线', data: high, yAxisID: 'y', borderColor: '#f59e0b', borderWidth: 1,
+         borderDash: [2, 3], pointRadius: 0, fill: false, spanGaps: true},
+        {label: '天量线', data: heavy, yAxisID: 'y', borderColor: '#b45309', borderWidth: 1,
+         borderDash: [5, 4], pointRadius: 0, fill: false, spanGaps: true});
+
+    return {
+      type: 'line',
+      data: {labels: labels, datasets: sets},
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: {mode: 'index', intersect: false},
+        plugins: {
+          legend: {display: false},
+          tooltip: {callbacks: {
+            title: function(items){ return pts[items[0].dataIndex].date + ' 那' + v.unit; },
+            label: function(c){
+              if (c.dataset.yAxisID === 'y1') return '沪深300 ' + money(c.parsed.y);
+              return c.dataset.label + ' ' + c.parsed.y.toFixed(2) + '%';
+            },
+            afterBody: function(items){
+              const i = items[0].dataIndex;
+              const w = pts[i];
+              const chg = w.pct_chg === null ? '—'
+                        : (w.pct_chg > 0 ? '+' : '') + w.pct_chg.toFixed(2) + '%';
+              if (i === partIdx) {
+                return [v.unit + '涨跌 ' + chg,
+                        '本' + v.unit + '至今（未走完）：换手 ' + w.turnover.toFixed(2) + '%',
+                        '只累计了几个交易日，量能档位不判——等本' + v.unit + '收盘'];
+              }
+              const k = kind(w.turnover, i);
+              const lo = low[i], hi = high[i], h = heavy[i];
+              const tag = k === 'hot' ? ('天量（≥ 天量线 ' + fix(h) + '%）')
+                         : k === 'warm' ? ('放量（≥ 放量线 ' + fix(hi) + '%）')
+                         : k === 'cool' ? ('缩量（< 缩量线 ' + fix(lo) + '%）')
+                         : k === 'dry' ? ('地量（≤ ' + T.dry_line + '%）')
+                                       : ('平稳（' + fix(lo) + '%~' + fix(hi) + '%）');
+              // 日视图的 rank 是后端按"该点往前 252 个交易日"算好的（w.rank），
+              // 换窗口不漂；周视图仍用窗口内现算的 rank()（近 5 年）。
+              const rk = (w.rank === null || w.rank === undefined)
+                         ? rank(w.turnover) : w.rank;
+              return [v.unit + '涨跌 ' + chg, tag,
+                      '水位：' + v.winLabel + '中位 · 当前线 '
+                        + fix(lo) + ' / ' + fix(hi) + ' / ' + fix(h) + '%',
+                      '参考：' + v.rankLabel + ' ' + rk + '% 分位'];
+            }
+          }}
+        },
+        scales: {
+          y: {beginAtZero: true, suggestedMax: yMax, grid: {color: '#eef2f7'},
+              ticks: {color: '#6b778c', font: {size: 11},
+                      callback: function(x){ return x + '%'; }}},
+          y1: hasPrice
+              ? {position: 'right', beginAtZero: false, grace: '10%',
+                 grid: {drawOnChartArea: false},
+                 ticks: {color: '#dc2626', font: {size: 11}, maxTicksLimit: 6,
+                         callback: function(x){ return money(x); }}}
+              : {display: false},
+          x: {grid: {display: false},
+              ticks: {color: '#94a3b8', font: {size: 11}, maxRotation: 0,
+                      autoSkip: false,
+                      callback: function(value, i){
+                        const step = Math.ceil(labels.length / v.xstep);
+                        return (i === labels.length - 1 || i % step === 0) ? labels[i] : '';
+                      }}}
+        }
+      }
+    };
+  }
+
+  function paintLegend(v){
+    const T = v.T;
+    const d = v.digits;
+    const set = function(id, text){ const el = document.getElementById(id); if (el) el.textContent = text; };
+    set('lgTurn', v.unit + '换手率');
+    set('lgPrice', '沪深300 ' + v.unit + '收盘');
+    set('lgDry', Number(T.dry_line).toFixed(d));
+    set('lgLow', T.low_line === null ? '—' : Number(T.low_line).toFixed(d));
+    set('lgHigh', T.high_line === null ? '—' : Number(T.high_line).toFixed(d));
+    set('lgHeavy', T.heavy_line === null ? '—' : Number(T.heavy_line).toFixed(d));
+    const note = document.getElementById('turnNote');
+    if (note) note.innerHTML = v.note;
+  }
+
+  function render(next){
+    mode = next;
+    // 周视图是常量；日视图每次按当前 dayT 现拼（翻页/换跨度后 dayT 已换）。
+    const v = next === 'day' ? dayView() : VIEWS.week;
+    if (!v.pts.length) return;
+    paintLegend(v);
+    if (chart) { chart.destroy(); chart = null; }
+    chart = new Chart(box, build(v));
+    document.querySelectorAll('.seg-btn').forEach(function(b){
+      const on = b.dataset.mode === mode;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    syncRange();
+  }
+
+  document.querySelectorAll('.seg-btn').forEach(function(b){
+    if (b.disabled) return;
+    b.addEventListener('click', function(){ if (b.dataset.mode !== mode) render(b.dataset.mode); });
   });
+
+  render('week');
 })();
 </script>
 {% endif %}

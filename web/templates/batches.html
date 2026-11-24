@@ -29,11 +29,15 @@
       </p>
     </div>
     {% if r %}
+    {#- 主词是**基准日**（你跑的那天），不是 `data_asof`。
+        `data_asof` 取的是三路里最旧的一天：趋势/估值能到当天，情绪那路（破净、
+        周换手）要等乐咕一天 + 本周收盘，所以常年比基准日早一天甚至更久。
+        把它摆在主位会让"刚跑完"的人以为面板停在上一行，其实数据就是最新的那一行。 #}
     <div class="regime-when">
-      数据截至 <b>{{ r.data_asof or '—' }}</b>
+      基准日 <b>{{ r.date }}</b>
       {% if r.stale %}<span class="chip warn">部分沿用上次</span>{% endif %}
       {% if cur_date and r.date < cur_date %}<span class="chip muted">本批未算</span>{% endif %}
-      <span class="regime-calc">计算于 {{ r.computed_at|clock }}</span>
+      <span class="regime-calc">数据截至 {{ r.data_asof or '—' }} · 计算于 {{ r.computed_at|clock }}</span>
     </div>
     {% endif %}
   </div>
