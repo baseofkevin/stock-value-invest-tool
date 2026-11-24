@@ -22,7 +22,7 @@ python3 -m stock_market_trend --quiet                      # 不打印 4 行抓�
 它和 `stock_data_fetch` 没有代码依赖，只共用**文件路径约定**（同一个仓库根、
 同一组环境变量名 `STOCK_SHARED_DB` / `STOCK_RESULTS_DB`）：
 
-- 四个上游接口、三张 raw 表、三套阈值全在本包里，数据层不需要为它升一次
+- 四个上游接口（五次抓取）、四张 raw 表、三套阈值全在本包里，数据层不需要为它升一次
   `SCHEMA_VERSION`；
 - `market_regime` 由本包自己 `create table if not exists` 建，**不跑本包就永远不存在**，
   老库零影响；
@@ -51,13 +51,14 @@ python3 -m stock_market_trend --quiet                      # 不打印 4 行抓�
 ## 数据流向
 
 ```text
-上游（4 个接口）
+上游（5 次抓取 / 4 个接口）
   ① 东财 push2his 周K        ┐
-  ② 中证 index-perf 日频 PE  ├─ shared.db（原件层）  三张表，只存上游原值
+  ② 中证 index-perf 日频 PE  ├─ shared.db（原件层）  四张表，只存上游原值
   ③ 东财 10 年国债           │
-  ④ 乐咕 全A破净统计         ┘
+  ④ 乐咕 全A破净统计         │
+  ⑤ 东财 push2his 日K        ┘   ← 只喂看板日线视图，不进判定
                                 └─ rules.judge()  ← 纯函数，不碰网络不碰库
-                                     └─ results.db.market_regime（结果层，一周一行）
+                                     └─ results.db.market_regime（结果层，一次运行一行）
                                           └─ 看板 /trend（历史表）与 /batches（横幅）
 ```
 
@@ -68,21 +69,27 @@ python3 -m stock_market_trend --quiet                      # 不打印 4 行抓�
 | 库 | 表 | 粒度 | 内容 |
 |---|---|---|---|
 | `shared.db` | `market_index_week` | 一周一行 | 沪深300 周K + **周换手率**（`turnover`） |
+| `shared.db` | `market_index_day` | 一天一行 | 沪深300 日K + **日换手率**（只给看板画日线） |
 | `shared.db` | `market_index_perf` | 一天一行 | 中证官方 收盘 + 滚动PE（`pe_ttm`）+ 样本数 |
 | `shared.db` | `market_macro` | 一天一行 | `series` = `bond10y` / `below_na` |
-| `results.db` | `market_regime` | 一周一行 | 三路的状态、分位、四条线快照 + 整份 `payload` |
+| `results.db` | `market_regime` | 一次运行一行 | 三路的状态、分位、四条线快照 + 整份 `payload` |
 
-前两表的 `symbol` 固定写 `sh000300`；`market_macro` 用 `series` 区分两条宏观序列，
+前三表的 `symbol` 固定写 `sh000300`；`market_macro` 用 `series` 区分两条宏观序列，
 破净那一路的 `extra` 列存 `{"below":n,"total":m}`（JSON 字符串）。
 
-三张 raw 表的写入方式是**按主键 upsert**，不是 `DELETE WHERE date` 整天替换
+四张 raw 表的写入方式是**按主键 upsert**，不是 `DELETE WHERE date` 整天替换
 （`price` 表是那么做的）。理由：`price` 一天一份全市场快照，"这天有哪些票"本身是
-原子事实；而这里三张表是**序列**，每次抓的全是历史区间，按主键 upsert 就够了，
+原子事实；而这里四张表是**序列**，每次抓的全是历史区间，按主键 upsert 就够了，
 也就不会因为上游少回几行把历史挖出个洞。
 
+**唯一的例外是周K 的半根 bar**：周中跑会给一根"当周至今"的日期的临时周线，
+下一次周五跑，完整周落在**新日期**上，upsert 顶不掉它，那根假的 1 天周线会永久
+留在序列中间（图上多一个坑、MA 窗口挪位、52 周中位数被拉低）。所以 `save_week()`
+写完之后会调 `_drop_older_in_week()`，把最新一根所在 ISO 周里更早的行清掉。
+
 写 raw 的同时顺手登记 `watermark`（`domain='market'`，`scope` = `index_week` /
-`index_perf` / `bond10y` / `below_na`），这样 `stock_data_fetch` 的 `doctor`
-免费获得一份新鲜度体检，不必另写一套。
+`index_day` / `index_perf` / `bond10y` / `below_na`），这样 `stock_data_fetch` 的
+`doctor` 免费获得一份新鲜度体检，不必另写一套。
 
 ## 四个上游与各自的坑
 
@@ -260,18 +267,40 @@ python3 -m stock_market_trend --date 2026-06-22
 - 代价：节假日前最后一个交易日（周三/周四）当天跑，会被保守判成"未走完"，
   退回上一周——那一天的档位晚一周生效，但不会错判。宁可说"没走完"。
 
+### 隔两三周才跑一次：原件连续，结论采样
+
+这个包**不是每日任务**，实际节奏可能是 1 周、也可能是 2~3 周跑一次。
+两层的处理方式不一样，别混：
+
+| | 数据来源 | 跑得稀会怎样 |
+|---|---|---|
+| `/trend` 那张图 | `market_index_week` / `market_index_day` 原件 | **不受影响**。东财一次给全历史，跑一次就把中间漏掉的周/日全部 upsert 进来，图上右端一次长好几根，一天不缺 |
+| `market_regime` 表 | 每次运行的结论 | **就是采样**。一次运行一行，隔三周跑中间那两周没有行，这是设计如此 |
+
+所以不要把表当成"周序列"用——它记的是"我当时怎么判的"，缺的那几周本来就没人判过。
+图上那些周照样有价有量，因为图读的是原件。要看完整序列看上面那张图。
+
+日K（`hs300_day`）就是为了"跑得稀也能看日线"才加的：周K 一周只有一根、周中还只是半根，
+中间的日子只有日K 才有。它**不参与任何判定**——趋势的 MA20/MA60 是"周"语义，
+量能四线是"近 52 周中位数"派生的，换日频等于把整套阈值推翻重来。看板把它画成
+独立的"日线"视图，口径另算（近 252 个交易日、地量 0.2%），并在页面上写明不参与档位判定。
+
+日K 抓取失败**不进 `stale`**：它只影响日线视图的新鲜度，三路结论一个字都不会变，
+把它算进去会让页面横幅谎报"部分数据沿用上次"。
+
 ## 降级与失败语义
 
 这是原件层存在的意义：**不让一个 403 把整份周报拖没**。
 
-先分清「四个抓取」和「三路结论」——它们不是一一对应的：
+先分清「五个抓取」和「三路结论」——它们不是一一对应的：
 
-| 抓取（4 个，有进度行） | 喂给哪一路结论 |
+| 抓取（5 个，有进度行） | 喂给哪一路结论 |
 |---|---|
 | ① 沪深300 周K | **趋势 + 情绪**（量能档位要周换手率） |
 | ② 沪深300 滚动PE | 赔率（分子） |
 | ③ 10 年国债 | 赔率（分母） |
 | ④ 全A破净率 | 情绪（情绪状态） |
+| ⑤ 沪深300 日K | **不喂任何结论**，只给看板画日线视图 |
 
 所以周K 那一路挂了，是"趋势 + 量能档位"一起受影响；破净率挂了只影响"情绪状态"，
 量能档位照常。
@@ -292,6 +321,10 @@ python3 -m stock_market_trend --date 2026-06-22
 
 `stale = any(s1, s2, s3, s4)`。注意判定条件是 `bool(rows) and not recompute`：
 `--recompute` 本来就不联网，读库是它的正常工作方式，不算降级。
+
+**第 ⑤ 路（日K）不在 `stale` 里**。它不喂任何结论，挂了最多让看板的日线视图停在
+旧数据上，三路判断一个字都不会变；算进去只会让页面横幅谎报"部分数据沿用上次"。
+它的失败只在 stderr 留一行，退出码不受影响。
 
 三路全空时的告警会顺手报出最早的原件日期，方便判断是"库是空的"还是"基准日太早"：
 
@@ -333,16 +366,18 @@ python3 -m stock_market_trend --date 2026-06-22
 `insert or replace`，按 `date` 覆盖。看板读的是"每个基准日当时的判断"，
 跟 `run` 表按次记录的语义**不一样**。
 
-### `shared.db` 三张 raw 表
+### `shared.db` 四张 raw 表
 
 ```sql
 market_index_week(symbol, date, open, high, low, close, volume, amount,
                   turnover, pct_chg, src, updated_at)   -- PK(symbol,date) WITHOUT ROWID
+market_index_day (symbol, date, open, high, low, close, volume, amount,
+                  turnover, pct_chg, src, updated_at)   -- 同上，日频
 market_index_perf(symbol, date, close, pe_ttm, sample_size, src, updated_at)
 market_macro(series, date, value, extra, src, updated_at)
 ```
 
-三张表都 `WITHOUT ROWID`（主键就是全部索引，省一次 B 树）。`src` 记
+四张表都 `WITHOUT ROWID`（主键就是全部索引，省一次 B 树）。`src` 记
 `eastmoney` / `csindex` / `legulegu`，`updated_at` 是写入时刻。
 
 ## CLI 全参数
@@ -352,7 +387,7 @@ market_macro(series, date, value, extra, src, updated_at)
 | `--date YYYY-MM-DD` | `date.today()` | **基准日**，不只是标签：三路都按 `date <= 基准日` 截断后再算 |
 | `--recompute` | 关 | 不联网，直接用 `shared.db` 里的原件重算（改阈值后用）。**不打印抓取进度** |
 | `--json PATH` | 无 | 另存一份 `{"date","stale","trend","valuation","sentiment","data_asof","summary"}` |
-| `--quiet` | 关 | 不打印 4 行抓取进度、不打印摘要前的空行、不回显 JSON 路径。**摘要仍然打印** |
+| `--quiet` | 关 | 不打印 5 行抓取进度、不打印摘要前的空行、不回显 JSON 路径。**摘要仍然打印** |
 
 | 退出码 | 含义 |
 |---|---|
@@ -364,10 +399,11 @@ market_macro(series, date, value, extra, src, updated_at)
 进度行是给 `run.py` 的进度条认的格式（`[n/m]` 开头），独立运行时它就是个序号：
 
 ```text
-[1/4] 沪深300 周K
-[2/4] 沪深300 滚动PE
-[3/4] 10年国债
-[4/4] 全A破净率
+[1/5] 沪深300 周K
+[2/5] 沪深300 滚动PE
+[3/5] 10年国债
+[4/5] 全A破净率
+[5/5] 沪深300 日K（看板日线视图）
 ```
 
 ### 摘要长什么样

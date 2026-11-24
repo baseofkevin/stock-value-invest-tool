@@ -4,6 +4,8 @@
 ------------------
 1. **东财 `push2his` 周K**：一次给 11 年周线，**`f61` 就是周换手率**。
    中证官方不给换手率，而这套里"地量"那条只能靠换手率判断（成交额会被点位高低带偏）。
+   同一个接口把 `klt` 换成 101 就是**日K**（`hs300_day`），只用来给看板画日线视图，
+   不参与三路判定。
 2. **中证 `index-perf`**：官方估值，一次 970KB 给 2015 至今的**日频**收盘 + 滚动PE，
    `peg` 字段 0 空值。比第三方的 PE 更权威，而且跟收盘同源，趋势和估值口径自洽。
 3. **东财 `RPTA_WEB_TREASURYYIELD`**：10 年国债收益率，`filter` 卡到 2015，7 页取完。
@@ -110,6 +112,62 @@ def hs300_week(limit: int = 600) -> list[dict]:
         })
     if not rows:
         raise RuntimeError("东财周K 返回空")
+    return rows
+
+
+# ---------------------------------------------------------------- 1b. 日K
+
+DAY_LIMIT = 3000
+"""日K 默认取多少根：约 12 年（一年约 243 个交易日）。
+
+和周K 的 600 根（11 年）对齐还不够——周K 是 11 年，日K 同区间要 2700 根左右，
+给 3000 是留点余量，让两个序列的左端落在同一个年份上。
+"""
+
+
+def hs300_day(limit: int = DAY_LIMIT) -> list[dict]:
+    """沪深300 日K。**字段序与周K 完全一样**，`f61` 仍是换手率，只是按日计。
+
+    为什么要它
+    ----------
+    周K 一周只有一根，且周中给的是半根；日K 是"一天一根、当天收盘即定稿"。
+    所以它是唯一能在"隔两三周才跑一次"时把中间每一天补齐的原件：
+    跑一次就把全历史日线 upsert 进来，漏跑的那些交易日一天不缺，
+    `/trend` 的日线视图因此永远连续，不依赖你多久跑一次。
+
+    它**不参与任何判定**
+    --------------------
+    趋势的 MA20/MA60 是"周"语义（20 周 / 60 周），量能四线是"近 52 周中位数"
+    派生的——换日频等于把整套阈值推翻重来。这份数据只喂 /trend 的日线视图，
+    `rules.judge()` 一个字都不读它。
+
+    接口是同一个 `push2his`，只把 `klt` 从 102（周）换成 101（日）。
+    """
+    data = _get(WEEK_URL, {
+        "secid": "1.000300",
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": WEEK_FIELDS,
+        "klt": "101",          # 101 = 日
+        "fqt": "0",
+        "end": "20500101",
+        "lmt": str(limit),
+    }, referer=WEEK_REFERER)
+
+    klines = ((data.get("data") or {}).get("klines")) or []
+    rows = []
+    for line in klines:
+        p = line.split(",")
+        if len(p) < 11:
+            continue
+        rows.append({
+            "date": p[0], "open": _f(p[1]), "close": _f(p[2]),
+            "high": _f(p[3]), "low": _f(p[4]),
+            "volume": _f(p[5]), "amount": _f(p[6]),
+            "amplitude": _f(p[7]), "pct_chg": _f(p[8]),
+            "turnover": _f(p[10]),
+        })
+    if not rows:
+        raise RuntimeError("东财日K 返回空")
     return rows
 
 

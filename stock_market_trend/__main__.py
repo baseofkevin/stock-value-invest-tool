@@ -55,6 +55,28 @@ def _fetch_or_fallback(*, name: str, index: int, total: int, quiet: bool,
     return rows, bool(rows) and not recompute
 
 
+def _archive_day(*, index: int, total: int, quiet: bool, recompute: bool,
+                 conn) -> bool:
+    """把日K 抄进 `shared.db`，只为看板的日线视图。
+
+    和上面四条走的路不同：**它不进 `rules.judge()`，也不影响 `stale`**。
+    日K 挂了只意味着 /trend 的日线视图停在旧数据上，三路判定一个字都不会变；
+    把它算进 `stale` 会让页面横幅谎报"部分数据沿用上次"，那是错的。
+
+    `--recompute` 时不联网：库里已有日K 就什么都不做，没有就留空。
+    """
+    if recompute:
+        return True
+    _progress(index, total, "沪深300 日K（看板日线视图）", quiet)
+    try:
+        rows = source.hs300_day()
+        store_raw.save_day(conn, rows)
+        return True
+    except Exception as e:  # noqa: BLE001  上游什么样都可能
+        _warn(f"沪深300 日K 抓取失败（{e}），日线视图沿用库里旧数据")
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="python -m stock_market_trend",
@@ -69,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     day = args.date or dt.date.today().isoformat()
-    total = 4
+    total = 5
 
     raw = store_raw.connect()
     result_db = store.connect()
@@ -97,6 +119,10 @@ def main(argv: list[str] | None = None) -> int:
         saver=lambda c, rows: store_raw.save_macro(c, "below_na", rows, "legulegu"),
         reader=lambda c: store_raw.read_macro(c, "below_na"),
         conn=raw, recompute=args.recompute)
+
+    # 第 5 路：日K。只落原件、不进判定、不影响 stale（见 _archive_day 的说明）。
+    _archive_day(index=5, total=total, quiet=args.quiet,
+                 recompute=args.recompute, conn=raw)
 
     stale = any((s1, s2, s3, s4))
     result = rules.judge(weeks=weeks, perf=perf, bonds=bonds, below=below, as_of=day)
