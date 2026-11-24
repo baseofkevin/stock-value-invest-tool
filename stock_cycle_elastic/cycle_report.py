@@ -25,7 +25,7 @@ import re
 import sys
 
 import config
-from cycle import batch, build, codes, decide, fetch, fmt, metrics
+from cycle import batch, build, codes, decide, detail, fetch, fmt, metrics, render
 
 EXIT_OK = 0
 EXIT_PARTIAL = 1
@@ -251,6 +251,18 @@ def run_single(args):
     decision = decide.decide(stock["quarters"], m, stock["industry"], config)
     decision.setdefault("meta", {})["latest"] = str(
         (stock["quarters"][-1] or {}).get("date") or "")[:10]
+
+    # 明细（三判断文字 + 三条指标序列）和原版报告也要带上——批量路径
+    # （batch._run_one）入库时都有，单只路径漏掉会让"跑一只看看"的票在看板里
+    # 降级成薄表、报告打不开，比不入库还困惑。
+    decision["detail"] = detail.build(stock, m, decision, config)
+    try:
+        charts = metrics.series_for_chart(stock["quarters"], config)
+        from stock_data_fetch import results as results_db
+        decision["report_html"] = results_db.pack_html(
+            render.render(stock, decision, m, charts))
+    except Exception:                          # noqa: BLE001 - 渲染失败不拖垮落库
+        decision["report_html"] = ""
 
     # 单只也入库：不落库的话"跑一只看看"就成了看板里看不到的黑数。
     item = batch.ItemResult(code, stock.get("name") or "")

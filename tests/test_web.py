@@ -15,7 +15,9 @@
 """
 from __future__ import annotations
 
+import copy
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -175,6 +177,21 @@ class TestRegimeBanner(WebCase):
         html = self.client().get("/batches").get_data(as_text=True)
         self.assertIn("还没有大势记录", html)
 
+    def test_header_leads_with_base_date(self):
+        """横幅右上角主词是**基准日**（跑的那天），不是 `data_asof`。
+
+        `data_asof` 取三路里最旧的一天，常年比基准日早一到几天。摆在主位时
+        「跑在 11-23、数据截至 11-20」并排，会让人以为面板停在上一行没更新。
+        这里的 RESULT 正好是基准日 11-20 / 数据截至 11-19。
+        """
+        self._seed()
+        html = self.client().get("/batches").get_data(as_text=True)
+        m = re.search(r'<div class="regime-when">(.*?)</div>', html, re.S)
+        self.assertIsNotNone(m, "横幅头部那块日期必须还在")
+        head = re.sub(r"\s+", " ", m.group(1))
+        self.assertIn("基准日 <b>2026-11-20</b>", head)
+        self.assertIn("数据截至 2026-11-19", head)
+
     def test_rerun_same_day_overwrites(self):
         self._seed()
         self._seed()          # 同一周五跑两次
@@ -226,6 +243,67 @@ class TestRegimeHistory(WebCase):
         html = self.client().get("/batches").get_data(as_text=True)
         self.assertIn("查看全部历史", html)
         self.assertIn("/trend", html)
+
+    def test_every_metric_cell_has_a_hover_tip(self):
+        """六个指标列每格都要有悬停解读，PE / 国债也不例外。
+
+        曾有四列（趋势/ERP/破净/量能）有 title、PE 和国债没有——
+        那两格恰恰最需要解释：单看 13 倍 PE 不知道贵不贵，得扣掉国债的机会成本。
+        这条同时钉住 `_regime_tips` 的六个键（少一个 Jinja 渲染成空 title，
+        页面上就是"鼠标放上去没反应"，很难被测试之外的手段发现）。
+        """
+        from web import db as webdb
+        res = copy.deepcopy(TestRegimeBanner.RESULT)
+        w = {"pe_ttm": 13.02, "bond10y": 1.59, "erp": 6.09, "erp_pct": 85,
+             "erp_mean": 4.82, "trend_state": "空头确认", "trend_score": 2,
+             "trend_close": 3958.29, "ma20": 4363.97, "ma60": 4580.87,
+             "weeks_below_ma20": 20, "ma60_slope": -0.74,
+             "below_na": 12.17, "below_na_pct": 96, "turnover": 2.7,
+             "volume_state": "平稳", "volume_dry": False}
+        tips = webdb._regime_tips(w)
+        for key in ("trend", "erp", "pe", "bond", "below", "volume"):
+            self.assertTrue(tips.get(key), f"tips.{key} 不能为空")
+        self.assertIn("100/PE", tips["pe"])
+        self.assertIn("机会成本", tips["bond"])
+
+        self._seed("2026-11-23")
+        html = self.client().get("/trend").get_data(as_text=True)
+        table = html.split('class="grid regime-history"', 1)[1].split("</table>", 1)[0]
+        self.assertRegex(table, r'<td class="n tip" title="PE\(TTM\)')
+        self.assertRegex(table, r'<td class="n tip" title="10 年期国债收益率')
+        self.assertNotIn('title="">', table, "不许出现空 title（渲染成空格也没提示）")
+
+    def test_partial_week_badge_sits_on_the_base_date(self):
+        """「周内跑」挂在**基准日**，不挂量能格。
+
+        半根周线同时影响两格：趋势拿它的收盘判 MA，量能跳过它退回上一完整周。
+        标记塞在量能格里会被读成「平稳·未走完」（同一档位的两个限定），
+        而且暗示只有量能受影响——所以它属于整行，落在基准日。
+        """
+        from stock_market_trend import store
+        res = copy.deepcopy(TestRegimeBanner.RESULT)
+        res["sentiment"]["volume_state"] = "平稳"
+        res["sentiment"]["partial_week"] = {"date": "2026-11-23", "turnover": 0.61,
+                                            "close": 3958.29, "prev_date": "2026-11-20"}
+        conn = store.connect(self.db_path)
+        try:
+            store.save(conn, "2026-11-23", res)
+        finally:
+            conn.close()
+
+        html = self.client().get("/trend").get_data(as_text=True)
+        table = html.split('class="grid regime-history"', 1)[1].split("</table>", 1)[0]
+
+        self.assertEqual(table.count('class="chip partial"'), 1, "整行只该有一个标记")
+        self.assertRegex(
+            table,
+            r'<td class="name">\s*2026-11-23<small>[^<]*</small>'
+            r'<span class="chip partial"[^>]*>周内跑</span>')
+        # 量能格只剩档位一个 chip；退回哪一周写在 title 里
+        vol = re.search(r'<td class="tip" title="量能：.*?">\s*(.*?)</td>', table, re.S)
+        self.assertIsNotNone(vol, "量能格的 title 必须以「量能：」开头")
+        self.assertEqual(vol.group(1).count("chip"), 1)
+        self.assertNotIn("周内跑", vol.group(1))
 
 
 class TestPages(WebCase):
@@ -1493,6 +1571,137 @@ class TurnoverSeriesTest(unittest.TestCase):
         self.assertIsNone(out["weeks"][-1]["close"])
         self.assertIsNone(out["latest_close"])
         self.assertIsNotNone(out["latest_value"])
+
+
+class DaySeriesTest(unittest.TestCase):
+    """`/trend` 量能图切到"日线"时的数据源（`shared.db.market_index_day`）。
+
+    日线是**另一套口径**，不是"更细的周线"：日换手率一天约顶五分之一，
+    所以四条线要按 252 个交易日重算，地量线也从 1% 换成 0.2%。
+    这里的断言只守两件事：口径别串（不能拿周常量去算日线）、没原件时别炸。
+    """
+
+    def _make_shared(self, n: int = 300) -> str:
+        import datetime as dt
+        import sqlite3
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        conn = sqlite3.connect(path)
+        try:
+            conn.execute("create table market_index_day(symbol text, date text, "
+                         "turnover real, pct_chg real, close real)")
+            start = dt.date(2025, 1, 2)
+            rows, d = [], start
+            while len(rows) < n:
+                if d.weekday() < 5:
+                    i = len(rows)
+                    rows.append(("sh000300", d.isoformat(),
+                                 0.4 + (i % 10) * 0.02, 0.1, 3900.0 + i))
+                d += dt.timedelta(days=1)
+            conn.executemany("insert into market_index_day values(?,?,?,?,?)", rows)
+            conn.commit()
+        finally:
+            conn.close()
+        return path
+
+    def test_takes_last_n_days(self):
+        from web import db as webdb
+        path = self._make_shared(300)
+        try:
+            out = webdb.day_series(db=path)
+        finally:
+            os.remove(path)
+        self.assertTrue(out["available"])
+        self.assertEqual(out["n"], webdb.TURNOVER_DAYS)
+        self.assertEqual(len(out["points"]), out["n"])
+        self.assertEqual(out["latest"], out["points"][-1]["date"])
+        for key in ("low_series", "high_series", "heavy_series"):
+            self.assertEqual(len(out[key]), out["n"], key)
+
+    def test_day_lines_use_day_window_and_floor(self):
+        """日线必须用日口径：252 日窗口 + 0.2% 地量线 + 0.01% 粒度。
+
+        用周口径（52 / 1.0 / 0.1）算会得到完全不同的数——这条断言就是防止
+        `_volume_lines()` 的默认值被顺手复用到日线上。
+
+        取 `n = 252` 不是随手写的：`day_series()` 每次多抓一个窗口再截断，
+        只有 n 正好等于窗口时，"最后一根的窗口"才与"截断后的整条序列"重合，
+        才能拿同一条序列去对期望值（否则会差两天、中位数就差一格）。
+        """
+        from web import db as webdb
+        path = self._make_shared(300)
+        try:
+            out = webdb.day_series(n=webdb.TURNOVER_DAY_WIN, db=path)
+        finally:
+            os.remove(path)
+        self.assertEqual(out["dry_line"], webdb.TURNOVER_DAY_DRY_LINE)
+        turns = [p["turnover"] for p in out["points"]]
+        day = webdb._volume_lines(turns, win=webdb.TURNOVER_DAY_WIN,
+                                  dry=webdb.TURNOVER_DAY_DRY_LINE,
+                                  step=webdb._DAY_STEP,
+                                  heavy_step=webdb._DAY_HEAVY_STEP)
+        self.assertEqual(out["low_line"], day["low"])
+        self.assertEqual(out["high_line"], day["high"])
+        self.assertEqual(out["heavy_line"], day["heavy"])
+        # 日口径取整到 0.01%，周口径取整到 0.1%：同一个中位数两边不该相等
+        week = webdb._volume_lines(turns)
+        self.assertNotEqual(out["low_line"], week["low"])
+
+    def test_missing_table_returns_unavailable(self):
+        """没有日K 表（还没跑过新版 trend）→ 页面把"日"置灰，不是画空图也不是 500。"""
+        import sqlite3
+        from web import db as webdb
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        sqlite3.connect(path).close()
+        try:
+            out = webdb.day_series(db=path)
+        finally:
+            os.remove(path)
+        self.assertFalse(out["available"])
+        self.assertEqual(out["points"], [])
+        self.assertEqual(out["dry_line"], webdb.TURNOVER_DAY_DRY_LINE)
+        self.assertFalse(webdb.day_series(db="/nonexistent/shared.db")["available"])
+
+    def test_end_window_and_rank(self):
+        """区间浏览器的两个核心：`end` 取往前 n 根、每点 `rank` 随点不随窗口。"""
+        from web import db as webdb
+        path = self._make_shared(300)
+        try:
+            # 默认：最后 250 根
+            full = webdb.day_series(db=path)
+            # 只看"截至倒数第 20 根"那段，往前数 100 根
+            cut = webdb.day_series(n=100, end=full["points"][-20]["date"], db=path)
+        finally:
+            os.remove(path)
+        self.assertTrue(cut["available"])
+        self.assertEqual(cut["n"], 100)
+        self.assertEqual(cut["latest"], full["points"][-20]["date"])
+        self.assertEqual(cut["first"], cut["points"][0]["date"])
+        # 每点都带 rank，且 rank 是 0~100 的整数
+        for p in cut["points"]:
+            self.assertIn("rank", p)
+            self.assertTrue(0 <= p["rank"] <= 100)
+        # 首尾边界字段：db_first / db_last 供前端置灰翻页按钮
+        self.assertIsNotNone(cut["db_first"])
+        self.assertIsNotNone(cut["db_last"])
+        self.assertEqual(cut["db_last"], full["db_last"])
+
+    def test_start_window_rolls_forward(self):
+        """只给 `start`：从那天往后取，给"后一段"翻页用。"""
+        from web import db as webdb
+        path = self._make_shared(300)
+        try:
+            full = webdb.day_series(db=path)
+            # 从第 100 根往后翻 80 根
+            nxt = webdb.day_series(n=80, start=full["points"][100]["date"], db=path)
+        finally:
+            os.remove(path)
+        self.assertTrue(nxt["available"])
+        self.assertEqual(nxt["n"], 80)
+        self.assertEqual(nxt["first"], full["points"][100]["date"])
+        # 边界：已经从最新往后翻，db_last 还是全表最大日期
+        self.assertEqual(nxt["db_last"], full["db_last"])
 
 
 if __name__ == "__main__":

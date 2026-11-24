@@ -42,10 +42,44 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 
-from flask import Flask, Response, abort, redirect, render_template, request, url_for
+from flask import (Flask, Response, abort, jsonify, redirect, render_template,
+                   request, url_for)
 
 from . import db, review
 from stock_review_assess import config as review_config
+# 旁证表的"一句话解读"和工具的报告页共用同一份阈值逻辑，避免两处口径漂移
+from stock_judge_top.extras import plain_reads
+# 周期页三张指标图的解读同理：阈值取 cycle 工具的 config（该文件只依赖 os，
+# 可以在 web 进程里直接加载），算式用 cycle.readings 的纯函数
+from stock_cycle_elastic.config import (GM_STD_CYCLE, POSITION_MIN_SAMPLES,
+                                        POSITION_WINDOW_QUARTERS)
+from stock_cycle_elastic.cycle import readings as _cycle_readings
+
+
+def _cycle_reads(detail):
+    """周期明细（payload.detail）→ 三张图各自的解读文字 {gm, ratio, turn}。
+
+    数据就是图上那三条序列，算出来的话和图形永远一致；缺序列时给 None，
+    模板不渲染该段。
+    """
+    series = (detail or {}).get("series") or {}
+
+    def vals(key):
+        pts = series.get(key) or []
+        return [p.get("value") for p in pts if isinstance(p, dict)]
+
+    try:
+        return {
+            "gm": _cycle_readings.gm_read(vals("gross_margin"),
+                                          gm_threshold=GM_STD_CYCLE),
+            "ratio": _cycle_readings.ratio_read(vals("ratio")),
+            "turn": _cycle_readings.turnover_read(
+                vals("turnover"),
+                pos_window=POSITION_WINDOW_QUARTERS,
+                pos_min_samples=POSITION_MIN_SAMPLES),
+        }
+    except Exception:                            # noqa: BLE001 - 解读失败不拦页面
+        return {"gm": None, "ratio": None, "turn": None}
 
 #: 状态词 → 色调（与四工具报告的 CSS 变量同一套语言）
 TONE_MAP = (
@@ -367,7 +401,8 @@ def create_app(db_path: str | Path | None = None) -> Flask:
                                  weekday=_weekday, yi=_fmt_yi, spct=_fmt_spct,
                                  pe=_fmt_pe, pos=_fmt_pos, quoteurl=_quote_url,
                                  poslabel=_poslabel, cycle_state=_cycle_state,
-                                 detail=_detail, hasreport=_has_report)
+                                 detail=_detail, hasreport=_has_report,
+                                 cyclereads=_cycle_reads)
     app.jinja_env.globals.update(TOOLS=db.TOOLS, ORDER=db.ORDER, TODAY=dt.date.today,
                                  KIND_LABEL=db.KIND_LABEL)
 
@@ -515,8 +550,30 @@ def create_app(db_path: str | Path | None = None) -> Flask:
                 "trend.html", regime=db.regime(c, limit=None,
                                                 start=start, end=end),
                 turnover=db.turnover_series(),
+                # 日线视图是**另一套口径**（252 交易日 / 地量 0.2%），
+                # 只给图用，不参与任何档位判定；拿不到时模板会把"日"置灰。
+                turnover_day=db.day_series(),
                 start=start or "", end=end or "",
                 cur_date=db.batch_date(c), batches=db.batches(c), meta=None)
+
+    @app.route("/trend/day.json")
+    def trend_day_json():
+        """`/trend` 日视图翻页 / 换跨度 / 跳日期时按需取的那一段。
+
+        为什么这里破例给 JSON：日K 有 3000 根，全塞进首屏是 277KB，而一屏只画
+        250 根（25KB）。翻页时就该只取那一段，不重刷整页——否则滚动位置、当前
+        周/日视图、日期筛选全得跟着重建。
+
+        口径与首屏那个 `db.day_series()` 是**同一个函数**，不存在两套算法。
+        参数脏了（非日期、起止颠倒、n 离谱）一律退回默认窗口，不给 500：
+        这是只读观察工具，参数错不该白屏。
+        """
+        n = request.args.get("n", type=int) or db.TURNOVER_DAYS
+        start = _iso_or_none(request.args.get("start"))
+        end = _iso_or_none(request.args.get("end"))
+        if start and end and start > end:
+            start, end = end, start
+        return jsonify(db.day_series(n=n, start=start, end=end))
 
     @app.route("/book")
     def book_page():
@@ -630,6 +687,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
                 # 说清楚"为什么是这个结论"，只有状态词是不够的。
                 views=top_data.get("views_full") or top_data.get("views") or [],
                 extras=top_data.get("extras") or {},
+                extra_reads=plain_reads(top_data.get("extras") or {}),
                 gaps=top_data.get("gaps") or [],
                 active=active, tabs=TAB_TOOLS, tab_label=TAB_LABEL,
                 active_row=rows.get(active),

@@ -21,6 +21,7 @@ import re
 import config
 from cycle import decide as decide_mod
 from cycle import metrics as metrics_mod
+from cycle import readings
 
 # ---------------------------------------------------------------------------
 # HTML 转义
@@ -1032,7 +1033,12 @@ def _bar_chart(points, title, threshold=None):
 
 
 def render_charts(charts, cfg=None):
-    """三张图，各自带标题与一句读法。"""
+    """三张图，各自带标题、一句读法和一段解读。
+
+    解读分两层：**趋势**说这条线本身在干什么（升/降/波动多大），
+    **业绩**说公司这方面的经营状况——都从图上同一份序列算出来，
+    不引入图外数据，保证解读和图形永远一致。
+    """
     cfg = cfg or config
 
     gross = charts.get("gross_margin") or []
@@ -1047,6 +1053,8 @@ def render_charts(charts, cfg=None):
         "毛利率",
         f"最近 {cfg.WAVE_WINDOW_QUARTERS} 季单季毛利率",
         gm_svg,
+        readings.gm_read([v for _, v in gm_points], gm_threshold=cfg.GM_STD_CYCLE,
+                       n_quarters=cfg.WAVE_WINDOW_QUARTERS),
     )
 
     ratio = charts.get("ratio") or []
@@ -1056,6 +1064,7 @@ def render_charts(charts, cfg=None):
         "弹性比值",
         f"最近 {cfg.ELASTIC_WINDOW_QUARTERS} 季逐季比值",
         ratio_svg,
+        readings.ratio_read([v for _, v in ratio_points]),
     )
 
     turnover = charts.get("turnover") or []
@@ -1066,16 +1075,21 @@ def render_charts(charts, cfg=None):
         "产能周转率",
         f"最近 {len(turnover)} 季（TTM 营收 ÷ 固定资产+在建工程）",
         to_svg,
+        readings.turnover_read([v for _, v in to_points],
+                           pos_window=cfg.POSITION_WINDOW_QUARTERS,
+                           pos_min_samples=cfg.POSITION_MIN_SAMPLES),
     )
 
     return gm_block + ratio_block + to_block
 
 
-def _chart_block(title, subtitle, svg):
+def _chart_block(title, subtitle, svg, read=None):
+    read_html = f'<p class="chart-read">{read}</p>' if read else ""
     return (
         '<div class="chart">'
         f'<h3>{esc(title)}<span class="sub">{esc(subtitle)}</span></h3>'
         f'{svg}'
+        f'{read_html}'
         '</div>'
     )
 

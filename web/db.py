@@ -662,6 +662,11 @@ REGIME_HEAD_TIPS = {
              "两条同时成立 → 空头确认",
     "erp": "ERP = 100/PE(TTM) − 10 年国债\n"
            "近 10 年分位：≥80 便宜 · ≥95 极值 · ≤20 偏贵",
+    "pe": "PE(TTM) = 沪深300 整体滚动市盈率（中证官方）\n"
+          "便宜/贵不看这个数，看「ERP 分位」——\n"
+          "估值要扣掉国债的机会成本，13 倍贵不贵取决于国债多少",
+    "bond": "10 年期国债收益率 = 无风险利率 = 持股的机会成本\n"
+            "国债越低，同样 PE 下股票越有吸引力（ERP 被抬高）",
     "below": "全A破净率（股价低于每股净资产的公司占比）\n"
              "近 10 年分位：≥90 恐慌 · ≥70 偏冷",
     "volume": "沪深300 周换手率 · 一个水位派生出四条线\n"
@@ -724,7 +729,8 @@ def regime(conn, limit: int | None = 8, *, start: str | None = None,
         d["volume_dry"] = None if d.get("volume_dry") is None else bool(d["volume_dry"])
         # 量能分档是后加的字段，只存在 payload 里（表结构不动，符合"payload 是
         # 任意 JSON"那条约定）。老行没有这几个键 → 退回「地量 / 未地量」两挡。
-        sent = _payload_sentiment(d.pop("payload", None))
+        payload_text = d.pop("payload", None)
+        sent = _payload_sentiment(payload_text)
         d["volume_state"] = sent.get("volume_state")
         d["turnover_pct"] = sent.get("turnover_pct")
         d["turnover_q90"] = sent.get("turnover_q90")
@@ -735,6 +741,10 @@ def regime(conn, limit: int | None = 8, *, start: str | None = None,
         d["median52"] = sent.get("median52")
         # 「本周未走完」：档位是按上一完整周判的，页面要说出来
         d["partial_week"] = sent.get("partial_week")
+        # ERP 的近 10 年均值在 payload.valuation 里（表里没这列），
+        # 给「10Y 国债」格的悬停用——光看 1.59% 不知道高还是低，
+        # 对着"这个数曾把 ERP 拉到均值 4.82"才有感觉。
+        d["erp_mean"] = _payload_valuation(payload_text).get("mean")
         d["tips"] = _regime_tips(d)
         return d
 
@@ -744,6 +754,22 @@ def regime(conn, limit: int | None = 8, *, start: str | None = None,
         f"SELECT {cols} FROM market_regime ORDER BY date DESC LIMIT 1").fetchone()
     return {"row": _row(latest), "weeks": weeks, "total": total,
             "matched": matched, "head_tips": REGIME_HEAD_TIPS}
+
+
+def _payload_valuation(payload) -> dict:
+    """从 `market_regime.payload` 里取估值那路（`mean` = ERP 近 10 年均值）。
+
+    与 `_payload_sentiment` 同一约定：payload 是任意 JSON、加字段不改表；
+    读不出就给空 dict，调用方按 `None` 处理。
+    """
+    if not payload:
+        return {}
+    try:
+        data = json.loads(payload)
+    except (TypeError, ValueError):
+        return {}
+    val = data.get("valuation") if isinstance(data, dict) else None
+    return val if isinstance(val, dict) else {}
 
 
 def _payload_sentiment(payload) -> dict:
@@ -783,6 +809,25 @@ def _regime_tips(w: dict) -> dict[str, str]:
            f"ERP {n(w.get('erp'), '%')} = 100/PE {n(w.get('pe_ttm'))} − 国债 {n(w.get('bond10y'), '%')}",
            f"近 10 年 {n(w.get('erp_pct'), '%')} 分位（≥80 便宜，≥95 极值）"]
 
+    # PE 和国债各拿一格悬停：单看 PE 容易误判"便宜/贵"——13 倍贵不贵，
+    # 取决于国债给的机会成本，所以这格只报数、把结论推给 ERP 那列。
+    earn = (None if w.get("pe_ttm") in (None, 0)
+            else round(100.0 / w["pe_ttm"], 2))
+    pe = [f"PE(TTM) {n(w.get('pe_ttm'))} · 沪深300 整体滚动市盈率（中证官方）",
+          f"盈利收益率 100/PE = {n(earn, '%')}"
+          + (f" − 国债 {n(w.get('bond10y'), '%')} = ERP {n(w.get('erp'), '%')}"
+             if earn is not None and w.get('bond10y') is not None else ""),
+          "PE 本身不分档：便宜/贵看「ERP 分位」列（估值要扣掉国债的机会成本）"]
+
+    bond = [f"10 年期国债收益率 {n(w.get('bond10y'), '%')}（无风险利率）",
+            f"它是 ERP 的减数：持股的机会成本，国债越低，同样 PE 下股票越有吸引力"
+            + (f"（现 {n(w.get('bond10y'), '%')} → ERP 抬到 {n(w.get('erp'), '%')}，"
+               f"近 10 年均值约 {n(w.get('erp_mean'))}）"
+               if w.get('erp_mean') is not None else ""),
+            ]
+    if w.get("bond10y") is not None and w.get("erp_pct") is not None:
+        bond.append(f"当前组合的 ERP 分位 {w['erp_pct']}% 已包含这个国债水平")
+
     below = [f"情绪：{_regime_state_na(w.get('below_na_pct'))}",
              f"全A破净率 {n(w.get('below_na'), '%')}",
              f"近 10 年 {n(w.get('below_na_pct'), '%')} 分位（≥90 恐慌）"]
@@ -812,6 +857,7 @@ def _regime_tips(w: dict) -> dict[str, str]:
                              f"（{part.get('prev_date') or '—'}）判")
 
     return {"trend": "\n".join(trend), "erp": "\n".join(erp),
+            "pe": "\n".join(pe), "bond": "\n".join(bond),
             "below": "\n".join(below), "volume": "\n".join(volume)}
 
 
@@ -869,6 +915,52 @@ _EPS = 1e-9                    # 取整时抵掉浮点噪声（与 rules 同值�
 `tests/test_web.py` 有一条断言把两边的常量与算法钉在一起，改一边不改另一边会挂测试。
 """
 
+TURNOVER_DAYS = 250
+"""日线视图画多少个交易日 ≈ 1 年。
+
+日线不用周线那个 260 根的窗口：260 个交易日只有一年出头，但 260 个**交易日**
+画成折线已经很密了；再放长就看不见日与日的差别，日视图也就失去了意义。
+想看更长的历史，用周视图（260 周 = 5 年）。
+"""
+
+TURNOVER_DAY_WIN = 252
+"""日口径的水位窗口：近 252 个交易日 ≈ 1 年。
+
+和 `TURNOVER_HEAVY_WIN = 52` 是**同一段时间的两种刻度**，不是两个不同的规则：
+`rules.volume_lines` 的一年是 52 周，这里的一年是 252 个交易日。
+所以这两套线的数值不可互换——见 `TURNOVER_DAY_DRY_LINE` 的说明。
+"""
+
+TURNOVER_DAY_DRY_LINE = 0.2
+"""日口径地量线（%）。
+
+周口径是 1.0%，取的是"十年 10% 分位"——那个数十年没怎么动，所以钉成常数。
+日换手率按日累计，一周的换手约等于五天之和，所以同分位的日值大致是周值的
+**五分之一**。
+
+2026-11-24 用 3000 根真实日K（2014-07 起）实测，这个换算成立：
+
+| | 中位 | 10% 分位 |
+|---|---|---|
+| 周（601 周） | 1.90 | 1.17 |
+| 日（3000 日） | 0.40 | 0.24 |
+
+同分位比值 0.21；周口径的 1.0 本来就压在它自己 10% 分位（1.17）**下方**，
+所以日口径同样取在日频 10% 分位（0.24）下方一点：0.2。
+两边是同一个逻辑——"缩到十年少见的位置才算地量"，不是简单按五分之一折算。
+
+只影响日视图，不影响任何判定（判定走 `rules.sentiment` 的周口径）。
+"""
+
+_DAY_STEP = 100
+_DAY_HEAVY_STEP = 20
+"""日口径的取整粒度：0.01% / 0.05%。
+
+周口径是 0.1% / 0.5%（`step=10` / `heavy_step=2`），按量级等比例缩到 1/10。
+不这么做的话日线会退化成一根根台阶：日换手率常在 0.4~0.8 之间，
+按 0.1 取整只剩四五个可能取值。
+"""
+
 
 def _median(values: list[float]) -> float:
     v = sorted(values)
@@ -895,17 +987,23 @@ def _running_week(day: str, today: str | None = None) -> bool:
         return False
 
 
-def _volume_lines(values: list[float]) -> dict | None:
-    """三条线，取法与 `rules.volume_lines` 逐字一致（含取整方向与被地量线兜住）。"""
-    win = values[-TURNOVER_HEAVY_WIN:]
-    if len(win) < TURNOVER_HEAVY_WIN // 2:
+def _volume_lines(values: list[float], *, win: int = TURNOVER_HEAVY_WIN,
+                  dry: float = TURNOVER_DRY_LINE,
+                  step: int = 10, heavy_step: int = 2) -> dict | None:
+    """三条线，取法与 `rules.volume_lines` 逐字一致（含取整方向与被地量线兜住）。
+
+    `win` / `dry` / `step` / `heavy_step` 是给**日口径**留的旋钮：周口径用默认值
+    （52 周、1%、0.1% / 0.5%），日口径传 252 / 0.2 / 0.01% / 0.05%。
+    默认值一变就等于改判定，`tests/test_web.py` 会挂——那条断言正是为此设的。
+    """
+    window = values[-win:]
+    if len(window) < win // 2:
         return None
-    m = _median(win)
-    low = max(TURNOVER_DRY_LINE,
-              math.floor(m * TURNOVER_LOW_MULT * 10 + _EPS) / 10)
-    high = max(low, math.ceil(m * TURNOVER_HIGH_MULT * 10 - _EPS) / 10)
+    m = _median(window)
+    low = max(dry, math.floor(m * TURNOVER_LOW_MULT * step + _EPS) / step)
+    high = max(low, math.ceil(m * TURNOVER_HIGH_MULT * step - _EPS) / step)
     return {"low": low, "high": high,
-            "heavy": math.ceil(m * TURNOVER_HOT_MULT * 2 - _EPS) / 2}
+            "heavy": math.ceil(m * TURNOVER_HOT_MULT * heavy_step - _EPS) / heavy_step}
 
 
 def _heavy_line(values: list[float]) -> float | None:
@@ -1006,6 +1104,175 @@ def turnover_series(n: int = TURNOVER_WEEKS, db: str | Path | None = None,
         "latest_close": None if rows[-1][3] is None else round(float(rows[-1][3]), 2),
         "close_min": round(min(closes), 2) if closes else None,
         "close_max": round(max(closes), 2) if closes else None,
+    }
+
+
+DAY_MAX_N = 1300
+"""日视图一次最多画多少根。
+
+「5 年」那档是 1250 根，留 50 根余量。上限不是怕慢（1250 根连滚动三线约 110ms），
+是怕线太密：1300 根摊在 1000px 画布上已经 1.3 点/像素，再多就只剩一团墨。
+想看更早的用"看这天以前"跳过去，不必一眼看完全部（全量 3000 根 ≈ 277KB JSON）。
+"""
+
+
+def day_series(n: int = TURNOVER_DAYS, db: str | Path | None = None,
+               today: str | None = None, *, start: str | None = None,
+               end: str | None = None) -> dict:
+    """沪深300 某一段**交易日**的日换手率 + 日收盘 + 逐日三档线。
+
+    这张图和 `turnover_series()` 是两条独立序列、两套口径，不是"粗细两个版本"：
+
+    * 周：一年 = 52 周，水位 = 近 52 周中位数，地量线 1.0%，取整到 0.1% / 0.5%；
+    * 日：一年 = 252 个交易日，水位 = 近 252 日中位数，地量线 0.2%，
+      取整到 0.01% / 0.05%。
+
+    为什么要能指定区间
+    ------------------
+    日K 从 2014-07 起一共 3000 根，页面上却只画最近 250 根。想回头看
+    "2025-11-12 之前那段"，光有"最近 N 根"是够不着的。所以窗口由四个口子决定：
+
+    | 传入 | 画哪一段 |
+    |---|---|
+    | 都不传 | 最后 `n` 个交易日（默认 250 根，和以前一样） |
+    | 只给 `end` | `end`（含）往前 `n` 个交易日 |
+    | 只给 `start` | `start`（含）往后 `n` 个交易日 |
+    | 两个都给 | 这段区间里的全部，`n` 只作上限 |
+
+    只给 `start` 那一种是给"往后翻一段"用的：调用方只需把上一段的最后一天 +1 天
+    传进来，不必自己数交易日，日历的事留给 SQL。
+
+    **滚动线一律向左多取 252 根**：窗口最左那根的三条线也要有完整窗口，否则图左端
+    会出现一段"窗口不够、线偏低"的假台阶（与周图同理）。所以任何一段的图都是自洽的，
+    不因为"从哪儿开始看"而改变线的位置。
+
+    `rank` 是**每点相对它自己往前 252 个交易日**的分位，不是相对所选窗口。否则跨度
+    从 1 年切到 5 年，悬停里那句"近 1 年 X% 分位"就变成了"近 5 年"，同一根日K 的
+    说法跟着窗口漂。
+
+    **不参与判定**：列表里的"量能"仍由 `rules.sentiment()` 按周线判。日视图只是
+    背景细节，页面上写明这一点，所以图和表不会出现"图上放量、表里平稳"的错觉——
+    那不是矛盾，是两个刻度。
+
+    表不存在（还没跑过带日K 的新版 trend）→ `available=False`，
+    页面把"日"按钮置灰并说明怎么补，而不是画一张空图。
+    """
+    empty = {"available": False, "points": [], "n": 0,
+             "dry_line": TURNOVER_DAY_DRY_LINE,
+             "low_line": None, "high_line": None, "heavy_line": None,
+             "low_series": [], "high_series": [], "heavy_series": [],
+             "median": None, "q90": None,
+             "latest": None, "latest_value": None, "latest_close": None,
+             "first": None, "db_first": None, "db_last": None,
+             "is_today": False}
+    p = Path(db or SHARED_DB)
+    if not p.exists():
+        return empty
+    try:
+        conn = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return empty
+    try:
+        if not conn.execute(
+                "select 1 from sqlite_master where type='table' "
+                "and name='market_index_day'").fetchone():
+            return empty
+        n = max(20, min(int(n), DAY_MAX_N))
+        cols = "date, turnover, pct_chg, close"
+        base = ("from market_index_day "
+                "where symbol='sh000300' and turnover is not null")
+        bounds = conn.execute(f"select min(date), max(date) {base}").fetchone()
+        db_first, db_last = bounds[0], bounds[1]
+
+        # 四种窗口各捞各的，共同点：都用 desc + limit 命中尾部（或前部），
+        # 再 reverse 成正序，最后按 offset 切掉为了算线而多捞的那截。
+        if start and end:
+            span = conn.execute(
+                f"select count(*) {base} and date >= ? and date <= ?",
+                (start, end)).fetchone()[0]
+            rows = conn.execute(
+                f"select {cols} {base} and date <= ? order by date desc limit ?",
+                (end, span + TURNOVER_DAY_WIN)).fetchall()
+            rows.reverse()
+            offset = len(rows) - span
+        elif start:
+            # 往后翻：`start` 之前多捞 252 根纯为算线，不画。
+            pre = conn.execute(
+                f"select {cols} {base} and date < ? order by date desc limit ?",
+                (start, TURNOVER_DAY_WIN)).fetchall()
+            pre.reverse()
+            body = conn.execute(
+                f"select {cols} {base} and date >= ? order by date asc limit ?",
+                (start, n)).fetchall()
+            rows = pre + body
+            offset = len(pre)
+        elif end:
+            rows = conn.execute(
+                f"select {cols} {base} and date <= ? order by date desc limit ?",
+                (end, n + TURNOVER_DAY_WIN)).fetchall()
+            rows.reverse()
+            offset = len(rows) - n
+        else:
+            rows = conn.execute(
+                f"select {cols} {base} order by date desc limit ?",
+                (n + TURNOVER_DAY_WIN,)).fetchall()
+            rows.reverse()
+            offset = len(rows) - n
+    except sqlite3.Error:
+        return empty
+    finally:
+        conn.close()
+    if not rows or offset >= len(rows):
+        return empty
+
+    vals = [float(t) for _, t, _, _ in rows]
+    kw = {"win": TURNOVER_DAY_WIN, "dry": TURNOVER_DAY_DRY_LINE,
+          "step": _DAY_STEP, "heavy_step": _DAY_HEAVY_STEP}
+    lines = [_volume_lines(vals[:i + 1], **kw) for i in range(len(vals))]
+    low = [None if x is None else x["low"] for x in lines]
+    high = [None if x is None else x["high"] for x in lines]
+    heavy = [None if x is None else x["heavy"] for x in lines]
+    # 分位按"该点往前 252 个交易日"算（含窗口外那截 lookback），切窗口不改变它。
+    ranks = []
+    for i, cur in enumerate(vals):
+        win = vals[max(0, i - TURNOVER_DAY_WIN + 1):i + 1]
+        ranks.append(round(sum(1 for x in win if x < cur) / len(win) * 100))
+
+    cut = slice(offset, None)
+    rows, vals = rows[cut], vals[cut]
+    low, high, heavy = low[cut], high[cut], heavy[cut]
+    ranks = ranks[offset:]
+
+    ref = today or dt.date.today().isoformat()
+    last_date = str(rows[-1][0])
+    recent = vals[-TURNOVER_DAY_WIN:]
+    return {
+        "available": True,
+        "points": [{"date": str(d), "turnover": round(float(t), 2),
+                    "pct_chg": None if c is None else round(float(c), 2),
+                    "close": None if k is None else round(float(k), 2),
+                    "rank": rk}
+                   for (d, t, c, k), rk in zip(rows, ranks)],
+        "dry_line": TURNOVER_DAY_DRY_LINE,
+        "low_line": low[-1],
+        "high_line": high[-1],
+        "heavy_line": heavy[-1],
+        "low_series": low,
+        "high_series": high,
+        "heavy_series": heavy,
+        "median": round(_median(recent), 2) if len(recent) >= 126 else None,
+        "q90": round(_quantile(vals, 90), 2),
+        "n": len(rows),
+        "latest": last_date,
+        "latest_value": round(float(rows[-1][1]), 2),
+        "latest_close": None if rows[-1][3] is None else round(float(rows[-1][3]), 2),
+        # 这一段的两头，外加全表的两头——前端靠后者决定"前一段/后一段"该不该置灰。
+        "first": str(rows[0][0]),
+        "db_first": str(db_first) if db_first else None,
+        "db_last": str(db_last) if db_last else None,
+        # 最后一根是不是"今天"。日K 收盘才定稿，盘中跑出来的那根不完整，
+        # 页面据此提示一句，但不改任何值、不判档。
+        "is_today": last_date == ref,
     }
 
 

@@ -371,3 +371,77 @@ def enrich(hub, code: str, end: str, price: float | None,
         g.setdefault("symbol", code)
         log(f"[缺口] {g['domain']}: {g['why']}")
     return out, gaps
+
+
+# ---------------------------------------------------------- 一句话解读
+# 旁证表是给"自己看"的：数值摆在左列，右列直接说人话——偏高/偏低、
+# 距目标价多少、有没有反证。报告页和看板个股页共用这一份，避免两处
+# 各写一套阈值、时间长了口径漂移。
+
+_VAL_LOW, _VAL_HIGH = 30.0, 70.0     # 估值分位的"偏低/偏高"分界
+_GAP_TIE = 0.02                      # 距目标价 ±2% 内算"基本一致"
+
+
+def plain_reads(extras: dict) -> dict:
+    """四条旁证的人话解读，key 与 extras 的四个域一一对应。
+
+    缺数据时给「—」而不是硬编一句——解读必须建立在真实数字上，
+    宁可留白也不编。
+    """
+    ex = extras or {}
+    out: dict = {}
+
+    # 估值分位：三个指标有分位的取均值，落在哪个区间就说哪句话
+    m = (ex.get("valuation") or {}).get("metrics") or {}
+    pcts = [v["percentile"] for v in m.values()
+            if isinstance(v, dict) and v.get("percentile") is not None]
+    if pcts:
+        avg = sum(pcts) / len(pcts)
+        if avg <= _VAL_LOW:
+            out["valuation"] = f"估值偏低（均值 P{avg:.0f}，处于历史低位区）"
+        elif avg >= _VAL_HIGH:
+            out["valuation"] = f"估值偏高（均值 P{avg:.0f}，处于历史高位区）"
+        else:
+            out["valuation"] = f"估值处于历史合理区间（均值 P{avg:.0f}）"
+    else:
+        out["valuation"] = "—"
+
+    # 机构目标价：现价和目标价的相对位置
+    up = (ex.get("consensus") or {}).get("upside")
+    if up is None:
+        out["consensus"] = "—"
+    elif abs(up) < _GAP_TIE:
+        out["consensus"] = "现价与机构目标价基本一致"
+    elif up > 0:
+        out["consensus"] = f"现价低于机构目标价 {up * 100:.1f}%（机构预期仍有上行空间）"
+    else:
+        out["consensus"] = f"现价高于机构目标价 {-up * 100:.1f}%（已超出机构预期）"
+
+    # 基本面反证：命中是"涨没有基本面"的证据
+    rk = ex.get("risk") or {}
+    hit, watch = rk.get("hit") or 0, rk.get("watch") or 0
+    if not rk.get("items"):
+        out["risk"] = "—"
+    elif hit:
+        out["risk"] = f"{hit} 项命中，这波涨幅缺乏基本面支撑的证据较强"
+    elif watch:
+        out["risk"] = f"无命中、仅 {watch} 项提示，基本面未见明显反证"
+    else:
+        out["risk"] = "无命中无提示，基本面未见反证"
+
+    # 周期状态：产能周转率分位的冷热
+    cy = ex.get("cycle") or {}
+    pct = cy.get("position_pct")
+    if not cy:
+        out["cycle"] = "—"
+    elif not cy.get("is_cycle"):
+        out["cycle"] = "非周期股，产能位置仅作参考"
+    elif pct is None:
+        out["cycle"] = "产能周转率样本不足，无法判断位置"
+    elif pct >= 70:
+        out["cycle"] = f"产能利用率处历史高位（P{pct:.0f}），景气偏热"
+    elif pct <= 30:
+        out["cycle"] = f"产能利用率处历史低位（P{pct:.0f}），景气偏冷"
+    else:
+        out["cycle"] = f"产能利用率处历史中位（P{pct:.0f}）"
+    return out

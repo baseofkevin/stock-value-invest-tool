@@ -5,6 +5,7 @@ import re
 
 from .css import HTML_CSS
 from .format import fmt_pct
+from ..extras import plain_reads
 
 
 def _h(v):
@@ -156,9 +157,11 @@ def _evidence_section(r):
     """四条旁证：估值分位 / 机构目标价 / 基本面反证 / 周期状态。
 
     都是**一句话**，都不给总分、不参与任何结论——它们只是把"贵不贵、机构怎么看、
-    基本面撑不撑得住"摆在旁边，供人自己组合。
+    基本面撑不撑得住"摆在旁边，供人自己组合。第三列是`extras.plain_reads()`
+    给的人话解读（偏高/偏低、距目标价多少），和数值同源、不会各说各话。
     """
     ex = r.get("extras") or {}
+    reads = plain_reads(ex)
     rows = []
 
     val = ex.get("valuation") or {}
@@ -176,9 +179,9 @@ def _evidence_section(r):
         span = f"{val.get('sample_start')} 以来 {val.get('weeks')} 周"
         tone = "warn" if any(((m.get(k) or {}).get("percentile") or 0) >= 85
                              for k in ("pe", "pb", "ps")) else "info"
-        rows.append(("估值分位", "·".join(parts) + f"，样本 {span}", tone))
+        rows.append(("估值分位", "·".join(parts) + f"，样本 {span}", tone, reads["valuation"]))
     else:
-        rows.append(("估值分位", "—", "muted"))
+        rows.append(("估值分位", "—", "muted", reads["valuation"]))
 
     con = ex.get("consensus") or {}
     if con.get("target"):
@@ -191,17 +194,17 @@ def _evidence_section(r):
             txt += f"（{con['forecasts']} 个预测年度）"
         tone = "good" if (up is not None and up >= 0.10) else (
             "warn" if (up is not None and up <= 0) else "info")
-        rows.append(("机构目标价", txt, tone))
+        rows.append(("机构目标价", txt, tone, reads["consensus"]))
     else:
-        rows.append(("机构目标价", "无机构覆盖（上游一致预期为空表，不是取数故障）", "muted"))
+        rows.append(("机构目标价", "无机构覆盖（上游一致预期为空表，不是取数故障）", "muted", reads["consensus"]))
 
     rk = ex.get("risk") or {}
     if rk.get("items"):
         txt = "；".join(f"{i['label']} {i['text']}" for i in rk["items"])
         tone = "warn" if rk.get("hit") else ("info" if rk.get("watch") else "good")
-        rows.append((f"基本面反证（命中 {rk.get('hit', 0)} / 提示 {rk.get('watch', 0)}）", txt, tone))
+        rows.append((f"基本面反证（命中 {rk.get('hit', 0)} / 提示 {rk.get('watch', 0)}）", txt, tone, reads["risk"]))
     else:
-        rows.append(("基本面反证", "—", "muted"))
+        rows.append(("基本面反证", "—", "muted", reads["risk"]))
 
     cy = ex.get("cycle") or {}
     if cy:
@@ -212,15 +215,16 @@ def _evidence_section(r):
                f"；弹性{cy.get('elastic_label')}；产能周转率 "
                f"{'—' if cy.get('position_pct') is None else format(cy['position_pct'], '.0f') + '% 分位'}"
                f"（{cy.get('position_label')}）")
-        rows.append(("周期状态", txt, "info"))
+        rows.append(("周期状态", txt, "info", reads["cycle"]))
 
     out = ['<section class="panel">',
            '<div class="section-head"><div><h2>旁证（各一句话，不参与结论）</h2>'
            '<p>顶部判断的主证据是上面四张卡片；这里只把"贵不贵、机构怎么看、'
            '基本面撑不撑得住"摆出来。</p></div></div>',
            '<table class="evidence"><tbody>']
-    for label, text, tone in rows:
-        out.append(f'<tr class="tone-{tone}"><th>{_h(label)}</th><td>{_h(text)}</td></tr>')
+    for label, text, tone, read in rows:
+        out.append(f'<tr class="tone-{tone}"><th>{_h(label)}</th><td>{_h(text)}</td>'
+                   f'<td class="read">{_h(read)}</td></tr>')
     out.append("</tbody></table>")
     out.append("</section>")
     return "\n".join(out)

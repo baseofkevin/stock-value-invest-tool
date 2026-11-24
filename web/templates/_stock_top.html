@@ -23,13 +23,14 @@
 
 {# 旁证：估值分位 / 机构目标价 / 基本面反证 / 周期状态。数据来自顶部工具写进
    payload 的 extras，所以跟着顶部这一块走（原来挂在质量那块旁边，位置不对：
-   其中三项根本不是质量工具的产出）。 #}
+   其中三项根本不是质量工具的产出）。第三列"解读"由 extras.plain_reads 给，
+   和报告页共用同一份阈值，偏高/偏低/距目标价多少直接说人话。 #}
 {% if extras %}
 <section class="panel">
   <h2>旁证</h2>
   <p class="sub">估值分位 / 机构目标价 / 基本面反证 / 周期状态，各一句话，不参与结论。</p>
   {% set val = (extras.valuation or {}).get('metrics') or {} %}
-  <table class="kv"><tbody>
+  <table class="kv reads"><tbody>
     <tr class="tone-info"><th>估值分位</th><td>
       {% if val %}
         {% for key, label in [('pe','PE(TTM)'), ('pb','PB'), ('ps','PS(TTM)')] %}
@@ -38,11 +39,11 @@
         {% endfor %}
         <br><small style="color:#94a3b8">样本 {{ (extras.valuation or {}).get('sample_start') }} 起 {{ (extras.valuation or {}).get('weeks') }} 周</small>
       {% else %}—{% endif %}
-    </td></tr>
+    </td><td class="read">{{ extra_reads.valuation }}</td></tr>
     <tr><th>机构目标价</th><td>
       {% set con = extras.consensus or {} %}
       {% if con.target %}{{ con.target|num(2) }}（距现价 {{ con.upside|pct }}，{{ con.forecasts }} 个预测年度）{% else %}无机构覆盖（上游一致预期为空表，不是取数故障）{% endif %}
-    </td></tr>
+    </td><td class="read">{{ extra_reads.consensus }}</td></tr>
     <tr class="{{ 'tone-warn' if (extras.risk or {}).get('hit') else 'tone-info' }}"><th>基本面反证</th><td>
       {% set rk = extras.risk or {} %}
       {% set rk_items = rk.get('items') or [] %}
@@ -50,7 +51,7 @@
         {% for i in rk_items %}{{ i.label }} {{ i.text }}{% if not loop.last %}；{% endif %}{% endfor %}
         <br><small style="color:#94a3b8">命中 {{ rk.hit }} / 提示 {{ rk.watch }}（命中项越多，"这波涨没有基本面"的证据越强）</small>
       {% else %}—{% endif %}
-    </td></tr>
+    </td><td class="read">{{ extra_reads.risk }}</td></tr>
     {% set cy = extras.cycle or {} %}
     {% if cy %}
     <tr><th>周期状态</th><td>
@@ -59,7 +60,7 @@
       {{ {'strong':'强','weak':'弱','unstable':'不稳定'}.get(cy.elastic_label, cy.elastic_label or '—') }}；
       产能周转率 {% if cy.position_pct is none %}—{% else %}{{ cy.position_pct|num(0) }}% 分位{% endif %}
       （{{ cy.position_label|poslabel }}）
-    </td></tr>
+    </td><td class="read">{{ extra_reads.cycle }}</td></tr>
     {% endif %}
   </tbody></table>
 </section>

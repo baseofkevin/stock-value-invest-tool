@@ -3,6 +3,7 @@
    三个判断的措辞与终端报告（cycle_report.py --stock）完全一致。 #}
 {% if cyc %}
 {% set cd = cyc|detail %}
+{% set reads = cd|cyclereads %}
 <section class="panel">
   <h2>周期弹性三判断
     {% if cd %}<span class="tag">{{ cd.industry or '非周期行业' }} · {{ cd.meta.quarters }} 个季度{% if cd.meta.latest %} · 最新 {{ cd.meta.latest }}{% endif %}</span>{% endif %}
@@ -33,16 +34,19 @@
       <h3>毛利率（近 20 季）</h3>
       <p class="sub">判断① 看这条线的波动幅度，不看高低。</p>
       <div class="canvas-wrap"><canvas id="cycGm"></canvas></div>
+      {% if reads.gm %}<p class="chart-read">{{ reads.gm }}</p>{% endif %}
     </div>
     <div class="chart-box">
       <h3>利润/收入 增速比值</h3>
       <p class="sub">判断② 近 8 季逐季比值，越大越敏感。</p>
       <div class="canvas-wrap"><canvas id="cycRatio"></canvas></div>
+      {% if reads.ratio %}<p class="chart-read">{{ reads.ratio }}</p>{% endif %}
     </div>
     <div class="chart-box">
       <h3>产能周转率（近 40 季）</h3>
       <p class="sub">判断③ 当前值在自身历史里的分位。</p>
       <div class="canvas-wrap"><canvas id="cycTurn"></canvas></div>
+      {% if reads.turn %}<p class="chart-read">{{ reads.turn }}</p>{% endif %}
     </div>
   </div>
 

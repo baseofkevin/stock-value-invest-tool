@@ -46,7 +46,8 @@ Jinja 直接吐 HTML，Chart.js 只负责画那几张图（`static/chart.umd.min
 | `/top` | 顶部 | `top_result` | 距 250 日高点的横条 + 四因子状态矩阵 |
 | `/review` | 综合评估 | `db.merged()` + `shared.db` 的 `annotation` / `finance` | **不查新表**，全在 `stock_review_assess.build()` 里现算 |
 | `/extreme` | 冷热极点 | `results.db` 的 `price` / `price_stat` / `index_price` | 按日横截面 + 每日摘要，独立的下拉（不共用批次选择器） |
-| `/trend` | A股大势 | `results.db.market_regime` + `shared.db.market_index_week` | 全量历史表 + 量能曲线 |
+| `/trend` | A股大势 | `results.db.market_regime` + `shared.db.market_index_week` / `market_index_day` | 全量历史表 + 量能曲线（周/日两个视图，日线可翻历史区间） |
+| `/trend/day.json` | 同上 | `shared.db.market_index_day` | 日视图翻页/换跨度/跳日期时按需取的一段（JSON） |
 | `/stock/<code>` | 个股 | 四张结果表（按 `db.ORDER`） | 四边结论并排、标签切换；`?focus=` 决定打开时停在哪一页 |
 | `/stock/<code>/report/<tool>` | 原版单股报告 | `payload.report_html` | 解压后原样返回；`?run=` 指定哪一次 |
 | `/book` | 原书学习 | `static/five-rules-book-full-learning.html` | 5.5MB 自包含 HTML，只在末尾补一个返回浮标 |
@@ -98,6 +99,9 @@ Jinja 直接吐 HTML，Chart.js 只负责画那几张图（`static/chart.umd.min
 三块：
 
 1. **A股大势横幅** — `db.regime(conn)` 默认 `limit=8`，摆最近 8 周的三路状态；
+   右上角主词是**基准日**（= 你跑的那天），`数据截至` 降为副行——它取三路里最旧
+   的一天，常年比基准日早一到几天（乐咕晚一天 + 周换手要等本周收盘）。把 `数据截至`
+   当主词，会让人看着「跑在 11-23、数据截至 11-20」以为面板停在上一行；
 2. **批次卡片列表** — `db.batches(conn, limit=52)`，每个基准日一条，显示
    `n_tools/4 步`、跑过几次（`runs`）、缺哪几步（`missing` + `miss` 里的补跑命令）；
 3. **汇总 / 计数** — `db.summary()` / `db.counts()`。
@@ -115,7 +119,34 @@ Jinja 直接吐 HTML，Chart.js 只负责画那几张图（`static/chart.umd.min
 - 两个参数反着给（`start > end`）会自动交换，不报错。
 - 页面顶部的卡片**永远展示最新一周**，不受筛选影响；筛选只作用于下面那张历史表。
 - 量能曲线来自 `db.turnover_series()`：**这是唯一读 `shared.db` 画图的地方**
-  （`market_regime` 一周一行，凑不出 260 根周线）。
+  （`market_regime` 一次运行一行，凑不出 260 根周线）。
+  同一块面板上还有 `db.day_series()` 画的**日线视图**，读 `shared.db.market_index_day`。
+  两个函数返回**同一种形状**（点列 + 三条 `*_series` + `dry/low/high/heavy_line`），
+  所以 `trend.html` 里只有一套绘图代码，切换只是换个视图对象重画一遍。
+
+**周/日是两个口径，不是粗细两个版本。** 日换手率按日累计，一周的量约等于五天之和，
+所以同一个"近一年中位数"在两边差约 5 倍：周是 52 周 / 地量 1.0% / 取整 0.1%，
+日是 252 交易日 / 地量 0.2% / 取整 0.01%。这两个数**不能互换**，也不能共用一个 Y 轴。
+
+日线视图**不参与档位判定**：表格里的"量能"仍由 `stock_market_trend.rules.sentiment()`
+按周线判。页面上写明这一点（`VIEWS.day.note`），否则会出现"图上放量、表里平稳"的错觉。
+`market_index_day` 不存在时 `day_series()` 返回 `available=False`，"日"按钮置灰并
+提示补跑命令，而不是画一张空图。
+
+**日视图自带区间浏览器**（周图没有——它是 260 周固定背景）。日K 从 2014-07 起
+3000 根，默认只画最近 250 根；想看更早的（"2025-11-12 以前那段"）有三条路：
+
+- `‹ 前一段 / 后一段 ›`：按当前跨度整段整段地翻（`first - 1 天` / `latest + 1 天`
+  做锚点，交易日个数 SQL 自己数）；
+- 跨度 `1 / 3 / 5 年`：250 / 750 / 1250 个交易日（`DAY_MAX_N = 1300` 封顶——不是怕慢，
+  是 1300 根摊在 1000px 上已经 1.3 点/像素，再密只剩一团墨）；
+- 「看这天以前」日期框：`end=那天` 往前取一整段。
+
+翻页走 `/trend/day.json?n=&start=&end=` 按需取那一段，不整页刷新——口径与首屏
+`db.day_series()` 是**同一个函数**，参数脏了退回默认窗口不 500。每点多带一个
+`rank`：相对**它自己往前 252 个交易日**的分位，不是相对所选窗口——否则跨度从
+1 年切到 5 年，悬停里那句"近 1 年 X% 分位"就跟着窗口漂成假话。控件只在"日线"
+下出现，切回周线整行 `hidden`（`syncRange()`）。
 
 ### `/extreme`（冷热极点）
 
@@ -329,9 +360,9 @@ db.report_html(row) → inner(row)["report_html"] → gzip → base64 → HTML
    但**页面本身不会报错**（只是图上的线算了另一套）。
 5. **`web/db.py` 的模块级 `RESULTS_DB` / `SHARED_DB` 在 import 时求值**。
    用 `create_app(path)` 换库时，走 `app.config["DB_PATH"]` 的那些页面正常，
-   但任何**不传 db 参数**的调用仍读 import 时的路径。目前只有 `turnover_series()`
-   属于这类（它读的是 `shared.db`，与结果库无关，所以实际没影响）——新增函数时
-   记得显式传 `db`。
+   但任何**不传 db 参数**的调用仍读 import 时的路径。目前只有 `turnover_series()` /
+   `day_series()` 属于这类（都读 `shared.db`，与结果库无关，所以实际没影响，
+   但测试里换库要记得同时改 `webdb.SHARED_DB`）——新增函数时记得显式传 `db`。
 6. **`/book` 依赖一个 5.5MB 的生成文件**。仓库里没有这个文件时该页 404，
    导航里那一项照样在。
 7. **没有登录、没有写操作、没有分页**。`/batches` 最多 52 批、`/extreme` 一次

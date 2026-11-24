@@ -135,6 +135,9 @@ table.evidence tr.tone-good td{color:#166534}
 table.evidence tr.tone-muted td{color:#94a3b8}
 table.evidence tr.tone-warn th{color:#c2410c}
 table.evidence tr.tone-muted th{color:#94a3b8}
+/* 旁证表第三列：一句话解读。浅底色块让它和中间的数值列一眼区分开 */
+table.evidence td.read{width:34%;color:#64748b;background:#f8fafc;
+  border-left:1px solid #eef2f7;font-size:12px}
 @media (max-width:640px){
   table.evidence th,table.gaps th,table.kv th{white-space:normal}
   table.evidence th,table.evidence td,table.gaps th,table.gaps td,

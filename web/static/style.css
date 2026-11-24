@@ -246,6 +246,12 @@ table.grid tr.dim td{opacity:.55}
 .kv tr:last-child th,.kv tr:last-child td{border-bottom:0}
 .kv tr.tone-warn td{color:#9a3412}.kv tr.tone-warn th{color:#c2410c}
 .kv tr.tone-good td{color:#166534}.kv tr.tone-muted td,.kv tr.tone-muted th{color:#94a3b8}
+/* 旁证表第三列：一句话解读（与报告页 td.read 同一视觉语言） */
+.kv.read td.read{width:34%;color:#64748b;background:#f8fafc;
+  border-left:1px solid #eef2f7;font-size:12px}
+/* 周期页三张指标图下的解读段（与 cycle 工具报告页同一视觉语言） */
+.chart-read{font-size:12.5px;color:#64748b;line-height:1.75;margin:8px 0 0;
+  padding:7px 10px;background:#f8fafc;border-left:3px solid #0f766e;border-radius:0 4px 4px 0}
 
 /* ---------------------------------------------------------------- 批次条 */
 /* 每个数据页顶部那一条：先确认"我在看哪一批"，再看数字。
@@ -391,6 +397,10 @@ table.grid tr.grouprow td{background:#f8fafc;font-weight:700;color:#334155;
   .cards{grid-template-columns:1fr 1fr}
   .cards.cards-5{grid-template-columns:1fr 1fr}
   .charts,.two{grid-template-columns:1fr}
+  /* 窄屏装不下两栏，恢复换行；靠 margin-left:auto 让换下去的日期块仍然靠右，
+     而不是像默认那样贴着左边。 */
+  .regime-head{flex-wrap:wrap}
+  .regime-when{margin-left:auto}
 }
 @media (max-width:600px){
   .page{padding:14px 12px 36px}
@@ -513,10 +523,16 @@ table.grid td .quote-link{white-space:nowrap;font-size:12px}
    刻意不做成图表——它只是"今天大概在什么位置"的背景板，看数就够了；
    要连成线看变化，展开下面那张近 8 周的小表。 */
 .regime{margin-bottom:22px}
+/* 头部两栏：左边说明、右边日期块。这里**不换行**——`flex-wrap:wrap` 一旦触发，
+   右栏会被丢到下一行行首，再叠上 `text-align:right` + `nowrap`，字就往左溢出面板
+   （2026-11-24 加了第二行「数据截至 · 计算于」之后踩到）。宁可让左边那句说明折行，
+   日期块自己保持 nowrap、右边缘贴着面板。窄屏由 @media (max-width:900px) 恢复换行。 */
 .regime-head{display:flex;justify-content:space-between;align-items:flex-start;
-  gap:16px;flex-wrap:wrap;margin-bottom:2px}
+  gap:16px;flex-wrap:nowrap;margin-bottom:2px}
+.regime-head>div:first-child{min-width:0}
 .regime-head .sub{margin-bottom:0}
-.regime-when{font-size:12px;color:var(--muted);text-align:right;line-height:1.9;white-space:nowrap}
+.regime-when{font-size:12px;color:var(--muted);text-align:right;line-height:1.9;
+  white-space:nowrap;flex:0 0 auto}
 .regime-when b{color:var(--ink);font-variant-numeric:tabular-nums}
 .regime-calc{display:block;font-size:11.5px;color:#94a3b8}
 .regime-cards{grid-template-columns:repeat(3,1fr);margin:16px 0 4px}
@@ -549,14 +565,55 @@ table.grid td .quote-link{white-space:nowrap;font-size:12px}
 .regime-history{min-width:920px}
 .regime-history td.name{white-space:nowrap}
 .regime-history td.name small{color:#94a3b8;margin-left:4px}
+/* 「周内跑」跟着日期走：模板里为压空白用了 {%- if，紧贴着 </small>，靠这里留缝。 */
+.regime-history td.name .chip{margin-left:6px}
 .regime-history td .chip{font-size:11.5px;padding:1px 7px}
 
 /* 量能曲线：图例写在图上方（Chart.js 自带那个太挤，还会挤掉纵轴宽度）。
    高度写死 330px——周数变了不重排，跟其它页的 .chart-box.tall 一个手感。 */
 .turn-wrap{position:relative;height:330px;margin-top:4px}
+
+/* 周/日 切换。放图例上面一行，跟图例同一套字号，不抢视线。
+   两个视图画的是**两套口径**（52 周 vs 252 交易日），所以旁边那行说明必须跟着切，
+   不然人会拿日线的 0.5% 去对表里按周判的"放量"。 */
+.turn-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:2px 0 8px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;
+  overflow:hidden;background:#fff}
+.seg-btn{border:0;background:transparent;padding:4px 13px;font:inherit;font-size:12px;
+  color:var(--muted);cursor:pointer;line-height:1.5}
+.seg-btn + .seg-btn{border-left:1px solid var(--line)}
+.seg-btn:hover:not(:disabled):not(.on){color:var(--ink);background:var(--muted-bg)}
+.seg-btn.on{background:var(--ink);color:#fff}
+.seg-btn:disabled{color:#c3ccd8;cursor:not-allowed}
+.turn-note{font-size:11.5px;color:var(--muted)}
+.turn-note.dim{color:#94a3b8}
+
+/* 日视图的区间浏览器：只在「日线」下出现（切回周线时整行 hidden）。
+   三条路（‹›翻页 / 换跨度 / 跳日期）都只换"看哪一段"，不换口径。 */
+.turn-range{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  margin:0 0 8px;font-size:11.5px;color:var(--muted)}
+.turn-range[hidden]{display:none}
+.rng-btn{border:1px solid var(--line);background:#fff;padding:3px 10px;
+  font:inherit;font-size:11.5px;color:var(--ink);border-radius:6px;cursor:pointer}
+.rng-btn:hover:not(:disabled){border-color:var(--muted-line);background:var(--muted-bg)}
+.rng-btn:disabled{color:#c3ccd8;cursor:not-allowed;background:#fff}
+.rng-span{color:var(--muted)}
+.rng-span b{font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums}
+.rng-span i{font-style:normal;color:#94a3b8;margin-left:4px}
+.rng-sep{width:1px;height:16px;background:var(--line)}
+.rng-label{color:#94a3b8}
+.span-btn{border:1px solid var(--line);background:#fff;padding:3px 9px;
+  font:inherit;font-size:11.5px;color:var(--muted);cursor:pointer}
+.span-btn + .span-btn{margin-left:-1px}
+.span-btn.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.span-btn:hover:not(.on){color:var(--ink);background:var(--muted-bg)}
+.rng-date{border:1px solid var(--line);background:#fff;padding:3px 8px;
+  font:inherit;font-size:11.5px;color:var(--ink);border-radius:6px}
+
 .turn-legend{display:flex;flex-wrap:wrap;gap:14px;margin:2px 0 10px;
   font-size:11.5px;color:var(--muted)}
 .turn-legend span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.turn-legend b{font-weight:500;color:var(--ink);font-variant-numeric:tabular-nums}
 .turn-legend .ln{width:16px;height:2px;background:var(--info);border-radius:1px}
 .turn-legend .ln.price{background:#dc2626}
 .turn-legend .dash{width:16px;height:0;border-top:2px dashed}
