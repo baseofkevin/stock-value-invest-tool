@@ -102,7 +102,7 @@ def _save_demo(db_path: str, date: str = "2026-11-13", kind: str = "batch") -> N
          "date": "2026-11-13", "close": 6.18, "pos250": -0.21,
          "days_since_high": 242, "phase": "反弹接近局部高点",
          "views": [["动量", "低位·走平"], ["换手", "偏低"], ["业绩", "减速"],
-                   ["量价", "未触发"], ["周期位置", "周期·高位"]],
+                   ["量价", "未触发"]],
          "views_full": []},
     ], date, argv="test", db=db_path, kind=kind)
 
