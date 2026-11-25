@@ -1,4 +1,4 @@
-# stock-value-invest-tool
+# stock_value_invest_tool
 
 个人股票研究工具箱：每周五收盘后跑一遍选股 + 质量 + 周期，买入后按需查顶部。
 四个工具的结论都写进 `results.db`，用 `./run.py web` 打开看板读。
@@ -24,7 +24,7 @@
 ## 每周五收盘后（15:05 之后）
 
 ```bash
-cd /home/kevin/MyData/stock-value-invest-tool
+cd /home/kevin/MyData/stock_value_invest_tool
 ./run.py all
 ```
 

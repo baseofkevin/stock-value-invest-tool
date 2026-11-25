@@ -5,7 +5,7 @@
 
 用法：
 
-    cd /path/to/stock-value-invest-tool
+    cd /path/to/stock_value_invest_tool
     python3 -m stock_kline_screen            # 默认基准日 = 最近交易日，K=5
     python3 -m stock_kline_screen --date 2026-11-06
 """

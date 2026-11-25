@@ -2,7 +2,7 @@
 
 跑法：
 
-    cd /home/kevin/MyData/stock-value-invest-tool
+    cd /home/kevin/MyData/stock_value_invest_tool
     python3 -m stock_data_fetch.tests.test_repair
 
 repair 是唯一一个**会改写历史行**的维护工具，所以测试要盯死两件事：

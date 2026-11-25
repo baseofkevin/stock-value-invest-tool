@@ -2,7 +2,7 @@
 
 跑法：
 
-    cd /home/kevin/MyData/stock-value-invest-tool && \
+    cd /home/kevin/MyData/stock_value_invest_tool && \
         python -m stock_data_fetch.tests.test_annotation
 
 覆盖：
@@ -23,7 +23,7 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve()
-PROJECT = HERE.parent.parent.parent        # stock-value-invest-tool/
+PROJECT = HERE.parent.parent.parent        # stock_value_invest_tool/
 sys.path.insert(0, str(PROJECT))
 
 from stock_data_fetch import annotation as A                    # noqa: E402

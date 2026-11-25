@@ -188,7 +188,7 @@ PE/PB/PS 排序时负值（亏损）一律排最后，与中位数只取正值�
 ## 测试
 
 ```bash
-cd /home/kevin/MyData/stock-value-invest-tool
+cd /home/kevin/MyData/stock_value_invest_tool
 STOCKHUB_TMP=$PWD/.testtmp python3 -m stock_extreme_point.tests.test_extreme_point
 # 通过 100 项（2026-11-23 实跑）
 ```

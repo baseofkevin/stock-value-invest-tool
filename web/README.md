@@ -371,7 +371,7 @@ db.report_html(row) → inner(row)["report_html"] → gzip → base64 → HTML
 ## 测试
 
 ```bash
-cd /home/kevin/MyData/stock-value-invest-tool
+cd /home/kevin/MyData/stock_value_invest_tool
 STOCKHUB_TMP=$PWD/.testtmp python3 -m unittest tests.test_web -v
 ```
 

@@ -1,6 +1,6 @@
 """换手层测试：`turnover20` / `annotate_turnover` / `apply_turnover`。
 
-跑法：cd ~/MyData/stock-value-invest-tool && python3 -m stock_kline_screen.tests.test_turnover
+跑法：cd ~/MyData/stock_value_invest_tool && python3 -m stock_kline_screen.tests.test_turnover
 
 相对原版（test_screen.py 的换手节）删掉了**单位换算整节**：共享库的
 `kline.volume` 已是股，`infer_unit` / `unit_from_prefix` 那套「科创板是股、

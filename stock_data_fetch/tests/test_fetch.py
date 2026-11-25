@@ -2,7 +2,7 @@
 
 跑法：
 
-    cd /home/kevin/MyData/stock-value-invest-tool/stock_data_fetch && \
+    cd /home/kevin/MyData/stock_value_invest_tool/stock_data_fetch && \
     /home/kevin/.workbuddy/binaries/python/versions/3.13.12/bin/python3 \
         -m stock_data_fetch.tests.test_fetch
 
@@ -29,7 +29,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 HERE = Path(__file__).resolve()
-PROJECT = HERE.parent.parent.parent        # stock-value-invest-tool/（包的父目录）
+PROJECT = HERE.parent.parent.parent        # stock_value_invest_tool/（包的父目录）
 sys.path.insert(0, str(PROJECT))
 
 from stock_data_fetch import api, coverage as C, sources                  # noqa: E402

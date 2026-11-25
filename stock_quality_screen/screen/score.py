@@ -996,12 +996,12 @@ def load_resource_moat(code: str) -> dict[str, Any]:
     if not code:
         return empty
     try:
-        # 共享库在父目录（stock-value-invest-tool/）。`fetch.py` 启动时把 PROJECT 塞进了
+        # 共享库在父目录（stock_value_invest_tool/）。`fetch.py` 启动时把 PROJECT 塞进了
         # sys.path，但 `score.py` 不该依赖"别人先 import 过 fetch"这种隐式顺序——
         # 单测里直接 import score 就没走 fetch，于是这里会 ModuleNotFoundError。
         # 自己补一次，幂等。
         import sys
-        _proj = _pl.Path(__file__).resolve().parent.parent.parent   # stock-value-invest-tool/
+        _proj = _pl.Path(__file__).resolve().parent.parent.parent   # stock_value_invest_tool/
         if str(_proj) not in sys.path:
             sys.path.insert(0, str(_proj))
 

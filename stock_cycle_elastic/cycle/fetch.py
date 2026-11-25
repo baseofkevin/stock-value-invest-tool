@@ -59,9 +59,9 @@ import threading
 import time
 from pathlib import Path
 
-# `stock_cycle_elastic/cycle/` → `stock-value-invest-tool/`，让 `stock_data_fetch` 可 import
+# `stock_cycle_elastic/cycle/` → `stock_value_invest_tool/`，让 `stock_data_fetch` 可 import
 _HERE = Path(__file__).resolve().parent          # .../stock_cycle_elastic/cycle/
-_HUB = _HERE.parent.parent                       # .../stock-value-invest-tool/
+_HUB = _HERE.parent.parent                       # .../stock_value_invest_tool/
 if str(_HUB) not in sys.path:
     sys.path.insert(0, str(_HUB))
 
@@ -75,7 +75,7 @@ except ImportError as exc:                       # pragma: no cover
     raise SystemExit(
         f"找不到共享数据层 stock_data_fetch（找的是 {_HUB}）。\n"
         f"原版 cycle-elastic 自带 node 取数通道，本版改成依赖共享库；\n"
-        f"请确认 stock-value-invest-tool 与本目录同级。原始错误：{exc}") from exc
+        f"请确认 stock_value_invest_tool 与本目录同级。原始错误：{exc}") from exc
 
 
 class DataError(Exception):

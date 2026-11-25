@@ -25,7 +25,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent          # stock_quality_screen/tests/
 PROJECT = HERE.parent                           # stock_quality_screen/
-HUB = PROJECT.parent                            # stock-value-invest-tool/
+HUB = PROJECT.parent                            # stock_value_invest_tool/
 
 # 必须早于任何被测模块的 import：`import config` 要靠这条路径
 if str(PROJECT) not in sys.path:

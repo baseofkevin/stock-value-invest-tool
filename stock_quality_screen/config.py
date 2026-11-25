@@ -11,7 +11,7 @@ from pathlib import Path
 VERSION = "0.9.12"   # 2.13.0 建议（改造文档）：盈利结构改名 + 垄断性标注 + 存续安全
 
 PROJECT_DIR = Path(__file__).resolve().parent      # stock_quality_screen/
-HUB_DIR = PROJECT_DIR.parent                       # stock-value-invest-tool/
+HUB_DIR = PROJECT_DIR.parent                       # stock_value_invest_tool/
 
 # 默认输出目录指向**共享的 output/**，不是源码目录下的 html-report/。
 #
@@ -19,7 +19,7 @@ HUB_DIR = PROJECT_DIR.parent                       # stock-value-invest-tool/
 # HTML。跑三五次之后 `stock_quality_screen/` 里躺着几十份报告和一个 html-report2/，
 # 谁都说不清哪份是最新的。
 #
-# 现在四个工具的产物统一进 `stock-value-invest-tool/output/<工具名>/`（见 output/README.md）。
+# 现在四个工具的产物统一进 `stock_value_invest_tool/output/<工具名>/`（见 output/README.md）。
 # 这里只给到 `output/quality-screen`，**不带批次日期**——批次要按输入 CSV 的日期
 # 分目录，而 `config.py` 在 import 时不知道这次跑的是哪份 CSV。
 # `stock_report.py` 的 `_out_dir_for()` 拿到 CSV 后补上日期那一层。

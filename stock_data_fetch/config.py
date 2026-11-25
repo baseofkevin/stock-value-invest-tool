@@ -177,10 +177,10 @@ PKG = Path(__file__).resolve().parent
 报错还发生在很后面）。"""
 
 HUB_ROOT = PKG.parent
-"""项目根（`stock-value-invest-tool/`）。
+"""项目根（`stock_value_invest_tool/`）。
 
 **从包的物理位置推导，不写死 `~/MyData/xxx`**：2026-11-15 项目从
-`stock-kline-screen-tool` 改名成 `stock-value-invest-tool`，旧写法让两处路径当场失效，
+`stock-kline-screen-tool` 改名成 `stock_value_invest_tool`，旧写法让两处路径当场失效，
 改了名就跑不起来。推导出来的路径会跟着目录走，改名/换机器/软链都不受影响。
 """
 

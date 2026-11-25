@@ -7,7 +7,7 @@
 
 跑法（三个都能单独跑，也都能一起跑）：
 
-    cd /home/kevin/MyData/stock-value-invest-tool/stock_data_fetch
+    cd /home/kevin/MyData/stock_value_invest_tool/stock_data_fetch
     python3 -m stock_data_fetch.tests.test_gates
     python3 -m stock_data_fetch.tests.test_coverage
     python3 -m stock_data_fetch.tests.test_fetch

@@ -52,7 +52,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
-PROJECT = ROOT.parent                       # stock-value-invest-tool/
+PROJECT = ROOT.parent                       # stock_value_invest_tool/
 
 if str(PROJECT) not in sys.path:
     sys.path.insert(0, str(PROJECT))
@@ -66,7 +66,7 @@ except ImportError as exc:                  # pragma: no cover
     raise SystemExit(
         f"找不到共享数据层 stock_data_fetch（找的是 {PROJECT}）。\n"
         f"原版 quality-screen 自带取数通道，本版改成依赖共享库；\n"
-        f"请确认 stock-value-invest-tool 与本目录同级。原始错误：{exc}") from exc
+        f"请确认 stock_value_invest_tool 与本目录同级。原始错误：{exc}") from exc
 
 
 class DataError(RuntimeError):

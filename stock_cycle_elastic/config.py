@@ -20,14 +20,14 @@ import os
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
-#: `stock-value-invest-tool/`。共享数据层与统一 output/ 都在这一层。
+#: `stock_value_invest_tool/`。共享数据层与统一 output/ 都在这一层。
 HUB_ROOT = os.path.dirname(PROJECT_ROOT)
 
 #: 默认产物目录。
 #:
 #: 原版是 `PROJECT_ROOT/html-report`，于是每次跑都在源码目录里撒一堆 HTML，
 #: 跑几次之后分不清哪份是新的。现在四个工具统一落到
-#: `stock-value-invest-tool/output/<工具名>/`（见 output/README.md）。
+#: `stock_value_invest_tool/output/<工具名>/`（见 output/README.md）。
 #:
 #: 与 quality-screen 一样，这里**只给到 `output/cycle-elastic`**，不带批次日期——
 #: 批次要按输入 CSV 的日期分目录，而 config 在 import 时不知道这次跑的是哪份 CSV。

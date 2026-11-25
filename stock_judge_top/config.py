@@ -16,5 +16,5 @@ STOCKHUB_DB       共享库路径（透传给 hub.preflight，hub 自己解析�
 """
 import os
 
-# 项目根 = stock-value-invest-tool/（本包的上一级）
+# 项目根 = stock_value_invest_tool/（本包的上一级）
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

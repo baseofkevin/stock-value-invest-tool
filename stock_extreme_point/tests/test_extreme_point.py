@@ -1,6 +1,6 @@
 """`stock_extreme_point` 的离线测试：抓取解析 / 口径 / 两个库的落库 / CLI。
 
-    cd /home/kevin/MyData/stock-value-invest-tool && \
+    cd /home/kevin/MyData/stock_value_invest_tool && \
     /home/kevin/.workbuddy/binaries/python/versions/3.13.12/bin/python3 \
         -m stock_extreme_point.tests.test_extreme_point
 

@@ -143,7 +143,7 @@ CLI 接口不变；`--refresh` 现在透传为 hub 的 `force`（清重试标记
 
 ## 3. 测试
 
-    cd /home/kevin/MyData/stock-value-invest-tool && \
+    cd /home/kevin/MyData/stock_value_invest_tool && \
     STOCKHUB_TMP=$PWD/.testtmp python3 -m stock_judge_top.tests
 
 **9 个文件、合计 134 项**（2026-11-23 实跑）。全部离线。

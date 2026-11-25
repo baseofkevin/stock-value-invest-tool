@@ -2,7 +2,7 @@
 
 跑法：
 
-    cd /home/kevin/MyData/stock-value-invest-tool
+    cd /home/kevin/MyData/stock_value_invest_tool
     python3 -m stock_data_fetch.tests.test_tencent
 
 这组用例盯的是三件"错了不会报错、只会悄悄错"的事：

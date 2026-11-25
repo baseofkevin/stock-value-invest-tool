@@ -53,7 +53,7 @@ VER = "2026-11-23"
 
 ROOT = Path(__file__).resolve().parent.parent
 
-TITLE = "stock-value-invest-tool · 数据流转与筛选条件"
+TITLE = "stock_value_invest_tool · 数据流转与筛选条件"
 LEAD = ("共享数据层按需取数 → 四个裁决工具各自定性 → 结论只进 results.db → 看板读库；"
         "两个旁路（全市场快照 / A股大势）各抓各的、各写各的表，不参与选股结论")
 FOOT_L = "说明：只画「谁把什么写到哪」，不含全部参数与例外；阈值以各包 config.py 为准。"

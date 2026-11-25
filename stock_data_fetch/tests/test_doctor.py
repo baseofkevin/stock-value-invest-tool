@@ -2,7 +2,7 @@
 
 跑法：
 
-    cd /home/kevin/MyData/stock-value-invest-tool
+    cd /home/kevin/MyData/stock_value_invest_tool
     python3 -m stock_data_fetch.tests.test_doctor
 
 覆盖两类事：
@@ -25,7 +25,7 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve()
-PROJECT = HERE.parent.parent.parent        # stock-value-invest-tool/（包的父目录）
+PROJECT = HERE.parent.parent.parent        # stock_value_invest_tool/（包的父目录）
 sys.path.insert(0, str(PROJECT))
 
 from stock_data_fetch import config, db, doctor                # noqa: E402

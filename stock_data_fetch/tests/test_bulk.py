@@ -17,7 +17,7 @@
 
 跑法：
 
-    cd /home/kevin/MyData/stock-value-invest-tool && \
+    cd /home/kevin/MyData/stock_value_invest_tool && \
     STOCKHUB_TMP=/home/kevin/DeepSeekHarness/.review-tmp \
     /home/kevin/.workbuddy/binaries/python/versions/3.13.12/bin/python3 \
         -m stock_data_fetch.tests.test_bulk

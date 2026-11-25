@@ -1,4 +1,4 @@
-# stock-value-invest-tool
+# stock_value_invest_tool
 
 个人价值投资量化工具箱：**每周五收盘后跑一遍选股 → 周期 → 质量 → 顶部 → 大势**，
 买入后按需查顶部。所有结论只进 `results.db` 一个文件，用 `./run.py web` 打开看板读。
@@ -72,7 +72,7 @@
 ## 4. 快速开始
 
 ```bash
-cd /home/kevin/MyData/stock-value-invest-tool
+cd /home/kevin/MyData/stock_value_invest_tool
 
 ./run.py                 # 裸跑只打印帮助，什么都不跑（全流程三十多分钟，防误触）
 ./run.py all             # 周五盘后全流程：日历 → 选股 → 周期 → 质量 → 顶部 → 大势

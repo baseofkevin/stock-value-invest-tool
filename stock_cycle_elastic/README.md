@@ -416,7 +416,7 @@ python3 cycle_report.py --refresh-names
 分层思路（取数 / 计算 / 渲染 / 编排分离），**取数层已换成共享库**：
 
 ```
-stock-value-invest-tool/
+stock_value_invest_tool/
 ├── stock_data_fetch/        共享数据层（四个工具共用，见其 README）
 ├── results.db               结论（不入库，四个工具共写）
 └── stock_cycle_elastic/

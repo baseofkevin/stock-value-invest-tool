@@ -361,7 +361,7 @@ fp 一旦表达不出"这是哪一份"，`hit()` 就会拿 A 的覆盖去放行 
 
 **2026-11-17 取消了"兜底那份 4 年日历"**。原来 `DEFAULT_CALENDAR` 指向
 `~/MyData/stock-kline-screen-tool/database/trading_calendar.json`——那个仓库 11-15
-改名成 `stock-value-invest-tool` 之后目录就不存在了。日常运行看不出问题
+改名成 `stock_value_invest_tool` 之后目录就不存在了。日常运行看不出问题
 （`Config.from_env()` 走 `resolve_calendar()`，本来就优先用项目内这份），但任何
 **直接构造 `Config()`** 的路径——首当其冲是六个测试文件——都会在 `TradingCalendar.load()`
 抛 `HubNotReady`，于是 `python3 -m stock_data_fetch.tests` 整体报错。
@@ -376,7 +376,7 @@ HubNotReady: 交易日历不存在：<绝对路径>。请确认 kline-screen 项
 
 **不是悄悄退回 4 年深度**——4 年会让估值必然 `InsufficientDepth`，而错误信息看起来像数据缺失
 （§6.6 那个坑就是这么来的）。注意这句文案里还带着**已改名的旧项目名**（`kline-screen`，
-现名 `stock-value-invest-tool`），看到时不用怀疑，指的就是本仓库的 `state/` 目录。
+现名 `stock_value_invest_tool`），看到时不用怀疑，指的就是本仓库的 `state/` 目录。
 
 生成后与旧日历对过账：**旧有新无 = 0**（4 年那份完全被包含），新有旧无 = 1951（历史部分）。
 `--no-merge` 会跳过并集、直接用新抓的覆盖——除非你确认要变短，否则别用。
@@ -1337,7 +1337,7 @@ python3 -m stock_data_fetch.repair dividend --symbols sh601318 --apply   # 真�
 | `test_westock` | **213** | 七个域的适配器与写库 / 分红聚合 / 估值深度 / 盘中闸 / 组级重试（含 4 项联网用例） |
 
 ```bash
-cd ~/MyData/stock-value-invest-tool
+cd ~/MyData/stock_value_invest_tool
 python3 -m stock_data_fetch.tests                 # 一次跑全 13 个文件（911 项），任一失败返回非 0
 python3 -m stock_data_fetch.tests.test_results    # 单跑某一个文件也行
 STOCKHUB_LIVE=1 python3 -m stock_data_fetch.tests # 连联网用例一起跑（921 项）
@@ -1495,7 +1495,7 @@ STOCKHUB_LIVE=1 python3 -m stock_data_fetch.tests.test_westock   # 只跑 westoc
 
 | 变量 | 作用 |
 |---|---|
-| `STOCKHUB_DB` | 数据库路径（默认 `~/MyData/stock-value-invest-tool/shared.db`） |
+| `STOCKHUB_DB` | 数据库路径（默认 `~/MyData/stock_value_invest_tool/shared.db`） |
 | `STOCKHUB_STATE` | 运行态目录（flock 锁、节流状态） |
 | `STOCKHUB_CALENDAR` | 交易日历 json（不设则走 `resolve_calendar(state_dir)`，优先项目内 `state/trading_calendar.json`） |
 | `STOCKHUB_SCHEMA` | DDL 路径 |
@@ -1536,14 +1536,14 @@ STOCKHUB_LIVE=1 python3 -m stock_data_fetch.tests.test_westock   # 只跑 westoc
 
 ```bash
 # 跑全部测试（13 个文件 / 909 项，一次跑完；任一失败返回非 0）
-cd ~/MyData/stock-value-invest-tool && python3 -m stock_data_fetch.tests
+cd ~/MyData/stock_value_invest_tool && python3 -m stock_data_fetch.tests
 
 # 只跑某一组
 python3 -m stock_data_fetch.tests.test_factor
 python3 -m stock_data_fetch.tests.test_results
 
 # 建库（一般不用手动，preflight 会建）
-sqlite3 ~/MyData/stock-value-invest-tool/shared.db < stock_data_fetch/schema.sql
+sqlite3 ~/MyData/stock_value_invest_tool/shared.db < stock_data_fetch/schema.sql
 
 # 生成/刷新交易日历（联网，收盘后跑；默认 12 年，自动选源）
 python3 -m stock_data_fetch.build_calendar
@@ -1579,7 +1579,7 @@ python3 -m stock_data_fetch.annotation set sh600519 --moat-type 独家资源 \
         --evidence "赤水河核心产区 + 5 年基酒周期不可压缩" --verified 2026-11-16
 
 # 看一眼库里有什么
-sqlite3 ~/MyData/stock-value-invest-tool/shared.db \
+sqlite3 ~/MyData/stock_value_invest_tool/shared.db \
   "SELECT domain, COUNT(*), MIN(end_date), MAX(end_date) FROM coverage GROUP BY domain"
 ```
 
@@ -1590,7 +1590,7 @@ sqlite3 ~/MyData/stock-value-invest-tool/shared.db \
 2026-11-14 融合完成后，六份原件已从项目根目录移走，封存为：
 
 ```
-stock-value-invest-tool/archive/设计文档-20261114.tar.gz     （388KB → 158KB）
+stock_value_invest_tool/archive/设计文档-20261114.tar.gz     （388KB → 158KB）
 ```
 
 **为什么只是封存而不是彻底删掉**：这份 README 装不下"当时的实测原始输出"与"被推翻的方案"，
@@ -1608,5 +1608,5 @@ stock-value-invest-tool/archive/设计文档-20261114.tar.gz     （388KB → 15
 
 ```bash
 # 需要时解包到临时目录，不要在项目根直接解开（会把根目录又弄乱）
-mkdir -p /tmp/docs && tar xzf ~/MyData/stock-value-invest-tool/archive/设计文档-20261114.tar.gz -C /tmp/docs
+mkdir -p /tmp/docs && tar xzf ~/MyData/stock_value_invest_tool/archive/设计文档-20261114.tar.gz -C /tmp/docs
 ```

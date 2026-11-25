@@ -194,7 +194,7 @@ class TestLowHighOrdering(unittest.TestCase):
 class TestPaths(unittest.TestCase):
 
     def test_default_out_dir_points_to_shared_output(self):
-        """默认产物落 `stock-value-invest-tool/output/cycle-elastic`。
+        """默认产物落 `stock_value_invest_tool/output/cycle-elastic`。
 
         原断言是"落在项目内 html-report/"。改它不是迁就新代码——产物进源码目录
         本身就是问题（跑几次就分不清哪份最新）。现在四个工具统一进

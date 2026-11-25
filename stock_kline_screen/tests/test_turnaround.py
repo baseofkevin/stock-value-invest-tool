@@ -1,6 +1,6 @@
 """业绩转变标注测试：毛利率环比改善。
 
-跑法：cd ~/MyData/stock-value-invest-tool && python3 -m stock_kline_screen.tests.test_turnaround
+跑法：cd ~/MyData/stock_value_invest_tool && python3 -m stock_kline_screen.tests.test_turnaround
 
 数据形状是 hub `finance` 行（一期一行、单季列直接给）。三条口径变化
 （本地算毛利率 / 无披露日过滤 / is_financial 判金融）各有对应用例。

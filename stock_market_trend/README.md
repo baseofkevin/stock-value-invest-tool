@@ -482,7 +482,7 @@ market_macro(series, date, value, extra, src, updated_at)
 ## 测试
 
 ```bash
-cd /home/kevin/MyData/stock-value-invest-tool
+cd /home/kevin/MyData/stock_value_invest_tool
 STOCKHUB_TMP=$PWD/.testtmp python3 -m unittest tests.test_stock_market_trend -v
 ```
 

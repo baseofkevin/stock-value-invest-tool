@@ -297,7 +297,7 @@ if 收盘[d*-1] > MA20(d*-1): 剔除          # "非真上穿（连续站上 MA2
 ## 4. 参数
 
 ```bash
-cd ~/MyData/stock-value-invest-tool
+cd ~/MyData/stock_value_invest_tool
 python3 -m stock_kline_screen                      # 默认基准日 = 最近已收盘交易日，K=5
 python3 -m stock_kline_screen --date 2026-11-06
 python3 -m stock_kline_screen --n 2                # 每 3 个交易日
@@ -314,7 +314,7 @@ python3 -m stock_kline_screen --turn-pct 0.4       # 只留池内换手最低 40
 | `--turn-min` | `5` | 名单少于该数时自动放宽一档 |
 | `--turn-max` | `30` | 名单多于该数时自动收紧一档 |
 | `--ma60-gap` | `0.0` | `close/MA60` 上限，0 = 关闭 |
-| `--db` | `$STOCKHUB_DB` 或 `~/MyData/stock-value-invest-tool/shared.db` | 透传给 `preflight` |
+| `--db` | `$STOCKHUB_DB` 或 `~/MyData/stock_value_invest_tool/shared.db` | 透传给 `preflight` |
 | `--quiet` | 关 | 只打一行 `粗筛池 N 只 → 入选 M 只`，不打完整报表（`run.py all` 会加，单跑别加） |
 
 参数校验（`_prepare`，不合法直接 `CliError`）：`--n ≥ 0`、`--chg-lo ≤ --chg-hi`、
@@ -459,7 +459,7 @@ hard      = {其余：PartialData / ThrottleTimeout / 源不可达}
 ## 8. 测试
 
 ```bash
-cd ~/MyData/stock-value-invest-tool
+cd ~/MyData/stock_value_invest_tool
 python3 -m stock_kline_screen.tests          # 5 个文件 103 项（2026-11-23 实跑）
 ```
 

@@ -2,7 +2,7 @@
 
 跑法：
 
-    cd /home/kevin/MyData/stock-value-invest-tool
+    cd /home/kevin/MyData/stock_value_invest_tool
     python3 -m stock_data_fetch.tests.test_probe
 
 为什么必须离线：probe 天生联网，而"联网才能跑"的测试没法进 `tests`——它会在
@@ -30,7 +30,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve()
-PROJECT = HERE.parent.parent.parent        # stock-value-invest-tool/（包的父目录）
+PROJECT = HERE.parent.parent.parent        # stock_value_invest_tool/（包的父目录）
 sys.path.insert(0, str(PROJECT))
 
 from stock_data_fetch import db, probe                         # noqa: E402

@@ -205,7 +205,7 @@ cl_prev     去年同季的合同负债（同比，不是环比）
 ## 测试
 
 ```bash
-cd /home/kevin/MyData/stock-value-invest-tool
+cd /home/kevin/MyData/stock_value_invest_tool
 python3 -m unittest tests.test_review_gates -v     # 硬门槛
 python3 -m unittest tests.test_web -v              # 页面 + 老的赔率分规则
 

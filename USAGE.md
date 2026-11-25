@@ -99,7 +99,7 @@ run(tool='quality', target_date='2026-11-06', kind='batch')   ← 一条就够
 ### A. 每周五收盘后，正常跑一遍
 
 ```bash
-cd /home/kevin/MyData/stock-value-invest-tool
+cd /home/kevin/MyData/stock_value_invest_tool
 ./run.py all
 ```
 
@@ -270,7 +270,7 @@ python3 -c "import json;d=json.load(open('state/trading_calendar.json'));print(d
 
 ```bash
 # crontab：周五 15:20
-20 15 * * 5 cd /home/kevin/MyData/stock-value-invest-tool && ./run.py all >> logs/cron.log 2>&1
+20 15 * * 5 cd /home/kevin/MyData/stock_value_invest_tool && ./run.py all >> logs/cron.log 2>&1
 ```
 
 重定向到文件时**不画进度条**，每步一行结果，日志照样完整。
@@ -573,7 +573,7 @@ python3 scripts/gen_dataflow.py --check    # 只比对：磁盘那份是不是�
 ## 6. 一页速记
 
 ```bash
-cd /home/kevin/MyData/stock-value-invest-tool
+cd /home/kevin/MyData/stock_value_invest_tool
 
 ./run.py                                   # 帮助（什么都不跑）
 ./run.py all                               # 周五盘后全流程（不含看板）

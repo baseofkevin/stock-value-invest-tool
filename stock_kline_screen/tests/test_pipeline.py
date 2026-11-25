@@ -2,7 +2,7 @@
 
 跑法：
 
-    cd /home/kevin/MyData/stock-value-invest-tool
+    cd /home/kevin/MyData/stock_value_invest_tool
     python3 -m stock_kline_screen.tests.test_pipeline
 
 `test_rules` / `test_turnover` / `test_turnaround` 各自测一层；这个文件测的是

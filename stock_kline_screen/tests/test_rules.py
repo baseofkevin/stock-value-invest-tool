@@ -2,7 +2,7 @@
 
 跑法：
 
-    cd /home/kevin/MyData/stock-value-invest-tool && \
+    cd /home/kevin/MyData/stock_value_invest_tool && \
     python3 -m stock_kline_screen.tests.test_rules
 
 全部离线：bar 是手工构造的 dict（hub `kline` 行形状），横截面行是
@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve()
-PROJECT = HERE.parent.parent.parent          # stock-value-invest-tool/
+PROJECT = HERE.parent.parent.parent          # stock_value_invest_tool/
 sys.path.insert(0, str(PROJECT))
 
 from stock_kline_screen.params import C2_TOL, C3_RATIO, MIN_HISTORY  # noqa: E402
