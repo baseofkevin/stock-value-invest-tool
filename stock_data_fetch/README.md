@@ -361,7 +361,8 @@ fp 一旦表达不出"这是哪一份"，`hit()` 就会拿 A 的覆盖去放行 
 
 **2026-11-17 取消了"兜底那份 4 年日历"**。原来 `DEFAULT_CALENDAR` 指向
 `~/MyData/stock-kline-screen-tool/database/trading_calendar.json`——那个仓库 11-15
-改名成 `stock_value_invest_tool` 之后目录就不存在了。日常运行看不出问题
+改名成 `stock-value-invest-tool`（2026-11-25 再改成 `stock_value_invest_tool`）之后，
+目录就不存在了。日常运行看不出问题
 （`Config.from_env()` 走 `resolve_calendar()`，本来就优先用项目内这份），但任何
 **直接构造 `Config()`** 的路径——首当其冲是六个测试文件——都会在 `TradingCalendar.load()`
 抛 `HubNotReady`，于是 `python3 -m stock_data_fetch.tests` 整体报错。
