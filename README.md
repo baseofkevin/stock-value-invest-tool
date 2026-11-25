@@ -106,7 +106,7 @@ cd /home/kevin/MyData/stock_value_invest_tool
 | 文件 | 讲什么 |
 |---|---|
 | `USAGE.md` | **按情景查命令**：我现在该敲哪条、`--date` 到底管什么、补跑怎么补、踩坑对照表 |
-| `info.md` | **这套工具是什么**：七个模块、一条链、两个库、看板每一页看什么、综合评估怎么排 |
+| `INFORMATION.md` | **这套工具是什么**：七个模块、一条链、两个库、看板每一页看什么、综合评估怎么排 |
 | `stock_data_fetch/README.md` | 共享数据层的完整设计：四层模型、13 张表、命中判定、节流与源路由、六道闸、运维四件套 |
 | `stock_kline_screen/README.md` | 选股：七条规则、十个子步骤、口径差异、失败语义 |
 | `stock_cycle_elastic/README.md` | 周期弹性：三个判断三个指标、11 个阈值、为什么合同负债只做限定语 |
