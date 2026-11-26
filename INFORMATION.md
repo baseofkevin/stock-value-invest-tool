@@ -585,7 +585,7 @@ python3 -m stock_data_fetch.results                # 各工具最近一次运行
 | `stock_judge_top/README.md` | 顶部判断：四因子 + 四条旁证、raw 价格与换手折算 |
 | `stock_extreme_point/README.md` | 冷热极点：表结构、涨跌停与中位数口径、两库同写的约定 |
 | `stock_market_trend/README.md` | A股大势：三路阈值、量能五档、周中半根 bar 的处理 |
-| `stock_review_assess/README.md`<br>`stock_review_assess/综合评估-硬门槛说明-20261120.md` | 综合评估：三条门槛的三态判定、赔率分、分档与排序 |
+| `stock_review_assess/README.md` | 综合评估：三条门槛的判定与三态、页面呈现、赔率分、分档与排序、待拍板与待办 |
 | `web/README.md` | 看板：13 条路由、9 项导航、查询参数、只读约定 |
 | `notes/` | 投资笔记与读书笔记（《股市真规则》），不是代码文档 |
 
