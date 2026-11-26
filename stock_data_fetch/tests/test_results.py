@@ -288,6 +288,120 @@ class TopRowMappingTest(unittest.TestCase):
         self.assertIsNone(got["cycle_state"])
 
 
+class DedupeTest(unittest.TestCase):
+    """同一批重跑只留最后一次。
+
+    这里的每一条断言都对应一个会"静默丢数据"的坑：
+    1. 只看预览就删 → 先把 `apply=False` 的**不写库**钉死；
+    2. 按日期去重把单只运行也扫掉 → 单只同日两只不同票是两份结果；
+    3. `foreign_keys` 没开时 `cascade` 静默失效 → 台账没了、结果行还在；
+    4. 合成之后"跑过几次"消失 → 次数要落到保留那条的 `note`。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / "results.db"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _conn(self):
+        return results.connect(self.db)
+
+    def _runs(self, conn, tool=None):
+        sql = "select id, tool, target_date, kind, note from run"
+        args: tuple = ()
+        if tool:
+            sql += " where tool=?"
+            args = (tool,)
+        return conn.execute(sql + " order by id", args).fetchall()
+
+    def test_preview_does_not_touch_anything(self):
+        for name in ("第一次", "第二次", "第三次"):
+            results.save("select", [{"symbol": "sh600519", "name": name}],
+                         "2026-11-13", db=self.db)
+        conn = self._conn()
+        try:
+            r = results.dedupe(conn, apply=False)
+            self.assertEqual(r["drop_runs"], 2)
+            self.assertFalse(r["applied"])
+            self.assertEqual(len(self._runs(conn)), 3)          # 一行没删
+            self.assertEqual(                                    # 结果行也在
+                conn.execute("select count(*) from select_result").fetchone()[0], 3)
+        finally:
+            conn.close()
+
+    def test_apply_keeps_only_the_last_run(self):
+        for name in ("第一次", "第二次", "第三次"):
+            results.save("select", [{"symbol": "sh600519", "name": name}],
+                         "2026-11-13", db=self.db)
+        conn = self._conn()
+        try:
+            results.dedupe(conn, apply=True)
+            left = self._runs(conn)
+            self.assertEqual(len(left), 1)
+            self.assertEqual(left[0][4].count("重跑 3 次"), 1)   # 次数落在 note
+            got = conn.execute("select name from select_result").fetchall()
+            self.assertEqual([g[0] for g in got], ["第三次"])     # 留的是最后一次
+        finally:
+            conn.close()
+
+    def test_single_runs_are_never_merged(self):
+        """同一天两只不同票的单只运行，是两份不同的结果。"""
+        results.save("cycle", [{"symbol": "sh600019"}], "2026-11-13",
+                     kind="single", db=self.db)
+        results.save("cycle", [{"symbol": "sz000001"}], "2026-11-13",
+                     kind="single", db=self.db)
+        results.save("cycle", [{"symbol": "sh600019"}], "2026-11-13", db=self.db)
+        results.save("cycle", [{"symbol": "sh600019"}], "2026-11-13", db=self.db)
+        conn = self._conn()
+        try:
+            r = results.dedupe(conn, apply=True)
+            self.assertEqual(r["drop_runs"], 1)                  # 只合并那两次批量
+            kinds = sorted(x[3] for x in self._runs(conn))
+            self.assertEqual(kinds, ["batch", "single", "single"])
+            syms = sorted(x[0] for x in conn.execute("select symbol from cycle_result"))
+            self.assertEqual(syms, ["sh600019", "sh600019", "sz000001"])
+        finally:
+            conn.close()
+
+    def test_different_dates_are_untouched(self):
+        for day in ("2026-11-06", "2026-11-13", "2026-11-20"):
+            results.save("top", [{"symbol": "sh600519"}], day, db=self.db)
+        conn = self._conn()
+        try:
+            self.assertEqual(results.dedupe(conn, apply=True)["drop_runs"], 0)
+            self.assertEqual(len(self._runs(conn)), 3)
+        finally:
+            conn.close()
+
+    def test_cascade_leaves_no_orphan_rows(self):
+        for _ in range(3):
+            results.save("quality", [{"symbol": "sh600519"},
+                                     {"symbol": "sz000001"}], "2026-11-15", db=self.db)
+        conn = self._conn()
+        try:
+            results.dedupe(conn, apply=True)
+            orphans = conn.execute(
+                "select count(*) from quality_result where run_id not in "
+                "(select id from run)").fetchone()[0]
+            self.assertEqual(orphans, 0)
+            self.assertEqual(
+                conn.execute("select count(*) from quality_result").fetchone()[0], 2)
+        finally:
+            conn.close()
+
+    def test_is_idempotent(self):
+        for _ in range(2):
+            results.save("select", [{"symbol": "sh600519"}], "2026-11-13", db=self.db)
+        conn = self._conn()
+        try:
+            self.assertEqual(results.dedupe(conn, apply=True)["drop_runs"], 1)
+            self.assertEqual(results.dedupe(conn, apply=True)["drop_runs"], 0)
+        finally:
+            conn.close()
+
+
 def main() -> int:
     """聚合器（`python3 -m stock_data_fetch.tests`）要的入口，返回 0/1。
 

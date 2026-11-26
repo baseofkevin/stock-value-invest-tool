@@ -153,7 +153,7 @@ hub.ensure("kline", "sh600519", need)    ← 唯一会打上游的入口
 | `valuation` | valuation | 一股一周 | 520 | **R** | **不删**（体积占比 < 5%，见 §3.5） |
 | `quote` | quote | 一股一行 | 1 | **S** | 覆盖 |
 | `snapshot` | mainop/consensus/rating/gbalance/gcashflow | 一股一域 | 5 | **S** | 覆盖 |
-| `scan` | scan | 一交易日一市场 | —（一日约 5,100 行） | **S** | 滚动 30 天 |
+| `scan` | scan | 一交易日一市场 | —（一日约 5,100 行） | **S** | 滚动 120 天 |
 | `annotation` | annotation | 一股一 kind | 1 | W（人工） | 不删 |
 | `coverage` | — | 一域一股一口径 | ~6（`scan` 例外：一天一条） | 派生 | 跟股票走 |
 | `watermark` | — | 一域一范围 | — | 派生 | — |
@@ -197,14 +197,19 @@ kline_screen 要 71）。留 400 意味着某只票中间停牌 100 天，最近
 
 | 事 | 做法 | 不这么做会怎样 |
 |---|---|---|
-| 只留 30 天 | `SCAN_RETENTION_DAYS=30`，`hub.prune_scan()` | 约 5,000 行/天、约 0.3 MB/天 → 250 天约 **75 MB**。它是本层唯一会随时间失控的表，所以必须有上限 |
+| 只留 120 天 | `SCAN_RETENTION_DAYS=120`，`hub.prune_scan()` | 约 5,000 行/天、约 0.45 MB/天 → 120 天稳定在 **50–57 MB**。它是本层唯一会随时间失控的表，所以必须有上限 |
 | `fp` 带日期 | `date=2026-11-13` | 共用一条 fp → 取完周五再要周四，`hit()` 判"已覆盖"然后查出 0 行 |
 | 一次一条表达式 | `SCAN_EXPR = intersect([ClosePrice > 0])` | westock `tool_filter` 有约 2 秒服务端硬超时，超时概率是"条件数 × 返回行数"的乘积——想一次拿全市场，表达式就只能有一条（实测表在 `config.SCAN_EXPR` 的注释里） |
 
-> **「30 天」有个不一致要留意**：常量是 `SCAN_RETENTION_DAYS=30`，但 `hub.prune_scan()`
-> 会**优先读 `meta['scan_retention_days']`**，而 `schema.sql:311` 建库时把种子写成了
-> **`120`**。所以**现在的库实际保留 120 天**（2026-11-23 查到的 meta 值就是 120），
-> 30 天只在 meta 缺失时才生效。两者体积差 4 倍，想收紧就改 meta 那一行。
+> **「120 天」曾经有两个值**：常量 `SCAN_RETENTION_DAYS` 原先是 `30`，而 `schema.sql:311`
+> 播种进 `meta['scan_retention_days']` 的种子是 `120`，于是 `maintain --apply` 按 30 删、
+> `hub.prune_scan()` 按 `meta` 的 120 删——同一套代码两条路径给出不同结果。
+> **2026-11-26 统一到 120**：常量、`meta` 种子、文档三处一致，`test_scan` 的断言也是 120。
+>
+> 为什么不是反过来取 30：工具本身只用最近 K+1 天（5 个交易日），30 天确实够跑；
+> 但横截面是**当期快照**，回头补跑四个月内的批次时，那天的 `scan` 删了就得联网重取
+> （`tool_filter` 支持历史日期，但有 2 秒硬超时、还占配额）。留 120 天买的就是
+> "四个月内补跑不用联网"，代价 40 MB 左右，对 200 MB 级的库不值一提。
 
 **`annotation`** —— 人工标注（目前只有「垄断性」一种 `kind`）。**入库而不是 YAML 文件**：
 原来放在 `stock_quality_screen/annotations/moat_annotations.yaml`，跟着代码目录走
@@ -293,7 +298,7 @@ fp 一旦表达不出"这是哪一份"，`hit()` 就会拿 A 的覆盖去放行 
 | 表 | 策略 | 谁触发 |
 |---|---|---|
 | `kline` | 保留最近 **400 个交易日**（`KLINE_KEEP_BARS`），**按全市场统一日期切** | `hub.prune_kline()` / `maintain --apply` |
-| `scan` | 保留最近 **30** 天（`SCAN_RETENTION_DAYS`，实际常被 `meta['scan_retention_days']`=120 覆盖） | `hub.prune_scan()` / `maintain --apply` |
+| `scan` | 保留最近 **120** 天（`SCAN_RETENTION_DAYS`，与 `meta['scan_retention_days']` 一致） | `hub.prune_scan()` / `maintain --apply` |
 | `finance` / `dividend` / `valuation` / `annotation` | **不删** | — |
 | `quote` / `snapshot` / `stock` | 覆盖，不增长 | — |
 
@@ -1117,7 +1122,7 @@ hub = preflight()
 | `doctor` | `--db` / `--calendar` / `--json` / `--quiet`（只打问题，不打概览） |
 | `probe` | 五个探针开关 `--calendar --qfq --dividend --valuation --suspension`（`probe.py:461` 的 `PROBES` 元组，全不传 = 全跑）/ `--symbols a,b`（逗号分隔，默认取库里 K 线最全的 3 只）/ `--db` / `--calendar-file` / `--json` |
 | `repair` | 位置参数只能传 `dividend`（`choices=("dividend",)`）/ `--symbols` / `--years`（默认 `DEFAULT_YEARS`）/ `--db` / `--apply` |
-| `maintain` | `--apply` / `--json` / `--scan-days`（默认 `SCAN_RETENTION_DAYS=30`）/ `--kline-bars`（默认 `KLINE_KEEP_BARS=400`） |
+| `maintain` | `--apply` / `--json` / `--scan-days`（默认 `SCAN_RETENTION_DAYS=120`）/ `--kline-bars`（默认 `KLINE_KEEP_BARS=400`） |
 
 > **`probe` 有 `--calendar` 和 `--calendar-file` 两个参数，语义完全不同**：
 > 前者是"只跑日历探针"的开关，后者才是日历文件路径。`probe.py` 的 `epilog` 专门写了这件事
@@ -1145,11 +1150,13 @@ hub = preflight()
 它**不删** `finance`/`valuation`/`snapshot`/`quote`，也不删 `finance.raw_json`——
 那 6.6 MB 是"解析器以后改好了能重算"的唯一来源，删了就得重拉全市场财报。
 
-> ⚠️ **`scan` 保留天数有两个值**：`config.SCAN_RETENTION_DAYS = 30`（`maintain` 和
-> `--scan-days` 的默认值都用它），而 `schema.sql:311` 播种进 `meta` 的
-> `scan_retention_days` 是 **`'120'`**（`schema.sql:209-210` 的注释也写"默认 120"）。
-> 这两个值互不影响——`maintain` 压根不读 `meta` 那条，所以**实际清理按 30 天执行**；
-> 但 `doctor` / 人肉按 `meta` 判断"该留多少"时会得到 120。以 `--scan-days` 为准。
+> ✅ **`scan` 保留天数现在只有一个值（2026-11-26 统一）**：`config.SCAN_RETENTION_DAYS = 120`，
+> `schema.sql:311` 播种进 `meta` 的 `scan_retention_days` 也是 `'120'`。两条清理路径口径一致：
+> `maintain --apply` 用常量（不读 `meta`）、`hub.prune_scan()` 优先读 `meta`、缺省回落到常量，
+> 结果都是 120 天。
+>
+> 统一之前是"常量 30 / 种子 120"，同一套代码两条路径删的量差 4 倍，文档里还得写一句
+> "以 `--scan-days` 为准"——那种"两处都对、结果不同"的状态比多占 40 MB 更值得清掉。
 
 ### `doctor`：只读体检（`mode=ro`，一条写语句都没有）
 
@@ -1325,7 +1332,7 @@ python3 -m stock_data_fetch.repair dividend --symbols sh601318 --apply   # 真�
 |---|---|---|
 | `test_coverage` | 117 | `need` / `hit` / 洞 / 退避 / `verdict` / `missing_segments` / 落库 |
 | `test_fetch` | 110 | 节流 / 路由 / `ensure` / 瞬断 / 降级（含 6 项联网用例） |
-| `test_scan` | 77 | 横截面适配器 / `totalStocks` 截断校验 / 保留 30 天 / `fp` 带日期 |
+| `test_scan` | 77 | 横截面适配器 / `totalStocks` 截断校验 / 保留 120 天 / `fp` 带日期 |
 | `test_gates` | 65 | 六道闸与边界 / 长日历（含深交所源）/ `Config` 确定性 / 闸 1 新语义 |
 | `test_tencent` | 64 | 无鉴权通道 / 元组顺序坑 / `amount` 缺失 / 逐点对账 |
 | `test_probe` | 59 | 五个探针 / 挑票 / 双口径 / 降级 / 退出码 |
@@ -1334,7 +1341,7 @@ python3 -m stock_data_fetch.repair dividend --symbols sh601318 --apply   # 真�
 | `test_factor` | 32 | 因子 / qfq / 幂等 / 缓存 |
 | `test_doctor` | 32 | 四条不变式 / 深度 / 短日历 WARN / 输出 |
 | `test_bulk` | 30 | `ensure_bulk` 的增量 / 整段 / 拆半 / 并批 / 退避语义 |
-| `test_results` | 22 | 结果库：符号归一 / 写失败不影响主流程 / payload 原样（`unittest` 风格，`main()` 已接进聚合） |
+| `test_results` | 28 | 结果库：符号归一 / 写失败不影响主流程 / payload 原样 / 同批去重（`unittest` 风格，`main()` 已接进聚合） |
 | `test_westock` | **213** | 七个域的适配器与写库 / 分红聚合 / 估值深度 / 盘中闸 / 组级重试（含 4 项联网用例） |
 
 ```bash
@@ -1446,7 +1453,7 @@ STOCKHUB_LIVE=1 python3 -m stock_data_fetch.tests.test_westock   # 只跑 westoc
 | 22 | 前复权口径？ | **等比**（除权参考价连乘）。两家上游都是等差，差异只在除权日之前，`probe` 用"双口径比对"消化这个差 |
 | 23 | 交易所/巨潮能当主源吗？ | **不能**。行情只有当日快照、财报是 PDF、没有 PE/PB。它们只在**交易日历**上是权威（`--source szse`），其余当人工核对的索引 |
 | 24 | 日历源顺序？ | `westock`（13 次）→ `szse`（145 次，权威）→ `eastmoney`（1 次，常被封）。三源都试过仍失败才报错 |
-| 25 | 横截面（`scan`）留多久？ | **30 天**（`SCAN_RETENTION_DAYS`）。四个工具的粗筛只看最近 K+1 天（K ≤ 5），120 天就是白白多占 57 MB |
+| 25 | 横截面（`scan`）留多久？ | **120 天**（`SCAN_RETENTION_DAYS`，与 `meta` 种子一致）。工具只用最近 K+1 天（≤5 天），但横截面是当期快照，留 120 天才能离线补跑四个月内的批次；多占约 40 MB，换掉"补跑必须联网" |
 | 26 | 人工标注放 YAML 还是入库？ | **入库**（`annotation` 表）。跟着代码目录走会丢、改一条要动文本、只有一家工具读得到。枚举 8 值，「无标注」是结论、「待核实」是待办 |
 
 ---
@@ -1559,7 +1566,7 @@ python3 -m stock_data_fetch.build_calendar --source szse     # 权威腿（深�
 python3 -m stock_data_fetch.doctor
 python3 -m stock_data_fetch.doctor --json --quiet
 
-# 库体积审计与清理：默认只审计，--apply 才删（scan 30 天 / kline 400 根 / VACUUM）
+# 库体积审计与清理：默认只审计，--apply 才删（scan 120 天 / kline 400 根 / VACUUM）
 python3 -m stock_data_fetch.maintain
 python3 -m stock_data_fetch.maintain --apply
 

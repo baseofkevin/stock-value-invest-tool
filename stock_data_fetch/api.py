@@ -560,7 +560,7 @@ def prune_scan(hub, keep_days: int | None = None,
     `scan` 是"按日、全市场"，不清理就是每年 +130 万行 / +130MB。
 
     保留期从 `meta['scan_retention_days']` 取，缺省用 `config.SCAN_RETENTION_DAYS`
-    （30 天）。`today` 用 `hub.target` 而不是 `date.today()`——补跑历史时
+    （120 天，两者现在同值）。`today` 用 `hub.target` 而不是 `date.today()`——补跑历史时
     "今天是哪天"是相对的，用真实今天会把补跑的窗口一起清掉。
 
     失败不抛：清理是运维动作，不该让一次选股因为删不掉旧行而失败。

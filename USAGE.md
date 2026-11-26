@@ -1,6 +1,6 @@
 # run.py 使用手册（按情景查）
 
-`README.md` 讲这套工具**是什么**；这份讲**我现在该敲哪条命令**。
+`INFORMATION.md` 讲这套工具**是什么**；这份讲**我现在该敲哪条命令**。
 
 一句话原则：
 
@@ -295,7 +295,17 @@ python3 -m stock_data_fetch.results  # 各工具最近一次运行的台账（�
 python3 -m stock_data_fetch.doctor   # 数据体检，退出码可当闸门
 ```
 
-`--prune` 要**特别小心**：
+同一批重跑留下的旧 run 可以合并——`--dedupe` **只删同一批的上一版**，不动其它批次：
+
+```bash
+python3 -m stock_data_fetch.results --dedupe                   # 预览：几次运行 / 多少行 / 多少 MB
+python3 -m stock_data_fetch.results --dedupe --apply --vacuum   # 执行并回收磁盘
+```
+
+它只处理 `kind='batch'`：单只运行里"同一天跑了两只不同的票"是两份结果，按日期去重会丢数据。
+删掉的次数会写进保留那条的 `note`（`同批重跑 N 次…`），"跑过几次"因此不会消失。
+
+`--prune` 则是另一回事，要**特别小心**：
 
 ```bash
 python3 -m stock_data_fetch.results --prune   # 每个工具只留最近 1 次运行

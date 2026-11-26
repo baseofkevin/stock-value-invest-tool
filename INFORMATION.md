@@ -1,25 +1,54 @@
 # stock_value_invest_tool
 
-个人股票研究工具箱：每周五收盘后跑一遍选股 + 质量 + 周期，买入后按需查顶部。
-四个工具的结论都写进 `results.db`，用 `./run.py web` 打开看板读。
+个人价值投资量化工具箱：**每周五收盘后跑一遍选股 → 周期 → 质量 → 顶部 → 大势**，
+买入后按需查顶部。四个工具的结论都写进 `results.db`，用 `./run.py web` 打开看板读。
+
+一句话原则：**选股是名单的源头**。周期弹性 / 质量初筛 / 顶部判断在批量模式下，
+都从 `results.db` 里读「基准日 = 那一天」的选股名单；那天没跑选股，三个下游就没有输入。
 
 **四个**功能模块共用一套本地数据层（`stock_data_fetch` + `shared.db`）——库里有的
 数据直接用，没有的才联网，拿到的写回库，下次（乃至其它三个模块）复用。
-另外两个包是**旁路**，都不 import 数据层（抓取请求少，用不上 hub / 路由 / 覆盖那一整套）：
-`stock_extreme_point` 抓全市场价格快照，`stock_market_trend` 算 A股大势（趋势/赔率/情绪）。
-后者的结论只作背景板，**不参与**四个工具的任何判断。
-第七个包 `stock_review_assess` 是**看板侧的规则模块**：不连库、不抓数、不落库，
-只把四个工具的结论并起来算赔率分，在 `/review` 页面现算。
+另外三个包在数据层之外：`stock_extreme_point` 抓全市场价格快照，`stock_market_trend`
+算 A股大势（趋势/赔率/情绪，结论只作背景板，**不参与**四个工具的任何判断），
+`stock_review_assess` 是看板侧的规则模块（不连库、不抓数、不落库，在 `/review` 现算）。
 
-| 模块 | 干什么 | 入口 |
-|---|---|---|
-| `stock_kline_screen` | 选股：5 日涨幅池 → 真上穿 MA20 + 放量 ≥1.5 倍 + 均线结构 → 非 ST / 非次新（财务与行业只标注） | `run.py select` |
-| `stock_cycle_elastic` | 周期弹性：是不是周期股 / 弹性强弱 / 周期位置 | `run.py cycle [--stock 代码]` |
-| `stock_quality_screen` | 质量初筛：质量分 Q + 估值分 V + 14 项风险检查 | `run.py quality [--stock 代码]` |
-| `stock_judge_top` | 顶部判断：四因子观察股票是否到顶部 | `run.py top <代码>` / `top --from-select` |
-| `stock_review_assess` | 综合评估：赔率分排序 + 「超级成长股标识」（只做标识，不改档位） | `run.py web` → `/review` |
-| `stock_extreme_point` | 冷热极点：全市场价格/估值快照，一天一份全市场（独立工具，不走共享数据层） | `run.py extreme` |
-| `stock_market_trend` | A股大势：沪深300 周线趋势 / ERP 赔率 / 破净+量能情绪（背景板，不参与选股结论） | `run.py trend` |
+| 模块 | 干什么 | 入口 | 结论落哪 |
+|---|---|---|---|
+| `stock_kline_screen` | 选股：5 日涨幅池 → 真上穿 MA20 + 放量 ≥1.5 倍 + 均线结构 → 非 ST / 非次新（财务与行业只标注，不裁决） | `run.py select` | `select_result` |
+| `stock_cycle_elastic` | 周期弹性：是不是周期股（毛利率 5 年 σ / CV）、弹性强弱（利润增速÷收入增速）、周期位置（产能周转率 10 年分位） | `run.py cycle [--stock 代码]` | `cycle_result` |
+| `stock_quality_screen` | 质量初筛：质量分 Q + 估值分 V + 14 项风险检查 + 机构预期 → 一句结论 | `run.py quality [--stock 代码]` | `quality_result` |
+| `stock_judge_top` | 顶部判断：动量 / 换手 / 业绩 / 量价 四因子，各自出结果、不打总分 | `run.py top <代码>` / `top --from-select` | `top_result` |
+| `stock_review_assess` | 综合评估：赔率分（0~15）排序 + 「超级成长股标识」（只做标识，不改档位） | `run.py web` → `/review` | 不落库，页面现算 |
+| `stock_extreme_point` | 冷热极点：某交易日全市场 5500+ 只的收盘价 / PE / PB / PS / 市值 + 当日摘要（独立工具，不走共享数据层） | `run.py extreme` | `shared.db.price`（原件）+ `results.db.price` / `price_stat`（副本） |
+| `stock_market_trend` | A股大势：沪深300 周线趋势 / ERP 赔率 / 破净+量能情绪（背景板，不参与选股结论） | `run.py trend` | `market_regime` |
+
+两个旁路包**不 import 数据层**，只用文件路径约定（同一个仓库根、同样的
+`STOCK_SHARED_DB` / `STOCK_RESULTS_DB` / `STOCKHUB_CALENDAR`）：
+
+- `stock_extreme_point`：全市场一天只有 6 个上游请求，不值得为它拖进 hub / router / coverage / throttle。
+- `stock_market_trend`：三路信号十来个请求，且它的结论只作背景板。
+
+`stock_review_assess` 与四个工具平级，但**不连库、不 import `web`**：数据由
+`web/db.py` 读好、以字典传进去，所以它可以单测。
+
+## 一条依赖链
+
+```
+        ┌──────────┐
+        │   选股    │  产出「名单」→ results.db / select_result
+        └────┬─────┘
+     ┌───────┼────────┐
+     ▼       ▼        ▼
+  周期弹性  质量初筛  顶部判断     ← 批量时都读上面那份名单
+```
+
+下游三个**不自己找票**。`./run.py quality --date 2026-11-06` 内部执行的是
+`stock_report.py --from-select 2026-11-06`，即「去库里取 11-06 那天的选股结果」。
+那天没有选股记录 → 直接退 **2**，提示先跑 `./run.py select --date X`，
+不会拿别的日期凑数。
+
+`stock_extreme_point` / `stock_market_trend` / `stock_review_assess` **不在链上**：
+前者看的是「某个交易日的全市场」，后两者的结论只做背景和排序参考。
 
 ## 每周五收盘后（15:05 之后）
 
@@ -193,10 +222,9 @@ python3 -m stock_data_fetch.build_calendar
 
 子进程参数可以透传：`./run.py quality --stock 600519 --force`。
 
-下游（cycle/quality/top）在批量模式下的名单来自 `results.db` 里那一天的选股结果，
-所以基准日必须和那天的选股一致；不给 `--date` 就按「今天（过了 15:05）」算，
-和 `stock_data_fetch` 内部的 `target_date()` 同一套规则。名单在库里对不上就直接退 2，
-不会拿别的日期凑数。
+下游（cycle/quality/top）在批量模式下的基准日必须和那天的选股一致；不给 `--date`
+就按「今天（过了 15:05）」算，和 `stock_data_fetch` 内部的 `target_date()` 同一套规则
+（名单从哪来、对不上会怎样，见上面「一条依赖链」）。
 
 调用的写法分两层，别混：
 
@@ -210,11 +238,11 @@ python3 -m stock_data_fetch.build_calendar
 
 1. **日历不更新 → 静默产出旧报告。** 目标日按「今天是交易日且过了 15:05」决定，
    而它先在日历里查今天；日历只到上周五时，会自动回落到上周五，文件名和目录名
-   都看不出来。所以 `run.py` 在工作日发现日历过期会先跑一次 `build_calendar`，
-   显式 `--date` 不在日历里则直接报错（不会猜"最近的交易日"）。
-2. **盘中不该出结论。** 15:05 之前跑会退到上一个交易日——拿半天的数据算
-   「收盘站上 MA20」本身就是错的。补**历史**日期（`--date` 早于今天）不受此限：
-   盘中可以联网补过去的数据，但当日数据仍要等收盘。
+   都看不出来。所以 `run.py` 在工作日发现日历过期会先跑一次 `build_calendar`
+   （**周末不自动**），显式 `--date` 不在日历里则直接报错（不会猜"最近的交易日"）。
+2. **盘中不该出结论。** 15:05 之前跑会退到上一个交易日——15:05 = 收盘集合竞价 +
+   上游落库留 5 分钟，拿半天的数据算「收盘站上 MA20」本身就是错的。
+   补**历史**日期（`--date` 早于今天）不受此限：盘中可以联网补过去的数据，但当日数据仍要等收盘。
 3. **`cycle_report.py` / `stock_report.py` 必须在各自目录里跑**（顶层 `import config`），
    直接 `python -m stock_cycle_elastic.cycle_report` 会 `ModuleNotFoundError`。
    `run.py` 已经把 cwd 切好。
@@ -227,7 +255,7 @@ python3 -m stock_data_fetch.build_calendar
 
 | 文件 | 装什么 | 丢掉了会怎样 |
 |---|---|---|
-| `shared.db` | **上游数据**：K 线、财务、估值、覆盖表（`coverage`）、全市场价格原件（`price`）、指数原件（`index_price`）、大势的三个原件（`market_index_week` / `market_index_perf` / `market_macro`） | 只能重新联网抓，几十分钟 |
+| `shared.db` | **上游原件**：K 线、财报、分红、估值、快照、横截面 `scan`、人工标注 `annotation`、覆盖表 `coverage`，外加两个旁路包写的全市场价格 `price`、指数 `index_price` 和大势的三个原件（`market_index_week` / `market_index_perf` / `market_macro`） | 只能重新联网抓，几十分钟到几小时 |
 | `results.db` | **派生结论**：四个工具每次跑出来的名单与档位、A股大势的周记（`market_regime`），以及看板要的全市场价格副本（`price` + `price_stat`）和沪深300（`index_price`） | 重跑一遍就有（几分钟） |
 
 分开的理由：`shared.db` 有严格的不变量（只追加 raw、覆盖与数据同事务），
@@ -260,6 +288,7 @@ python3 -m stock_data_fetch.results                    # 各工具最近一次�
 python3 -m stock_data_fetch.results --tool top         # 只看顶部判断
 python3 -m stock_data_fetch.results --tool quality --symbol sh600019   # 一只票的历史
 python3 -m stock_data_fetch.results --prune            # 每工具只留最近一次运行
+python3 -m stock_data_fetch.results --dedupe           # 同一批只留最后一次（默认只预览）
 ```
 
 跨工具的联合查询就是一个普通 JOIN（这是一张库而不是四个库的原因）：
@@ -511,8 +540,8 @@ pip install flask          # 或 python3 -m pip install flask
 
 ## 环境
 
-- Python 3.13。四个工具只用标准库；看板需要 Flask（`pip install flask`）。
-- 交易日历 `state/trading_calendar.json`（`build_calendar` 生成）。
+- Python 3.13。四个工具 + 数据层只用标准库；看板需要 Flask（`pip install flask`）。
+- 交易日历 `state/trading_calendar.json`（`build_calendar` 生成，12 年）。
 
 ## 测试
 
@@ -529,12 +558,38 @@ python3 -m unittest discover -s tests -t .                # 入口 60 + 看板 1
 全部离线；数据层另有 **10 项**真上游用例，要 `STOCKHUB_LIVE=1` 才跑
 （`test_fetch` 6 条 + `test_westock` 4 条）。
 
+临时库落在仓库内 `.testtmp/`——这台机器 `/tmp` 只有 10MB tmpfs。
+
 `stock_market_trend` 没有独立测试包，它的口径由根 `tests/test_stock_market_trend.py`
 （在 213 项里）钉住。
 
 ## 维护
 
 ```bash
+./run.py backup                                    # 两个库 VACUUM INTO 到 backup/（见上面「备份」）
 python3 -m stock_data_fetch.doctor                 # 体检（退出码可当闸门）
 python3 -m stock_data_fetch.maintain --apply       # 清理孤儿覆盖、裁剪历史、VACUUM
+python3 -m stock_data_fetch.results                # 各工具最近一次运行的台账
 ```
+
+## 文档地图
+
+| 文件 | 讲什么 |
+|---|---|
+| `INFORMATION.md` | **这套工具是什么**（本文件）：七个模块、一条链、两个库、看板每一页看什么、综合评估怎么排 |
+| `USAGE.md` | **按情景查命令**：我现在该敲哪条、`--date` 到底管什么、补跑怎么补、踩坑对照表 |
+| `stock_data_fetch/README.md` | 共享数据层的完整设计：四层模型、13 张表、命中判定、节流与源路由、六道闸、运维四件套 |
+| `stock_kline_screen/README.md` | 选股：七条规则、十个子步骤、口径差异、失败语义 |
+| `stock_cycle_elastic/README.md` | 周期弹性：三个判断三个指标、11 个阈值、为什么合同负债只做限定语 |
+| `stock_quality_screen/README.md` | 质量初筛：Q/V 口径、14 项风险、决策矩阵与一致性闸门 |
+| `stock_judge_top/README.md` | 顶部判断：四因子 + 四条旁证、raw 价格与换手折算 |
+| `stock_extreme_point/README.md` | 冷热极点：表结构、涨跌停与中位数口径、两库同写的约定 |
+| `stock_market_trend/README.md` | A股大势：三路阈值、量能五档、周中半根 bar 的处理 |
+| `stock_review_assess/README.md`<br>`stock_review_assess/综合评估-硬门槛说明-20261120.md` | 综合评估：三条门槛的三态判定、赔率分、分档与排序 |
+| `web/README.md` | 看板：13 条路由、9 项导航、查询参数、只读约定 |
+| `notes/` | 投资笔记与读书笔记（《股市真规则》），不是代码文档 |
+
+根目录的 `README.md` **刻意留空**——不再往里写任何内容，文档一律进本文件或 `USAGE.md`。
+
+`dataflow.html` 是**生成物**（`scripts/gen_dataflow.py`），别手改；它把「数据从哪来、
+落哪张表、被哪条阈值筛」画成一页，看板 `/dataflow` 读它。

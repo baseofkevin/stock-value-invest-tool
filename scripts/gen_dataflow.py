@@ -242,7 +242,7 @@ SHARED_TABLES = [
     ("valuation", "周频 PE_TTM / PB_MRQ / PS_TTM，≥430 周"),
     ("quote", "当期行情：价 / 流通市值 / 总股本"),
     ("snapshot", "mainop / consensus / rating 三子域"),
-    ("scan", "一天一份全市场横截面，留 30 天"),
+    ("scan", "一天一份全市场横截面，留 120 天"),
     ("coverage", "覆盖水位：fp / 洞 / partial / n"),
     ("watermark", "取数水位（按域与范围）"),
     ("meta", "换源 / 降级 / 分红修复留痕"),

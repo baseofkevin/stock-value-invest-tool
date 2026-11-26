@@ -168,7 +168,7 @@ class Hub:
         return api.read(self, "scan", api.SCAN_SYMBOL, N.want.scan(day)).rows
 
     def prune_scan(self, keep_days: int | None = None) -> int:
-        """清掉过期的横截面（默认留 30 天）。返回删了多少行。"""
+        """清掉过期的横截面（默认留 120 天）。返回删了多少行。"""
         from . import api
         return api.prune_scan(self, keep_days)
 
