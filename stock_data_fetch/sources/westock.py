@@ -50,7 +50,7 @@ from pathlib import Path
 from ..errors import EmptyResult, SourceUnavailable
 from ..need import Need
 from .base import BatchError, Got
-from .mcp import McpClient, read_token_file
+from .mcp import McpClient, is_transient, read_token_file
 
 log = logging.getLogger("stock_data_fetch.westock")
 
@@ -228,15 +228,19 @@ def _snapshot_domain(need: Need) -> str:
 
 # ---------------------------------------------------------------- 调用
 
-def call(tool: str, args: dict, *, tries: int = 2) -> dict | None:
+def call(tool: str, args: dict, *, tries: int = 2,
+         delay: float = 0.0) -> dict | None:
     """调一次工具。401 时续期重试一次；其余失败返回 `None`（由上层记 partial）。
 
     **不要在适配器里 sleep 重试**（`base.FetchFn` 第 1 条）：重试与退避归 router，
     这里只做"令牌过期"这一种确定性修复。
+
+    例外是 `delay`：`tool_filter` 一次要让服务端算全市场（贴 2 秒硬超时），
+    连发反而更容易继续超时，所以 `_scan` 自己带间隔重发——见那里的注释。
     """
     c = client()
     try:
-        return c.call(tool, args, tries=tries)
+        return c.call(tool, args, tries=tries, delay=delay)
     except SourceUnavailable as e:
         if "401" not in str(e) and "OAuth" not in str(e):
             raise
@@ -247,7 +251,7 @@ def call(tool: str, args: dict, *, tries: int = 2) -> dict | None:
                 tool=tool) from e
         global _client_cache
         _client_cache = None
-        return client().call(tool, args, tries=tries)
+        return client().call(tool, args, tries=tries, delay=delay)
 
 
 def fetch(domain: str, codes, need: Need) -> Got:
@@ -671,6 +675,21 @@ def _quote_row(symbol: str, r: dict, need: Need | None = None) -> dict:
 
 # ---------------------------------------------------------------- scan
 
+SCAN_TRIES = 4
+"""`tool_filter` 在**本进程内**连着试几次（连同 router 的瞬断重试就是 3×4）。
+
+原来用默认的 2 次。2026-11-27 实测改了：全市场口径已经贴住服务端 2 秒红线，
+同参数连打 8 次**失败 4 次**（约 50%）。按 50%/次算，2 次尝试后单天仍有 25%
+失败，而一次 `./run.py all` 要取 5 天 → 跑通的概率不到 1/3，那天的 `2026-11-25`
+就是连续两次超时把整条流程停在第 ① 步。4 次尝试后单天失败率约 6%，
+再叠 router 的瞬断重试低到可以忽略。"""
+
+SCAN_RETRY_DELAY = 1.5
+"""两次尝试之间等多久（秒）。服务端是"算不完就拒"，立刻连发只会继续超时；
+1.5 秒让上一次的计算压力散掉。**只给 `scan` 用**：它的单次请求成本是"全市场"，
+和逐只取数不是一回事（逐只等待会把 4300 只的总时长拉爆）。"""
+
+
 def _scan(codes: list[str], need: Need) -> Got:
     """某交易日的**全市场横截面**。一次请求拿全部，`codes` 不用。
 
@@ -708,14 +727,20 @@ def _scan(codes: list[str], need: Need) -> Got:
     orderby, order = SCAN_ORDERBY
     d = call("tool_filter", {"expression": SCAN_EXPR,
                              "date": day, "limit": SCAN_LIMIT, "market": "hs",
-                             "orderby": orderby, "order": order})
+                             "orderby": orderby, "order": order},
+             tries=SCAN_TRIES, delay=SCAN_RETRY_DELAY)
     if d is None:
-        raise SourceUnavailable(f"tool_filter 对 {day} 没有返回（限频、令牌失效或服务端超时）")
+        # 把**上游原话**带上去，别让排查的人对着"限频、令牌失效或服务端超时"
+        # 三选一自己猜。瞬态与否也如实转给 router：它才是决定"重试还是降级"的地方。
+        raise SourceUnavailable(
+            f"tool_filter 对 {day} 连续 {SCAN_TRIES} 次没有返回：{client().last_error}",
+            transient=client().last_transient)
     if not isinstance(d, dict):
         raise SourceUnavailable(f"tool_filter 返回结构变了（不是 dict）：{type(d).__name__}")
     if d.get("ok") is False:
-        raise SourceUnavailable(
-            f"tool_filter 对 {day} 报错：{d.get('message') or d.get('error') or d}")
+        msg = str(d.get("message") or d.get("error") or d)
+        raise SourceUnavailable(f"tool_filter 对 {day} 报错：{msg}",
+                                transient=is_transient(msg))
     body = d.get("data") if isinstance(d.get("data"), dict) else d
 
     stocks = body.get("stocks")

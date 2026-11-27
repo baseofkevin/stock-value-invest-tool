@@ -21,6 +21,7 @@ import logging
 import os
 import ssl
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -32,6 +33,23 @@ log = logging.getLogger("stock_data_fetch.mcp")
 
 UA = "stock_data_fetch/0.1 (+mcp)"
 PROTOCOL = "2025-03-26"
+
+#: 上游"没算完就回一段中文异常文本"的几种说法。**都是瞬态，不是源坏了。**
+#:
+#: 为什么必须分开：westock 的 `tool_filter` 有约 2 秒服务端硬超时（全市场 5030 行
+#: 正好贴在红线上），超了就 HTTP 200 + `高级选股异常：… RoundTrip timeout …`。
+#: 2026-11-27 实测同参数连打 8 次有 4 次超时——**重发就成功**。把它当确定性故障，
+#: 一次抖动就会让一整天的横截面失败，进而整条 `./run.py all` 停在第 ① 步；
+#: 而它本来只是一次重试的事。
+_TRANSIENT_MARKERS = ("roundtrip timeout", "service error", "timeout",
+                      "限频", "rate limit", "too many requests")
+
+
+def is_transient(text: str) -> bool:
+    """这段错误文本是不是"重发一次大概率就好"。判据只有关键词，**宁可认错方向**：
+    多认成瞬态只是多重试两次；少认则会把一次抖动升级成整步失败。"""
+    low = (text or "").lower()
+    return any(m in low for m in _TRANSIENT_MARKERS)
 
 
 def parse_body(body: str) -> dict:
@@ -81,7 +99,11 @@ def pick_data(result: dict) -> dict:
                 if payload.get("ok") is False:
                     raise SourceUnavailable(f"上游返回失败：{payload.get('message')}")
                 return payload.get("data", payload)
-    raise SourceUnavailable("响应里没有可用的数据字段：" + (texts[0][:120] if texts else "空"))
+    tail = texts[0][:120] if texts else "空"
+    # 超时文本走的就是这条路：上游 200 + 一段中文异常，一个 `{` 都没有。
+    # 判成瞬态，`McpClient.call` 才会重试、router 才会按瞬断处理。
+    raise SourceUnavailable("响应里没有可用的数据字段：" + tail,
+                            transient=is_transient(tail))
 
 
 def _json_candidates(text: str):
@@ -125,6 +147,10 @@ class McpClient:
         self.headers = dict(headers or {})
         self.session_id: str | None = None
         self.last_error: str = ""
+        self.last_transient: bool = False
+        """上一次失败是不是瞬态（`is_transient` 的判定）。调用方 `try/except` 不了
+        `None` 的返回值，靠这个标记决定"要不要把这次失败升级成整天失败"——
+        `westock._scan` 就把它原样传给 `SourceUnavailable(transient=…)`。"""
         # 连接复用：一次批量要打几十次 tools/call，每次重新 TLS 握手实测
         # 0.3–2.8s；复用后 0.15–0.35s。每个线程一条连接，Hub 不跨线程。
         parts = urllib.parse.urlsplit(self.url)
@@ -239,27 +265,45 @@ class McpClient:
 
     # ---- 对外 ----
 
-    def call(self, tool: str, args: dict, *, tries: int = 1) -> dict | None:
+    def call(self, tool: str, args: dict, *, tries: int = 1,
+             delay: float = 0.0) -> dict | None:
         """调一个工具，返回业务数据；失败返回 `None`（原因在 `last_error`）。
 
         `SourceUnavailable`（鉴权/不可达/接口变更）**不吞**，直接往上抛——
         这类错误重试无意义，而且 router 要靠它决定降级。
+
+        `delay`：两次尝试之间的间隔（秒）。默认 0 保持老行为。**只给"一次请求
+        成本很高"的域用**（`tool_filter` 一次要服务端算全市场，连发容易继续超时），
+        逐只取数的域不要设——那会把 4000 只的总时长拉爆。
         """
         self.last_error = ""
+        self.last_transient = False
         last: Exception | None = None
         for i in range(max(1, tries)):
+            if i and delay > 0:
+                time.sleep(delay)
             try:
                 self.open()
-                return pick_data(self._rpc("tools/call", {"name": tool, "arguments": args}))
+                data = pick_data(self._rpc("tools/call",
+                                           {"name": tool, "arguments": args}))
+                # 成功就把上一次的失败痕迹擦掉：`last_transient` 的含义是
+                # "**这次**调用的结果是瞬态失败"，上一次抖动不能粘到这一次上
+                # （否则 `_scan` 会把已经成功的那天又标成瞬态）。
+                self.last_error = ""
+                self.last_transient = False
+                return data
             except SourceUnavailable as e:
                 self.last_error = str(e)
                 if "401" in str(e) or "OAuth" in str(e):
                     raise                 # 确定性错误，交给 router 降级
+                self.last_transient = bool(e.ctx.get("transient")) or is_transient(str(e))
                 last = e
             except ValueError as e:       # JSON 解析失败：偶发，可以重试
                 self.last_error = str(e)
+                self.last_transient = True
                 last = e
-        log.debug("%s 调用失败（%d 次）：%s", tool, tries, self.last_error)
+        log.debug("%s 调用失败（%d 次，瞬态=%s）：%s", tool, tries,
+                  self.last_transient, self.last_error)
         del last
         return None
 

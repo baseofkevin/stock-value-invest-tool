@@ -240,6 +240,80 @@ def test_adapter() -> None:
     check("整列空的报错点名了那一列", e is not None and "close" in str(e), str(e))
 
 
+# ================================================================ 2b. 超时重试
+
+TIMEOUT_TEXT = ('高级选股异常：http client transport RoundTrip timeout: '
+                'Post "http://30.184.254.205:8280/cgi-bin/openai/openclaw/proxy"'
+                ': cost: 2.0003s')
+"""上游算不完时回的那段文本（2026-11-27 实测原样）。HTTP 200、不是 JSON。"""
+
+
+def test_retry() -> None:
+    section("2b. 服务端 2 秒超时是瞬态：同参数重发，不许把一天判死")
+
+    from stock_data_fetch.sources import mcp as M
+
+    # ---- 归类 ----
+    check("RoundTrip timeout 判成瞬态", M.is_transient(TIMEOUT_TEXT))
+    check("service error 判成瞬态",
+          M.is_transient("高级选股异常：error_type=2 suggest=3 msg=service error"))
+    check("结构变更（HTML 当数据）不是瞬态",
+          not M.is_transient("响应里没有可用的数据字段：<html>502</html>"))
+    check("非交易日不是瞬态", not M.is_transient("date 不是交易日"))
+
+    # ---- 适配器：把重试预算和瞬态标记都传下去 ----
+    seen: dict = {}
+
+    class _Stub:
+        last_error = TIMEOUT_TEXT
+        last_transient = True
+
+    def fake_call(tool, args, **kw):
+        seen.update(kw)
+        return None
+
+    with patch(W, "call", fake_call), patch(W, "client", lambda: _Stub()):
+        e = expect_raise("_scan 全失败 → SourceUnavailable", SourceUnavailable,
+                         W._scan, ["*"], want.scan(D1))
+
+    check(f"tries 用 SCAN_TRIES（{W.SCAN_TRIES}）",
+          seen.get("tries") == W.SCAN_TRIES, str(seen))
+    check(f"delay 用 SCAN_RETRY_DELAY（{W.SCAN_RETRY_DELAY}s）",
+          seen.get("delay") == W.SCAN_RETRY_DELAY, str(seen))
+    check("报错里带上上游原话（不再只说三选一）",
+          e is not None and "RoundTrip timeout" in str(e), str(e))
+    check("transient 如实传给 router",
+          e is not None and e.ctx.get("transient") is True, str(e.ctx if e else None))
+
+    # ---- 传输层：第一次超时、第二次成功 → 必须自己重发一次就拿到 ----
+    box = {"n": 0}
+
+    def flaky_rpc(method, params):
+        box["n"] += 1
+        text = TIMEOUT_TEXT if box["n"] == 1 else (
+            '{"ok":true,"data":{"totalStocks":1,"stocks":['
+            '{"code":"sh600519","name":"贵州茅台","ChangePCT":"1.77",'
+            '"ClosePrice":"1435.26"}]}}')
+        return {"content": [{"type": "text", "text": text}]}
+
+    c = M.McpClient("https://example.test/mcp", token="t")
+    c._rpc = flaky_rpc                       # 只替身传输，`pick_data` 仍走真代码
+    d = c.call("tool_filter", {}, tries=2, delay=0)
+    check("第 1 次超时、第 2 次成功 → 拿到数据", isinstance(d, dict), str(type(d)))
+    check("确实只重发了 1 次", box["n"] == 2, str(box["n"]))
+    check("成功时 last_transient 不残留", c.last_transient is False, str(c.last_transient))
+
+    # ---- 全失败：返回 None，但要把"这是瞬态"留在 last_transient 上 ----
+    c2 = M.McpClient("https://example.test/mcp", token="t")
+    c2._rpc = lambda method, params: {"content": [{"type": "text", "text": TIMEOUT_TEXT}]}
+    d2 = c2.call("tool_filter", {}, tries=2, delay=0)
+    check("全失败 → None", d2 is None)
+    check("全失败 → last_transient=True（router 据此重试而非降级）",
+          c2.last_transient is True, str(c2.last_transient))
+    check("全失败 → last_error 是上游原话",
+          "RoundTrip timeout" in c2.last_error, c2.last_error)
+
+
 # ================================================================ 3. 落库与覆盖
 
 def test_store(tmp: Path) -> None:
@@ -428,6 +502,7 @@ def main() -> int:
     print(f"临时目录：{tmp}\n")
     test_need()
     test_adapter()
+    test_retry()
     test_store(tmp)
     test_readonly_and_failure(tmp)
     test_prune(tmp)
