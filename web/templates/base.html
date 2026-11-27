@@ -13,11 +13,13 @@
 <body class="{% block bodyclass %}{% endblock %}">
 <div class="topbar">
   <div class="topbar-inner">
-    {# 字标只留 FRSI（Five Rules of Stock Investing）——下面那排红字就是这五个缩写。
-       全称放 title，不再占一行小字；「RESULTS.DB · 只读」已删，
-       库名是脚注要讲的事，摆在顶栏只会天天误读成"这页数据是快照"。 #}
+    {# 字标 FRSI（Five Rules of Stock Investing）+ 中文副题：缩写单看不知所指，
+       所以后面跟一句《股市真规则》实践运用，用细分隔线隔开、字号压小，不跟字标抢。
+      「RESULTS.DB · 只读」已删，库名是脚注要讲的事，
+       摆在顶栏只会天天误读成"这页数据是快照"。 #}
     <div class="brand">
       <span class="brand-mark" title="FRSI · Five Rules of Stock Investing —《股市真规则》的实践运用">FRSI</span>
+      <span class="brand-sub">《股市真规则》实践运用</span>
     </div>
     <nav class="nav">
       {% for href, label in nav %}
@@ -25,20 +27,41 @@
       {% endfor %}
     </nav>
   </div>
-
-  {# 《股市真规则》的五条规则：标题的注脚，不是页面内容，所以放在顶栏里
-     跟每一页走，且字号压到 11px —— 它解释"这个工具为什么这么设计"，
-     不该抢正文的注意力。 #}
-  <ol class="creed" aria-label="《股市真规则》的五条规则">
-    <li>Doing your homework</li>
-    <li>Finding companies with strong competitive advantages (economic moats)</li>
-    <li>Having a margin of safety</li>
-    <li>Holding for the long term</li>
-    <li>Knowing when to sell</li>
-  </ol>
 </div>
 
 <main class="page">
+  {# 《股市真规则》的两组清单：五条规则 + 七个要避开的错误。这是全站最该被记住的
+     两段话，所以摆在顶栏正下方、hero 之前，每页一打开就先读到。
+     形态是一条通栏的"原则条"：两行，每行 = 彩色小标题 + 横向流排的条目，
+     不再一卡一段竖排——竖排要 7 行，太占首屏。左缘一根青绿到红的渐变竖线
+     把两段并成一体，颜色同时充当分类（绿=该做什么，红=要避开什么）。
+     编号写死字面数字而不是 CSS 计数器：两段各自从 1 开始，拆成两个 <ol> 后
+     计数器会连号。 #}
+  <section class="creed" aria-label="《股市真规则》的五条规则与七个要避开的错误">
+    <div class="creed-row creed-row--rules">
+      <span class="creed-title">The Five Rules<span class="creed-ico" aria-hidden="true">✅</span></span>
+      <ol class="creed-list">
+        <li><span class="creed-num">1</span>Do your homework</li>
+        <li><span class="creed-num">2</span>Find economic moats</li>
+        <li><span class="creed-num">3</span>Have a margin of safety</li>
+        <li><span class="creed-num">4</span>Hold for the long haul</li>
+        <li><span class="creed-num">5</span>Know when to sell</li>
+      </ol>
+    </div>
+    <div class="creed-row creed-row--mistakes">
+      <span class="creed-title">Seven Mistakes to Avoid<span class="creed-ico" aria-hidden="true">❌</span></span>
+      <ol class="creed-list">
+        <li><span class="creed-num">1</span>Swinging for the fences</li>
+        <li><span class="creed-num">2</span>Believing that it’s different this time</li>
+        <li><span class="creed-num">3</span>Falling in love with products</li>
+        <li><span class="creed-num">4</span>Panicking when the market is down</li>
+        <li><span class="creed-num">5</span>Trying to time the market</li>
+        <li><span class="creed-num">6</span>Ignoring valuation</li>
+        <li><span class="creed-num">7</span>Relying on earnings for the whole story</li>
+      </ol>
+    </div>
+  </section>
+
   {% block body %}{% endblock %}
 
   {# 脚注默认讲结果库；个别页面（如 `/extreme`）的脚注要讲另一段数据来源，

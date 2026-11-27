@@ -32,11 +32,17 @@ a:hover{text-decoration:underline}
    渐变从墨蓝走到青绿，与 hero 同一套色，右边那排导航不会跟它抢。
    先给实色，再在支持 background-clip 的浏览器上换渐变——否则一旦不支持，
    color:transparent 会让字标整块消失。 */
-.brand{display:flex;align-items:center}
+.brand{display:flex;align-items:center;gap:10px}
 .brand-mark{
   font-size:23px;font-weight:800;line-height:1;letter-spacing:.14em;
   margin-right:-.14em;              /* 抵消最后一个字母的字距，右侧不留空 */
   color:var(--navy);font-family:var(--font-display,inherit);
+}
+/* 中文副题：缩写后紧跟一句"这本书在讲什么"，细线隔开、字号压到 12px，
+   让 FRSI 仍是顶栏唯一的大字 */
+.brand-sub{
+  font-size:12px;font-weight:600;line-height:1.2;color:#5b6880;
+  padding-left:10px;border-left:1px solid var(--line);letter-spacing:.01em;
 }
 @supports (background-clip:text) or (-webkit-background-clip:text){
   .brand-mark{
@@ -52,21 +58,60 @@ a:hover{text-decoration:underline}
 }
 .nav a:hover{background:#fff;border-color:var(--line);text-decoration:none}
 .nav a.on{background:var(--navy);color:#fff;border-color:var(--navy)}
-/* 大标题下面那排五条规则：编号 + 原文。红色是刻意的强调，
-   像书页边上用红笔划出来的一行，不能压成灰色批注 */
+/* 顶栏下方的"原则条"：五条规则 / 七个要避开的错误。
+   这两段是全站最该被记住的东西，所以摆在正文最前面、hero 之前。
+   形态是通栏一条（不是两张高卡）：两行，每行 = 彩色小标题 + 横向流排的条目；
+   左缘渐变竖线（青绿→红）把两段并成一体，颜色同时充当分类。
+   条目 nowrap：折行只发生在条目之间，不会把一条断成两半。 */
 .creed{
-  max-width:1200px;margin:9px auto 0;padding:0;list-style:none;
-  display:flex;flex-wrap:wrap;align-items:baseline;gap:3px 20px;
-  font-size:11px;line-height:1.5;color:#d61f2e;font-weight:600;letter-spacing:.01em;
-  counter-reset:creed;
+  position:relative;overflow:hidden;
+  background:#fff;border:1px solid var(--line);border-radius:14px;
+  padding:9px 16px 10px 18px;margin:0 0 16px;
+  box-shadow:0 6px 18px rgba(15,23,42,.05);
 }
-.creed li{counter-increment:creed;display:flex;gap:7px;min-width:0;max-width:100%}
-.creed li::before{
-  content:counter(creed,decimal-leading-zero);
-  color:#b3121f;font-weight:800;font-size:10px;letter-spacing:.08em;
-  flex:none;padding-top:1px;
+.creed:before{
+  content:"";position:absolute;left:0;top:0;bottom:0;width:4px;
+  background:linear-gradient(180deg,#0f766e 0%,#0f766e 48%,#b3121f 52%,#b3121f 100%);
 }
-.creed li span{min-width:0}
+/* 左列标题固定 212px、右列条目自适应：两行的条目左端对齐，读起来像一张表 */
+.creed-row{display:grid;grid-template-columns:212px 1fr;gap:3px 14px;align-items:baseline}
+.creed-row--rules{--accent:#0f766e;--tint:#ecfdf5}
+.creed-row--mistakes{--accent:#b3121f;--tint:#fef2f2}
+/* 两段之间划一条虚线：它们性质相反（该做 / 别做），实线会读成"表格分行"，
+   虚线才像"这里隔开一层意思" */
+.creed-row + .creed-row{
+  margin-top:6px;padding-top:6px;border-top:1px dashed #d8e0ec;
+}
+.creed-title{
+  font-size:12px;font-weight:800;line-height:1.35;white-space:nowrap;
+  letter-spacing:.07em;text-transform:uppercase;color:var(--accent);
+}
+/* 标题后的 ✅ / ❌：字号比标题大一档，图标才不会被 12px 的大写字母压没 */
+.creed-ico{
+  display:inline-block;margin-left:6px;font-size:13px;line-height:1;
+  letter-spacing:0;vertical-align:-2px;
+}
+.creed-list{
+  margin:0;padding:0;list-style:none;flex:1 1 0;min-width:0;
+  display:flex;flex-wrap:wrap;align-items:baseline;gap:3px 16px;
+}
+.creed-list li{
+  display:flex;align-items:baseline;gap:6px;
+  font-size:14.5px;line-height:1.42;font-weight:600;color:var(--ink);
+  white-space:nowrap;
+}
+/* 编号徽标：底色取本行色的浅调，数字与色条同色，小而不抢 */
+.creed-num{
+  flex:none;width:17px;height:17px;border-radius:50%;
+  display:inline-flex;align-items:center;justify-content:center;
+  background:var(--tint);color:var(--accent);
+  font-size:10.5px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums;
+  transform:translateY(-1px);
+}
+@media (max-width:820px){
+  /* 窄屏：标题单独占一行，条目在下面折行（212px 的标题列会把右列挤没） */
+  .creed-row{grid-template-columns:1fr}
+}
 
 /* ---------------------------------------------------------------- Hero */
 .hero{
@@ -658,3 +703,15 @@ table.grid td .quote-link{white-space:nowrap;font-size:12px}
 .turn-legend .dot.warm{background:#f59e0b}
 .turn-legend .dot.cool{background:#0d9488}
 .turn-legend .dot.dry{background:var(--good)}
+
+/* 图上两处"断崖"的注脚：画布里只画 ①② 红点，正文排在图下一行。
+   260 根周的图本来就密，说明框压在线上等于把要看的曲线盖住，所以文字一律出图。
+   11px + 悬挂缩进：折行后第二行与正文左端对齐，不跟序号错开。 */
+.cliff-notes{
+  margin:9px 0 0;padding:0;list-style:none;
+  font-size:11px;line-height:1.6;color:#6b778c;
+}
+.cliff-notes li{padding-left:17px;text-indent:-17px}
+.cliff-notes li + li{margin-top:3px}
+.cliff-notes .k{color:#b3121f;font-weight:800;margin-right:6px}
+.cliff-notes b{color:#b3121f;font-weight:700}

@@ -92,6 +92,15 @@
     <span><i class="dot dry"></i>地量</span>
   </div>
   <div class="turn-wrap"><canvas id="turnChart"></canvas></div>
+
+  {# 两处"断崖"的说明：图上只留 ①② 小圆点，正文挪到图下面。
+     260 根周的图本来就密，说明框压在线上等于把要看的曲线盖住——读图优先。 #}
+  <ol class="cliff-notes" id="cliffNotes">
+    <li><span class="k">①</span><b>2025-01-27 周 · 换手 0.44%（单周 −80%）</b>
+      该周只有 1 个交易日（1/28 除夕起休市），日均换手 0.44% 与前一周 0.45% 持平——断崖是日历，不是资金撤出。</li>
+    <li><span class="k">②</span><b>2026-10-09 周 · 换手 1.16%（六周 −62%）</b>
+      最后两周只有 3 天 / 2 天（国庆长假）；9 月起科技去泡沫、观望情绪浓，日均换手 0.61% → 0.48%，放缓但没崩塌。</li>
+  </ol>
 </section>
 {% endif %}
 
@@ -321,6 +330,85 @@
   let span = 250;
   let busy = false;
 
+  // —— 断崖标记：在换手率曲线的两个塌陷点上画一个带编号的小圆点，正文在图下方
+  // 的 .cliff-notes 里（① ② 对得上）。
+  //
+  // 为什么不在图上画说明框：260 根周线本来就密，一个 248×80 的白框压上去，
+  // 正好盖住要看的曲线——第一版就是这么做的，被当场否掉。圆点只占 18px。
+  //
+  // 为什么手写插件：Chart.js 原生没有注释能力，chartjs-plugin-annotation 有 50KB，
+  // 为两个圆点引一个库不值当。
+  //
+  // 内容来自两条线索的对撞，不是猜的：
+  //   ① 库里每周的交易日天数（shared.db.market_index_day 按周汇总）
+  //   ② 当周的公开报道（见 INFORMATION.md「两处断崖」一节）
+  // 结论：这两段"急速下跌"首先是**日历**——周换手率是"该周各交易日之和"，假期把
+  // 交易日砍掉一半，柱子自然矮一半；日均换手并没跟着塌。所以注脚先给日均，再给
+  // 报道里的情绪原因，避免把"少了两天"误读成"资金跑了"。
+  //   2025-01-27 那周只有 1 个交易日（1/28 除夕起休市）：0.44% 的日均与前一周的
+  //     0.45% 持平；同期报道讲的是春节前落袋为安、成交额创 10 月以来新低。
+  //   2026-09-04→10-09 六周 3.03%→1.16%：最后两周只有 3 天 / 2 天（国庆），
+  //     日均是 0.48% / 0.58%，反而回升；真实缩量发生在 9 月——AI 叙事从"能做多大"
+  //     转向"何时回本"，科技成长去泡沫、资金切向红利防御。
+  // 只认日期，不认下标：周线窗口会随新周线右移，写死下标会错位。
+  const CLIFF_NOTES = [
+    {date: '2025-01-27', no: 1},
+    {date: '2026-10-09', no: 2}
+  ];
+
+  const cliffNotes = {
+    id: 'cliffNotes',
+    afterDatasetsDraw: function(c, args, opts){
+      const items = (opts && opts.items) || [];
+      if (!items.length) return;
+      const xa = c.scales.x, ya = c.scales.y;
+      // 锚在换手率那条线上（左轴、fill 的那个数据集），不是右轴的沪深300
+      const turnSet = c.data.datasets.filter(function(d){
+        return d.yAxisID === 'y' && d.fill === true;
+      })[0];
+      if (!xa || !ya || !turnSet) return;
+      const area = c.chartArea, ctx = c.ctx;
+      const labels = c.data.labels;
+      const FONT = '-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",' +
+                   '"Hiragino Sans GB","Microsoft YaHei",sans-serif';
+      const R = 9;
+      items.forEach(function(n){
+        const i = labels.indexOf(String(n.date).slice(2));
+        const v = i < 0 ? null : turnSet.data[i];
+        if (v === null || v === undefined) return;
+        const px = xa.getPixelForValue(i), py = ya.getPixelForValue(v);
+        // 圆点画在数据点正上方一点，留一根细引线——点在曲线上是看不见的
+        const up = py - 20 >= area.top + R + 2;
+        const cy = up ? py - 20 : py + 20;
+
+        ctx.save();
+        ctx.strokeStyle = '#b3121f';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 2]);
+        ctx.beginPath();
+        ctx.moveTo(px, py + (up ? -4 : 4));
+        ctx.lineTo(px, cy + (up ? R - 2 : -R + 2));
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.beginPath();
+        ctx.arc(px, cy, R, 0, Math.PI * 2);
+        ctx.fillStyle = '#b3121f';
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        ctx.font = '800 10.5px ' + FONT;
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(n.no), px, cy + 0.5);
+        ctx.restore();
+      });
+    }
+  };
+
   function build(v){
     const T = v.T;
     const pts = v.pts;
@@ -403,12 +491,14 @@
 
     return {
       type: 'line',
+      plugins: [cliffNotes],              /* 断崖标签：只在周视图给 items，日视图空着不画 */
       data: {labels: labels, datasets: sets},
       options: {
         responsive: true, maintainAspectRatio: false,
         interaction: {mode: 'index', intersect: false},
         plugins: {
           legend: {display: false},
+          cliffNotes: {items: v.unit === '周' ? CLIFF_NOTES : []},
           tooltip: {callbacks: {
             title: function(items){ return pts[items[0].dataIndex].date + ' 那' + v.unit; },
             label: function(c){
@@ -487,6 +577,9 @@
     paintLegend(v);
     if (chart) { chart.destroy(); chart = null; }
     chart = new Chart(box, build(v));
+    // 断崖注脚只在周视图有意义（日视图是另一段窗口，两点不在其中）
+    const cn = document.getElementById('cliffNotes');
+    if (cn) cn.hidden = (mode !== 'week');
     document.querySelectorAll('.seg-btn').forEach(function(b){
       const on = b.dataset.mode === mode;
       b.classList.toggle('on', on);
