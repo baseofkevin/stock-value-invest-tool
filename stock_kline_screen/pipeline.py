@@ -23,10 +23,13 @@ from __future__ import annotations
 import datetime as dt
 import os
 import sys
+import time
+from pathlib import Path
 
 from stock_data_fetch.errors import HoleUnreachable, InsufficientDepth
 from stock_data_fetch.need import want
 
+from . import stage_gap
 from .params import (C2_TOL, C3_RATIO, KLINE_BARS,
                      KLINE_MIN_BARS, NEW_STOCK_YEARS,
                      TURN_WINDOW)
@@ -34,6 +37,36 @@ from .rules import find_start, judge, reason_cat
 from .turnover import apply_turnover
 from .output import print_summary, turn_cell, turn_star
 from .turnaround import compute_turnaround
+
+
+STAGE_GAP_S = stage_gap.DEFAULT
+"""`[4/6]` K 线之后、`[6/6]` 行情之前的配额恢复等待（秒）的**初值**。
+
+实际用的值由 `stage_gap` 模块按每次运行的结果自动校准（失败多就加长、干净就缩回），
+存在 `state/stage_gap.json`。原因见那个模块的文档：这里等多久取决于上游滑动窗口
+还剩多少，不该由人写死。`STOCKHUB_STAGE_GAP_S` 设了就当人工指定，自动校准停用。
+"""
+
+
+def _gap_path(hub) -> Path:
+    return Path(hub.cfg.state_dir) / "stage_gap.json"
+
+
+def _stage_gap(hub) -> tuple[float, str]:
+    """返回（要等的秒数, 依据）。人工指定 > 学习值 > 初值。"""
+    raw = os.environ.get("STOCKHUB_STAGE_GAP_S")
+    if raw not in (None, ""):
+        try:
+            return max(0.0, float(raw)), "STOCKHUB_STAGE_GAP_S 指定"
+        except ValueError:
+            pass                     # 写错了就退回学习值，不因为一个环境变量中断整跑
+
+    stt = stage_gap.State.load(_gap_path(hub))
+    lap = stt.last
+    if lap.tried:
+        return stt.gap, (f"学自上次（{lap.date or '上次'} 行情首轮失败 "
+                         f"{lap.failed}/{lap.tried}）")
+    return stt.gap, "初值，跑满一次后自动校准"
 
 
 class CliError(Exception):
@@ -231,6 +264,19 @@ def _load_kline(st) -> None:
             f"不能按停牌处理，请重跑或检查上游。")
     st.update({"km": km, "km_missing": sorted(hard), "depth_bad": depth_bad})
 
+    # ---- 阶段间配额恢复等待（2026-11-27 加，见 `stage_gap` 模块的文档）----
+    #
+    # 只在**本次真抓过数据**时等：全部命中缓存的补跑（比如周末重跑一次）
+    # 本来就没发请求，白等纯属浪费。等待时长由 `stage_gap` 按历史观测自动校准。
+    st["stage_gap_used"] = None      # 本次没等 → 行情阶段不参与等待时长的学习
+    if pre.ok:
+        gap, why = _stage_gap(hub)
+        if gap > 0:
+            print(f"      配额恢复等待 {gap:.0f}s：K 线 {len(pre.ok)} 只刚落库，"
+                  f"先让上游滑动窗口回落，再去取行情（{why}）", flush=True)
+            time.sleep(gap)
+            st["stage_gap_used"] = gap
+
 
 # ---------------------------------------------------------------- 5 裁决
 
@@ -312,6 +358,28 @@ def _check_new(st) -> None:
 
 # ---------------------------------------------------------------- 6 行情/换手
 
+def _learn_stage_gap(st, batch) -> None:
+    """把行情首轮的结果换算成「下次该等多久」，并落盘。
+
+    只在本次**真等过**的时候学：没等（阶段 4 全部命中缓存）就没有「等得够不够」
+    这个信息，硬学只会把上一次的参数误当成本次的结论。人工指定了
+    `STOCKHUB_STAGE_GAP_S` 时也不学——人明确表态了就别自动覆盖。
+    """
+    if os.environ.get("STOCKHUB_STAGE_GAP_S") not in (None, ""):
+        return
+    gap_used = st.get("stage_gap_used")
+    if gap_used is None:
+        return
+    hub = st["hub"]
+    path = _gap_path(hub)
+    state = stage_gap.State.load(path)
+    lap = stage_gap.observe(state, tried=len(batch.ok) + len(batch.failed),
+                            failed=len(batch.failed), date=st["S"],
+                            gap_used=gap_used)
+    state.save(path)
+    print(f"      {stage_gap.describe(lap)}", flush=True)
+
+
 def _enrich_market(st) -> None:
     a, hub, S, hist = st["a"], st["hub"], st["S"], st["hist"]
     cross_by_day, km = st["cross_by_day"], st["km"]
@@ -340,7 +408,14 @@ def _enrich_market(st) -> None:
         # `ensure_bulk` 把整批交给适配器，请求数降到 ⌈4304/40⌉ ≈ 83 次。
         pool_codes = list(st["pool"])
         need_q = want.quote(S)
-        hub.ensure_bulk("quote", pool_codes, need_q)   # 只负责"把缺的补进库"
+        pre_q = hub.ensure_bulk("quote", pool_codes, need_q)   # 只负责"把缺的补进库"
+
+        # ---- 用这一轮的结果校准下次的配额等待（见 `stage_gap`）----
+        #
+        # 首轮失败只数就是「上一阶段是不是把窗口挤爆了」最直接的证据：失败多说明
+        # 等得不够，一只没挂说明等多了。命中缓存的不计入样本（它们没发请求）。
+        _learn_stage_gap(st, pre_q)
+
         # 再从库里统一读一遍：`ensure_bulk` 的 `Batch.ok` **只含本次真去抓的那些**，
         # 命中的一只也不返回（它没有 `ensure` 那种"从库里读出来"的语义）。
         # 直接拿 `ok` 当结果，会让"库里已有 1035 只"这批凭空消失——
@@ -453,10 +528,34 @@ def _annotate_turnaround(st) -> None:
         # （产能周转率 10 年分位，要 40 个「最近 4 季之和」样本 = 43 期）就会安静地
         # 退化成 4~5 年分位——报告照出，只是标签悄悄变了。
         # `min_points` 仍是 20：次新股本来就凑不满，不该因此判死。
-        batch = hub.ensure_many("finance", [x["code"] for x in final],
-                                want.finance(S, periods=44, min_points=20))
-        fin = {sym: r.rows for sym, r in batch.ok.items() if r.rows}
-        turn_failed = sorted(batch.failed)
+        codes_fin = [x["code"] for x in final]
+        need_fin = want.finance(S, periods=44, min_points=20)
+        # **先批量、再兜底**（2026-11-27 改）：
+        #
+        # 原来这里直接 `ensure_many`，而它是"逐只 ensure"的循环——79 只就是
+        # 79 次单只 `data_finance`，每只失败还要再试。westock 是按**每分钟请求数**
+        # 限频的（实测 60~70 次/分钟），79 次连发正好把它打成限频，于是这一段
+        # 拿回一堆空表、被标成「无数据」；而 `[4/6]` 的 K 线刚打完 126 批、
+        # `[6/6]` 的行情还要再打 123 批，配额本来就所剩无几。
+        #
+        # 而 westock 的 `data_finance` 本来就支持 `codes` 多码（适配器里
+        # `for i in range(0, len(codes), BATCH)`），40 只一批、79 只两次请求就够。
+        # 这就是 `[6/6]` 给 quote 用的那条路，照搬了过来。
+        pre = hub.ensure_bulk("finance", codes_fin, need_fin)
+        # `ensure_bulk` 的 `Batch.ok` **只含本次真去抓的那些**，命中的一只不返回；
+        # 直接拿 `ok` 当结果，会让"库里早就存着"的那批凭空消失。
+        fin: dict[str, list] = {}
+        for sym in codes_fin:
+            rows = hub.read("finance", sym, need_fin).rows
+            if rows:
+                fin[sym] = rows
+        # 批量没拿到的再逐只 `ensure`：这一层不是为了拿数据，是为了拿**正式分类**
+        # （次新股凑不满 20 期该记为 InsufficientDepth，而不是"取数失败"）。
+        rest = [c for c in codes_fin if c not in fin]
+        batch = hub.ensure_many("finance", rest, need_fin) if rest else None
+        if batch:
+            fin.update({sym: r.rows for sym, r in batch.ok.items() if r.rows})
+        turn_failed = sorted(c for c in (rest or []) if c not in fin)
         if not fin and turn_failed:
             print("      ⚠️ 财务数据获取失败：「毛利率改善」列留空（选股结果不受影响）",
                   file=sys.stderr)

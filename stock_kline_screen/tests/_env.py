@@ -14,3 +14,8 @@ import tempfile as _tempfile
 _os.environ.setdefault(
     "STOCK_RESULTS_DB",
     _os.path.join(_tempfile.mkdtemp(prefix="results-test-"), "results.db"))
+
+# 阶段间配额恢复等待（`pipeline.STAGE_GAP_S`）在测试里必须是 0。
+# `test_pipeline` 的 FakeHub 会让 `ensure_bulk.ok` 非空，不关掉就要真睡 60 秒，
+# 整套测试会直接跑成 SIGKILL（2026-11-27 实测）。
+_os.environ.setdefault("STOCKHUB_STAGE_GAP_S", "0")
