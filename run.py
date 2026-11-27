@@ -537,6 +537,62 @@ def step_select(tee: Tee, day: str, extra: list[str]) -> int:
     return 0
 
 
+def step_warm_finance(tee: Tee, day: str) -> int:
+    """② 之前把当天名单的财报整批垫进缓存（2026-11-27 加）。
+
+    为什么要这一步：`② 周期弹性` 是**逐只**取财报的（`stock_cycle_elastic/cycle/
+    fetch.py` 的 `_ensure_retrying`，每只失败还要再试 1+3 次、每次间隔 1.5s）。
+    westock 的 `data_finance` 一旦限频，79 只就变成 79~316 次请求砸在同一个窗口里。
+    2026-11-27 实测 21 只被判失败，而其中 17 只几分钟后由下游步骤顺手补上了——
+    说明不是"没数据"，只是 ② 跑得太早、还逐只去撞配额。
+
+    这里只做一件事：把名单整批交给 `api.ensure_bulk`（westock 40 只/请求，
+    79 只两次就够），在 ② 之前把 `coverage` 垫上；之后 ② 逐只取时全部命中，
+    一条网络请求都不发。
+
+    **失败不拦流程**：这里没拿到的，② 自己还有一层逐只重试。把"预热失败"
+    升级成"整跑失败"是净损失。
+    """
+    try:
+        from stock_data_fetch import api, preflight
+        from stock_data_fetch import need as N
+        from stock_data_fetch import results as results_db
+        # `symbols_for` 给的是 `[{symbol, name}]`（下游渲染要名称），
+        # 取数只要代码本身——整行传进 `ensure_bulk` 会绑参失败。
+        syms = [r["symbol"] for r in results_db.symbols_for("select", day)
+                if r.get("symbol")]
+    except Exception as exc:                       # noqa: BLE001
+        tee.line(f"  ⚠️ 财报预热跳过（数据层不可用：{exc}）")
+        return 0
+
+    if not syms:
+        tee.line("  ⚠️ 财报预热跳过（当天名单为空）")
+        return 0
+
+    tee.line(f"  ▸ 财报预热：{len(syms)} 只走批量通道（② 逐只将命中缓存）")
+    try:
+        with preflight() as hub:
+            # 期数必须与 `stock_cycle_elastic/config.py` 的 HISTORY_QUARTERS（44）
+            # 一致：期数变了 `coverage` 判据跟着变，预热就垫不到 ② 要的那一格上。
+            # `min_points=1` 同 cycle：期数不够由 decide 标「历史不足」，不在这里判死。
+            need = N.want.finance(hub.target, periods=44, min_points=1)
+            batch = api.ensure_bulk(hub, "finance", syms, need)
+    except Exception as exc:                       # noqa: BLE001
+        tee.line(f"  ⚠️ 财报预热失败（{exc}）；② 会照常逐只再试")
+        return 0
+
+    if not batch.ok and not batch.failed:
+        # `ensure_bulk` 先把命中 `coverage` 的票滤掉：全都命中时它就是空 Batch，
+        # 一只请求都没发。这是最常见的情况（周末重跑时库已经齐了）。
+        tee.line(f"  ✓ 财报预热：{len(syms)} 只全部已命中，未发请求")
+        return 0
+
+    miss = len(batch.failed)
+    tail = f"，{miss} 只未取到（② 会再试）" if miss else ""
+    tee.line(f"  ✓ 财报预热：新取 {len(batch.ok)} 只{tail}")
+    return 0
+
+
 def step_cycle(tee: Tee, day: str, extra: list[str], stock: str | None = None,
                csv_path: Path | None = None, tool_args: list[str] | None = None) -> int:
     """周期弹性。`stock` 单只、`csv_path` 走 CSV，都不依赖当天名单。"""
@@ -835,6 +891,8 @@ def cmd_all(args, tee: Tee) -> int:
     if args.skip_cycle:
         tee.line("（按 --skip-cycle 跳过周期弹性）")
     else:
+        # 先批量垫财报，② 才不会逐只去撞配额（见 step_warm_finance 的说明）
+        step_warm_finance(tee, day)
         rc = step_cycle(tee, day, args.cycle_args)
         steps.append(("② 周期弹性", rc, LAST_SPENT["s"]))
         if not judge_step(tee, "② 周期弹性", "cycle", day, rc, args.strict) \
