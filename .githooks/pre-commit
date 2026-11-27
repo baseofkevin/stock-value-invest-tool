@@ -1,0 +1,27 @@
+#!/bin/sh
+# 硬规则：仓库根目录 README.md 永久留空（0 字节），任何改动都不得提交。
+# 规则来源：AGENTS.md「规则 0」/ INFORMATION.md「文档地图」
+# 启用：git config core.hooksPath .githooks
+set -u
+
+if ! git diff --cached --quiet -- README.md; then
+	cat >&2 <<'EOF'
+[pre-commit] 拒绝提交：根目录 README.md 必须永久留空（0 字节）。
+
+  本钩子只管根目录这一个 README.md，子模块 README（stock_*/README.md、web/README.md）
+  不受影响，可以正常提交。
+
+  这套项目刻意把根 README.md 留空，文档一律写到：
+    INFORMATION.md                这套工具是什么、模块、数据库、看板、文档地图
+    USAGE.md                      按情景查命令、--date 语义、补跑、踩坑对照
+    stock_*/README.md / web/README.md   各模块自己的设计文档（这些可以正常改）
+
+  如果你刚往根 README.md 写了内容，撤销它：
+    git restore --staged README.md && git restore README.md
+
+  规则见 AGENTS.md 的「规则 0」。要废止这条规则请人工改 AGENTS.md 与本钩子。
+EOF
+	exit 1
+fi
+
+exit 0

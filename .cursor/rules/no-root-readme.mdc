@@ -1,0 +1,17 @@
+---
+description: 根目录 README.md 永久留空，禁止写入任何内容
+alwaysApply: true
+---
+
+# 硬规则：仓库根 README.md 永久留空
+
+**只约束 `/README.md` 这一个文件。** `stock_*/README.md`、`web/README.md` 是正常文档，
+可以照常增删改，不要把这条规则套到它们身上。
+
+- 仓库根目录的 `README.md` 必须保持 **0 字节**。任何情况下都不要写入内容：不写标题、不写简介、
+  不写安装说明、不写目录、不加 badge，也不用 `sed -i` / `echo >>` / `cat >` / 任何脚本改它。
+- 它是**刻意留空**，不是遗漏。不要"修复"，不要在总结里建议"补一个 README"。
+- 文档写到：`INFORMATION.md`（项目是什么）、`USAGE.md`（命令速查）、
+  各 `stock_*/README.md` 与 `web/README.md`（模块内部设计，这些可以正常更新）。
+- `.githooks/pre-commit` 会拒绝任何包含根 `README.md` 改动的提交。
+- 改代码或文件前先跟用户确认，不要顺手重构或改口径。
