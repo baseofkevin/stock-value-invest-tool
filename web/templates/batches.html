@@ -19,6 +19,39 @@
 </section>
 
 {% set r = regime.row %}
+{# 市值过滤开关：默认关闭，默认上限 300 亿；下限留空 = 只看上限，
+   两个都填 = 只看这个区间（如 100–200 亿），上限留空 = 只看下限。
+   状态存在 cookie 里，所以从这里打开后，**选股 / 质量 / 周期 / 顶部 / 综合评估**
+   五个模块一起生效——它们看的是同一批票，只过滤一个模块没有意义。
+   `/extreme` 冷热极点是全市场价格页，不参与这个开关。 #}
+<form class="mvcap" method="get" action="{{ url_for('mvcap') }}">
+  <input type="hidden" name="back" value="{{ url_for('batches') }}">
+  <span class="mvcap-title">市值过滤</span>
+  <label class="mvcap-switch">
+    <input type="checkbox" name="on" value="1" {{ 'checked' if mv }}>
+    <span>只看市值区间</span>
+  </label>
+{# 回填：关着的时候上限先摆默认的 300；开着且上限为空（只看下限）就留空，
+   否则再点一次「应用」会把 300 当成上限，和下限打起来。 #}
+  {% set lo_value = mv.lo|int if mv and mv.lo else '' %}
+  {% set hi_value = mv.hi|int if mv and mv.hi is not none else ('' if mv else 300) %}
+  <input class="mvcap-num" type="number" name="lo" min="0" max="99999" step="10"
+         value="{{ lo_value }}" placeholder="不限"
+         inputmode="numeric" aria-label="市值下限（亿元，留空不限）">
+  <span class="mvcap-dash">–</span>
+  <input class="mvcap-num" type="number" name="hi" min="0" max="99999" step="10"
+         value="{{ hi_value }}" placeholder="不限"
+         inputmode="numeric" aria-label="市值上限（亿元，留空不限）">
+  <span class="mvcap-unit">亿元</span>
+  <button type="submit">应用</button>
+  {% if mv %}
+  <a class="mvcap-off" href="{{ url_for('mvcap', on=0, back=url_for('batches')) }}">取消过滤</a>
+  <span class="mvcap-state on">已开启 · 只看 {{ mv.label }} · 选股 / 质量 / 周期 / 顶部 / 综合评估 一起生效</span>
+  {% else %}
+  <span class="mvcap-state">当前关闭 · 五个模块显示全部股票（默认上限 300 亿，下限留空即不限）</span>
+  {% endif %}
+</form>
+
 <section class="panel regime">
   <div class="regime-head">
     <div>

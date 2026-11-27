@@ -1504,6 +1504,42 @@ def counts(conn, date: str | None = None) -> dict:
             for t in ORDER}
 
 
+def market_caps(conn, symbols) -> dict[str, float]:
+    """`symbol → 总市值（亿元）`，取每只票在 `price` 表里**最新一天**的 `total_mv`。
+
+    为什么取各自最新一行、而不是"当前批次那一天"：`price` 只有跑过
+    `./run.py price` 才有新行，停牌或那天没抓到的票，在那一天就是空的；
+    而"这只票现在多大"跟页面在看哪一批无关。口径与
+    `select_result.market_cap_yi`（启动日快照）一致，都回答同一个问题。
+
+    只为**页面上的市值过滤**服务，所以缺价的票不进字典——调用方按
+    「查不到市值就留下」处理：缺行情不是"大市值"的证据，宁可多显示一只，
+    也不该把票悄悄藏起来（藏了还没人知道）。
+
+    量级：全市场 5000+ 只按 500 一批分块查，避免 `IN (...)` 超过 SQLite 的
+    参数上限（999）。
+    """
+    syms = [str(s) for s in (symbols or []) if s]
+    if conn is None or not syms or not _has(conn, "price"):
+        return {}
+    out: dict[str, float] = {}
+    chunk = 500
+    for start in range(0, len(syms), chunk):
+        part = syms[start:start + chunk]
+        marks = ",".join("?" * len(part))
+        sql = ("SELECT p.symbol, p.total_mv FROM price p "
+               f"WHERE p.symbol IN ({marks}) AND p.total_mv IS NOT NULL "
+               "  AND p.date = (SELECT MAX(q.date) FROM price q "
+               "                WHERE q.symbol = p.symbol "
+               "                  AND q.total_mv IS NOT NULL)")
+        for symbol, total_mv in conn.execute(sql, part).fetchall():
+            try:
+                out[symbol] = float(total_mv) / 1e8
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
 # ------------------------------------------------------------------ 个股
 
 def symbol_row(conn, tool: str, symbol: str) -> dict | None:

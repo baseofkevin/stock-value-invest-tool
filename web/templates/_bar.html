@@ -20,6 +20,16 @@
   {% elif cur_date %}
   <span class="pick-meta">基准日 {{ cur_date }}</span>
   {% endif %}
+  {# 市值过滤开着的时候必须说一声：名单少了几十行，不说清楚会以为是数据丢了。
+     开关本身在首页上，这里只做提示 + 一键取消——cookie 是全局的，
+     从「质量」「周期」页也能直接关掉，不用绕回首页。 #}
+  {% if mv %}
+  <span class="pick-meta pick-mv">
+    <span class="chip warn">市值 {{ mv.label }}</span>
+    已隐藏 {{ mv_hidden or 0 }} 只
+    <a class="pick-mv-off" href="{{ url_for('mvcap', on=0, back=request.full_path) }}">取消过滤</a>
+  </span>
+  {% endif %}
   {% if cur_date and cur_date != batches[0].date %}
   <a class="pick-latest" href="{{ request.path }}">回到最新批次</a>
   {% endif %}

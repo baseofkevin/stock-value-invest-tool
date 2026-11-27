@@ -327,6 +327,117 @@ def _iso_or_none(value):
         return None
 
 
+#: 市值过滤开关：首页 `/batches` 上那条「只看市值区间」。
+#:
+#: 为什么存在 cookie 里而不是 URL 参数：这是一个**跨模块**的开关——在首页
+#: 打开后，点「选股」「质量」「周期」「顶部」「综合评估」也得照样过滤。
+#: URL 参数带不过去，cookie 能。关掉开关就删 cookie，页面恢复全量。
+#:
+#: 开关管的是**区间**（下限可空 = 不限），所以不做成单个"上限"：
+#: "只看 100–200 亿"和"不看 >300 亿"是同一个控件的两种用法，没必要两套。
+MV_CAP_COOKIE = "mv_cap"
+MV_CAP_DEFAULT = 300.0                          # 默认上限：300 亿
+
+
+def _parse_num(raw) -> float | None:
+    """`"100"` / `"100.5"` → 100.0；空串、乱码、负数 → None（= 不限）。"""
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def _mv_label(lo: float, hi: float | None) -> str:
+    """区间 → 页面上的那句话：`100–200 亿` / `≤ 300 亿` / `≥ 100 亿`。"""
+    if hi is None:
+        return f"≥ {lo:,.0f} 亿"
+    if not lo:
+        return f"≤ {hi:,.0f} 亿"
+    return f"{lo:,.0f}–{hi:,.0f} 亿"
+
+
+def _parse_range(raw) -> dict | None:
+    """cookie / 参数里的区间串 → `{"lo":…, "hi":…, "label":…}`；关着就是 None。
+
+    认三种写法：`"300"`（只有上限）、`"100-300"`、`"100-"`
+    （只要下限）。`~` / `～` / `－` / `—` 都当分隔符，手输时不用挑符号。
+    """
+    text = str(raw or "").strip()
+    if not text or text.lower() in ("off", "no", "none"):
+        return None
+    for sep in ("~", "～", "－", "—", "–", "至"):
+        text = text.replace(sep, "-")
+    parts = [p.strip() for p in text.split("-")]
+    if len(parts) == 1:
+        hi = _parse_num(parts[0])
+        return {"lo": 0.0, "hi": hi, "label": _mv_label(0.0, hi)} if hi else None
+    lo = _parse_num(parts[0]) or 0.0
+    hi = _parse_num(parts[1]) if len(parts) > 1 else None
+    if lo and hi is not None and lo > hi:        # 起止颠倒不算错，对调即可
+        lo, hi = hi, lo
+    if not lo and hi is None:
+        return None
+    return {"lo": lo, "hi": hi, "label": _mv_label(lo, hi)}
+
+
+def _mv_range() -> dict | None:
+    """当前生效的市值区间。`?min_mv=&max_mv=` 覆盖 cookie，方便临时看别的档位。"""
+    lo = _parse_num(request.args.get("min_mv"))
+    hi = _parse_num(request.args.get("max_mv"))
+    if lo is not None or hi is not None:
+        if lo is not None and hi is not None and lo > hi:
+            lo, hi = hi, lo
+        lo = lo or 0.0
+        if not lo and hi is None:
+            return None
+        return {"lo": lo, "hi": hi, "label": _mv_label(lo, hi)}
+    return _parse_range(request.cookies.get(MV_CAP_COOKIE))
+
+
+def _mv_split(rows, rng, caps=None) -> tuple[list[dict], int]:
+    """按市值区间把结果行分成「留下」和「藏起来」，返回 `(keep, hidden)`。
+
+    市值来源两处：选股结果自带 `market_cap_yi`（工具算的启动日快照）；
+    其余三张表没有这个字段，靠 `caps`（`db.market_caps()`，price 表最新一行）补。
+
+    查不到市值的行怎么处理，取决于这次是不是**有下限**：
+      * 只设上限（不看大市值）→ **留下**。缺行情不是大市值的证据，
+        凭"没数据"把票藏起来，比多显示一只危险得多。
+      * 设了下限（只看 100–200 亿）→ **剔掉**。这时用户是在**主动挑**一个区间，
+        一只查不到市值的票没资格占这个名额；留着它等于把"没准"当成"符合"。
+    """
+    if not rng:
+        return list(rows or []), 0
+    lo = rng.get("lo") or 0.0
+    hi = rng.get("hi")
+    caps = caps or {}
+    keep: list[dict] = []
+    hidden = 0
+    for row in rows or []:
+        value = row.get("market_cap_yi")
+        if value is None:
+            value = caps.get(row.get("symbol"))
+        try:
+            mv = float(value) if value is not None else None
+        except (TypeError, ValueError):
+            mv = None
+        if mv is None:
+            if lo:
+                hidden += 1
+                continue
+            keep.append(row)
+            continue
+        if mv < lo or (hi is not None and mv > hi):
+            hidden += 1
+            continue
+        keep.append(row)
+    return keep, hidden
+
+
 #: 《成功投资的五条法则》原书学习页：整本书是一个 5.5MB 的自包含 HTML
 #: （样式、图、脚本全内联，没有外部依赖），放在 `static/` 下随看板一起发布。
 #: 它不走静态路由直接访问，只因为要在页面里补一个「返回看板」的浮标——
@@ -443,6 +554,13 @@ def create_app(db_path: str | Path | None = None) -> Flask:
                 date = date or meta["target_date"]
         return date, run_id
 
+    def _caps_for(c, rows) -> dict:
+        """补市值映射：只查那些**自己没带** `market_cap_yi` 的票。"""
+        if not _mv_range():
+            return {}
+        return db.market_caps(c, [r.get("symbol") for r in rows
+                                  if r.get("market_cap_yi") is None])
+
     def _page(template: str, tool: str | None = None):
         """工具页的公共壳：批次选择器 + 运行信息 + 结果行。"""
         with conn() as c:
@@ -452,10 +570,13 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             if meta:
                 date = meta["target_date"]
             date = date or db.batch_date(c)
+            mv = _mv_range()
+            rows, hidden = _mv_split(rows, mv, _caps_for(c, rows))
             return render_template(
                 template, rows=rows, meta=meta,
                 batches=db.batches(c), cur_date=date,
-                summary=db.summary(c, date), counts=db.counts(c, date))
+                summary=db.summary(c, date), counts=db.counts(c, date),
+                mv=mv, mv_hidden=hidden)
 
     @app.errorhandler(404)
     def not_found(_e):
@@ -497,12 +618,19 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             date, _run_id = _pick(c)
             date = date or db.batch_date(c)
             rows = db.merged(c, date)
+            # 合并表的市值挂在 `select` 那一格里（工具算的启动日快照）；没进选股
+            # 名单的票那一格是空的，交给 `_mv_split` 用 price 表补。
+            for r in rows:
+                r["market_cap_yi"] = (r.get("select") or {}).get("market_cap_yi")
+            mv = _mv_range()
+            rows, hidden = _mv_split(rows, mv, _caps_for(c, rows))
             report = review.build(
                 rows, db.moats(), db.financials([r["symbol"] for r in rows]))
             return render_template("review.html", meta=None, cur_date=date,
                                    batches=db.batches(c), review=report,
                                    summary=db.summary(c, date),
-                                   counts=db.counts(c, date))
+                                   counts=db.counts(c, date),
+                                   mv=mv, mv_hidden=hidden)
 
     @app.route("/extreme")
     def extreme_page():
@@ -531,7 +659,8 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             return render_template("batches.html", batches=db.batches(c),
                                    cur_date=db.batch_date(c), meta=None,
                                    regime=db.regime(c),
-                                   summary=db.summary(c), counts=db.counts(c))
+                                   summary=db.summary(c), counts=db.counts(c),
+                                   mv=_mv_range())
 
     @app.route("/trend")
     def trend_page():
@@ -612,6 +741,36 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             app.config["FLOW_CACHE"] = cache
         return Response(cache[1], mimetype="text/html")
 
+    @app.route("/mvcap")
+    def mvcap():
+        """市值过滤开关：设置/取消**区间**，写 cookie 后跳回来处。
+
+        `?on=1&lo=100&hi=200` 只看 100–200 亿；`lo` 留空 = 只看上限；
+        `hi` 留空 = 只看下限；两个都留空 = 走默认上限 `MV_CAP_DEFAULT`（300 亿）。
+        不带 `on` 就是关闭（删 cookie，页面恢复全量）。
+
+        `back` 只接受站内路径：`?back=//evil.com` 这种开放重定向在本地看板上
+        没什么危害，但没理由留着。
+        """
+        back = str(request.args.get("back") or "")
+        if not back.startswith("/") or back.startswith("//"):
+            back = url_for("batches")
+        resp = redirect(back)
+        if (request.args.get("on") or "").lower() in ("1", "true", "on", "yes"):
+            lo = _parse_num(request.args.get("lo"))
+            hi = _parse_num(request.args.get("hi"))
+            if lo is None and hi is None:         # 勾了开关但没填数 → 用默认上限
+                lo, hi = 0.0, MV_CAP_DEFAULT
+            if lo is not None and hi is not None and lo > hi:
+                lo, hi = hi, lo
+            # 存成 `下限-上限`，`hi` 为空就留一个尾横杠表示"不限上限"
+            value = f"{lo or 0:g}-" + (f"{hi:g}" if hi is not None else "")
+            resp.set_cookie(MV_CAP_COOKIE, value,
+                            max_age=365 * 24 * 3600, samesite="Lax")
+        else:
+            resp.delete_cookie(MV_CAP_COOKIE, samesite="Lax")
+        return resp
+
     @app.route("/select")
     def select():
         return _page("select.html", "select")
@@ -631,6 +790,8 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             if meta:
                 date = meta["target_date"]
             date = date or db.batch_date(c)
+            mv = _mv_range()
+            rows, hidden = _mv_split(rows, mv, _caps_for(c, rows))
             cl = db.contract_liability([r["symbol"] for r in rows]) if rows else {}
             for r in rows:
                 r["demand"] = _demand_suffix(r.get("position_label"),
@@ -638,7 +799,8 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             return render_template(
                 "cycle.html", rows=rows, meta=meta,
                 batches=db.batches(c), cur_date=date,
-                summary=db.summary(c, date), counts=db.counts(c, date))
+                summary=db.summary(c, date), counts=db.counts(c, date),
+                mv=mv, mv_hidden=hidden)
 
     @app.route("/quality")
     def quality():
@@ -649,6 +811,8 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         with conn() as c:
             date, run_id = _pick(c)
             meta, rows = db.scope(c, "top", date=date, run_id=run_id)
+            mv = _mv_range()
+            rows, hidden = _mv_split(rows, mv, _caps_for(c, rows))
             for r in rows:
                 r["extras"] = (r.get("data") or {}).get("extras") or {}
                 r["gaps"] = (r.get("data") or {}).get("gaps") or []
@@ -657,7 +821,8 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             return render_template("top.html", rows=rows, meta=meta,
                                    batches=db.batches(c), cur_date=date,
                                    summary=db.summary(c, date),
-                                   counts=db.counts(c, date))
+                                   counts=db.counts(c, date),
+                                   mv=mv, mv_hidden=hidden)
 
     #: 从哪个工具页点进来，就把那一块排最上面。四因子原来永远第一，于是
     #: 从周期/质量页点进来的人看到的也先是顶部判断——2026-11-15 提的那个"都

@@ -267,6 +267,38 @@ table.grid tr.dim td{opacity:.55}
 .picker .pick-latest{margin-left:auto;color:#0f766e;font-weight:600;text-decoration:none}
 .picker .pick-latest:hover{text-decoration:underline}
 
+/* ------------------------------------------------------- 市值过滤开关 */
+/* 首页那一条：开关跨模块生效，所以做得比正文明显一点（青绿描边），
+   但仍然是"设置"不是"结论"，不给危险色。 */
+.mvcap{display:flex;align-items:center;gap:9px;flex-wrap:wrap;
+  margin:0 0 14px;padding:10px 13px;background:#f0fdfa;
+  border:1px solid #ccfbf1;border-radius:12px;font-size:12.5px;color:#115e59}
+.mvcap-title{font-weight:700;letter-spacing:.02em}
+.mvcap-switch{display:inline-flex;align-items:center;gap:6px;cursor:pointer;
+  color:#115e59}
+.mvcap-switch input{width:15px;height:15px;accent-color:#0f766e;cursor:pointer}
+.mvcap-num{font:inherit;font-size:12.5px;width:78px;padding:4px 8px;
+  border:1px solid #99f6e4;border-radius:8px;background:#fff;color:var(--ink);
+  font-variant-numeric:tabular-nums;text-align:right}
+.mvcap-num::placeholder{color:#94a3b8;font-weight:400}
+.mvcap-num:focus{outline:2px solid #5eead4;outline-offset:1px}
+.mvcap-dash{color:#0f766e;font-weight:700}
+.mvcap-unit{color:#0f766e}
+.mvcap button{font:inherit;font-size:12px;font-weight:600;cursor:pointer;
+  color:#fff;background:#0f766e;border:1px solid #0f766e;border-radius:8px;
+  padding:4px 12px}
+.mvcap button:hover{background:#115e59}
+.mvcap-off{color:#b45309;font-weight:600;text-decoration:none;
+  border-bottom:1px dashed #fcd9a4}
+.mvcap-off:hover{border-bottom-style:solid}
+.mvcap-state{color:#64748b;font-size:11.5px}
+.mvcap-state.on{color:#0f766e;font-weight:600}
+/* 批次条右侧那一条"过滤生效"提示：说清隐藏了几只，否则名单少几十行像丢数据 */
+.pick-mv{flex-basis:100%;margin-top:2px}
+.pick-mv .pick-mv-off{margin-left:2px;color:#b45309;font-weight:600;
+  text-decoration:none;border-bottom:1px dashed #fcd9a4}
+.pick-mv .pick-mv-off:hover{border-bottom-style:solid}
+
 /* 批次表：一格一次运行，"未跑"要一眼看出来 */
 table.grid.batch td{vertical-align:top}
 
