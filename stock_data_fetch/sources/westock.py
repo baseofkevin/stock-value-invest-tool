@@ -254,6 +254,33 @@ def call(tool: str, args: dict, *, tries: int = 2,
         return client().call(tool, args, tries=tries, delay=delay)
 
 
+def _transient_now() -> bool:
+    """上一次 `call()` 重试耗尽，是不是**瞬态**（限频 / 服务端超时）。
+
+    为什么必须把它捞出来：`call()` 失败只返回 `None`，把"为什么失败"丢了——
+    "上游在建限频"与"这只票真没数据"在调用方看来一模一样，于是 `_kline` 一律抛
+    `EmptyResult`。router 只在 `SourceUnavailable(transient=True)` 上才冷却，
+    拿到 `EmptyResult` 就按确定性失败继续往下打：上游正在限频，本进程还在按
+    1 次/秒硬敲。2026-11-27 实测的后果是 1000 只退化成逐只、每只 2.9 秒，
+    磨了 40 分钟仍然整跑中止。
+    """
+    c = _client_cache
+    return bool(c is not None and c.last_transient)
+
+
+def _exhausted(tool: str) -> Exception:
+    """`call()` 重试耗尽的统一出口：瞬态如实上报，确定性空表才给 `EmptyResult`。
+
+    瞬态必须带 `transient=True`：那样 router 才会「先无冷却重发一次、之后按
+    `cooldown_base` 冷却再试」（`router._call`），而不是把一次限频当成"这只票
+    没有数据"直接判死。
+    """
+    if _transient_now():
+        return SourceUnavailable(
+            f"{tool} 上游限频/服务端超时（瞬态，冷却后重试）", transient=True, tool=tool)
+    return EmptyResult(f"{tool} 上游多次未返回数据（call 重试耗尽）")
+
+
 def fetch(domain: str, codes, need: Need) -> Got:
     """`base.FetchFn` 的实现。按域分发，哪个域不支持就报清楚。"""
     if domain == "kline":
@@ -349,13 +376,13 @@ def _kline(codes: list[str], need: Need) -> Got:
             d = call("data_kline", {"code": chunk[0], "start": start, "end": end,
                                     "period": "day", "limit": limit})
             if d is None:
-                raise EmptyResult("data_kline 上游多次未返回数据（call 重试耗尽）")
+                raise _exhausted("data_kline")
             blocks = [{"symbol": chunk[0], "data": d}] if isinstance(d, dict) else []
         else:
             d = call("data_kline", {"codes": ",".join(chunk), "start": start,
                                     "end": end, "period": "day", "limit": limit})
             if d is None:
-                raise EmptyResult("data_kline 上游多次未返回数据（call 重试耗尽）")
+                raise _exhausted("data_kline")
             blocks = (d.get("data") or []) if isinstance(d, dict) else []
             # 上游自报的**逐只**失败必须进 `got.errors`。
             # 不写的话 `router._fetch_with_retry` 永远看不到"哪几只缺"（它的重试起点是
@@ -411,7 +438,7 @@ def _finance(codes: list[str], need: Need) -> Got:
         # 不区分的话会静默落成空表，上层只看到 EmptyResult，重试判断也就对了；
         # 但这里显式抛出来，日志里才能看出是"没拿到"而不是"上游说没有"。
         if d is None:
-            raise EmptyResult("data_finance 上游多次未返回数据（call 重试耗尽）")
+            raise _exhausted("data_finance")
         per = _unwrap(d) or {}
         if not isinstance(per, dict):
             raise SourceUnavailable("data_finance 返回结构变了（data 不是 dict）")
